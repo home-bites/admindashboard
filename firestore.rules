@@ -1,0 +1,172 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for Role-Based Access Control (RBAC)
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function getUserRole() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? getUserData().role 
+        : 'Customer';
+    }
+
+    function isDashboardAdmin() {
+      return isSignedIn() && (
+        getUserRole() == 'Super Admin' || 
+        getUserRole() == 'Admin' || 
+        getUserRole() == 'Manager'
+      );
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && getUserRole() == 'Super Admin';
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // --- COLLECTION RULES ---
+
+    // 1. Users Collection
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isDashboardAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if isOwner(userId) || isDashboardAdmin();
+    }
+
+    // 2. Customer Addresses Collection
+    match /addresses/{addressId} {
+      allow read, write: if isDashboardAdmin() || (isSignedIn() && (resource == null || resource.data.userId == request.auth.uid));
+    }
+
+    // 3. Categories Collection
+    match /categories/{categoryId} {
+      allow read: if true; // Publicly readable for Customer/Delivery apps
+      allow write: if isDashboardAdmin();
+    }
+
+    // 4. Menu Items Collection
+    match /menuItems/{menuItemId} {
+      allow read: if true; // Publicly readable
+      allow write: if isDashboardAdmin();
+    }
+
+    // 5. Banners Collection
+    match /banners/{bannerId} {
+      allow read: if true; // Publicly readable
+      allow write: if isDashboardAdmin();
+    }
+
+    // 6. Deals Collection
+    match /deals/{dealId} {
+      allow read: if true;
+      allow write: if isDashboardAdmin();
+    }
+
+    // 7. Coupons Collection
+    match /coupons/{couponId} {
+      allow read: if isSignedIn(); // Customer app reads active coupons
+      allow write: if isDashboardAdmin();
+    }
+
+    // 8. Orders Collection
+    match /orders/{orderId} {
+      allow read: if isDashboardAdmin() 
+        || (isSignedIn() && (resource.data.customerId == request.auth.uid || resource.data.assignedPartnerId == request.auth.uid));
+      allow create: if isSignedIn(); // Customer places orders
+      allow update: if isDashboardAdmin() 
+        || (isSignedIn() && (resource.data.customerId == request.auth.uid || resource.data.assignedPartnerId == request.auth.uid));
+      allow delete: if isSuperAdmin(); // Only Super Admins can hard delete orders
+    }
+
+    // 9. Order Tracking (Telemetry) Collection
+    match /orderTracking/{trackingId} {
+      allow read: if isSignedIn(); // Read by customers and dispatchers
+      allow create, update: if isDashboardAdmin() || (isSignedIn() && request.auth.uid == request.resource.data.partnerId);
+      allow delete: if isDashboardAdmin();
+    }
+
+    // 10. Delivery Partners Collection
+    match /deliveryPartners/{partnerId} {
+      allow read: if isSignedIn(); // Customers look up rider name/rating, dispatchers see all
+      allow create, update, delete: if isDashboardAdmin() || (isSignedIn() && request.auth.uid == partnerId);
+    }
+
+    // 11. Wallet Transactions Collection
+    match /walletTransactions/{transactionId} {
+      allow read: if isDashboardAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isDashboardAdmin();
+    }
+
+    // 12. Support Tickets Collection
+    match /supportTickets/{ticketId} {
+      allow read, write: if isDashboardAdmin() || (isSignedIn() && (resource == null || resource.data.userId == request.auth.uid));
+    }
+
+    // 13. Notifications Collection
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isDashboardAdmin());
+      allow create, update: if isDashboardAdmin() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
+      allow delete: if isDashboardAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    // 14. App Settings Collection
+    match /appSettings/{settingsId} {
+      allow read: if true; // All apps check rainCharge, deliveryCharge, storeOpen
+      allow write: if isDashboardAdmin();
+    }
+
+    // 15. Audit Logs Collection
+    match /auditLogs/{logId} {
+      allow read: if isDashboardAdmin();
+      allow write: if isSignedIn(); // Stamped by services/repositories on actions
+    }
+
+    // 16. Favorites Collection
+    match /favorites/{favoriteId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isDashboardAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // 17. Reviews Collection
+    match /reviews/{reviewId} {
+      allow read: if true; // Publicly readable
+      allow create, update: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // 18. Carts Collection
+    match /carts/{cartId} {
+      allow read, write: if isOwner(cartId) || isDashboardAdmin();
+    }
+
+    // 19. Referrals Collection
+    match /referrals/{referralId} {
+      allow read: if isSignedIn() && (resource.data.referrerUserId == request.auth.uid || resource.data.referredUserId == request.auth.uid || isDashboardAdmin());
+      allow create: if isSignedIn(); // Allowed during signup registration
+      allow update, delete: if isDashboardAdmin();
+    }
+
+    // 20. Coupon Redemptions Collection
+    match /couponRedemptions/{redemptionId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isDashboardAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isDashboardAdmin();
+    }
+
+    // 21. Loyalty Points Collection
+    match /loyaltyPoints/{userId} {
+      allow read, write: if isOwner(userId) || isDashboardAdmin();
+    }
+  }
+}

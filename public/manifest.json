@@ -1,0 +1,17 @@
+{
+  "short_name": "HomeBites",
+  "name": "HomeBites Enterprise Admin Dashboard",
+  "icons": [
+    {
+      "src": "/icon.jpg",
+      "type": "image/jpeg",
+      "sizes": "1024x1024",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#f9f9ff",
+  "theme_color": "#ab3500",
+  "display": "standalone",
+  "orientation": "portrait"
+}
