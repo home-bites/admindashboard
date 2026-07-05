@@ -74,6 +74,7 @@ export const Coupons = () => {
       discountType: discountType === "Percentage" ? "percentage" : "flat",
       discountValue: discountValNum,
       minOrderValue: minOrderVal,
+      minOrder: minOrderVal,
       maxDiscount: discountType === "Percentage" ? discountValNum * 2 : discountValNum,
       expiresAt: expiryDate || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
       isActive: status === "Active",
@@ -250,7 +251,7 @@ export const Coupons = () => {
                       <span className="font-semibold">{coupon.type}</span>
                     </td>
                     <td className="px-6 py-4">
-                      <span className="text-[#555f6f]">₹{(coupon.minOrder !== undefined ? coupon.minOrder : (coupon.minimumOrderValue || 0)).toFixed(2)}</span>
+                      <span className="text-[#555f6f]">₹{(coupon.minimumOrderValue !== undefined ? coupon.minimumOrderValue : (coupon.minOrder || 0)).toFixed(2)}</span>
                     </td>
                     <td className="px-6 py-4">
                       <span>{coupon.usage}</span>
