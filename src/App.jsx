@@ -32,7 +32,7 @@ import SecuritySettings from "./pages/SecuritySettings";
 import { isFirebaseConfigured, auth } from "./firebase/firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
 import { secureCore } from "./security/secureCore";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import ConfigErrorScreen from "./components/ConfigErrorScreen";
 
 // Create TanStack Query Client
@@ -46,8 +46,11 @@ const queryClient = new QueryClient({
 });
 
 export const App = () => {
+  const [authReady, setAuthReady] = useState(false);
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
+      setAuthReady(true);
       if (user) {
         secureCore.authGuard.monitorSession(user.uid);
       } else {
@@ -62,6 +65,17 @@ export const App = () => {
 
   if (showConfigError) {
     return <ConfigErrorScreen />;
+  }
+
+  if (!authReady && !isMockDataEnabled) {
+    return (
+      <div className="min-h-screen bg-[#f9f9ff] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-4 border-[#10b981] border-t-transparent rounded-full animate-spin"></div>
+          <span className="text-[#555f6f] text-sm font-semibold">Initializing session...</span>
+        </div>
+      </div>
+    );
   }
 
   return (
