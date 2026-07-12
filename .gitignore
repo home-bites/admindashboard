@@ -12,3 +12,6 @@ yarn-error.log*
 .stylelintcache
 .vite
 .vercel
+
+.vercel
+.env*

@@ -3,12 +3,12 @@ import { getAuth, signInWithEmailAndPassword } from "firebase/auth";
 import { getFirestore, collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyB93_P8OgC9sAqS34QUmo3p6lcDgB3ZH88",
-  authDomain: "homebites-production.firebaseapp.com",
-  projectId: "homebites-production",
-  storageBucket: "homebites-production.firebasestorage.app",
-  messagingSenderId: "417938783027",
-  appId: "1:417938783027:web:6fa76bb9402029bf965c46",
+  apiKey: "AIzaSyAxA3kG-KQTjNoDhZ-yaUQ9c3B70YaMFHs",
+  authDomain: "homebites-production-56afa.firebaseapp.com",
+  projectId: "homebites-production-56afa",
+  storageBucket: "homebites-production-56afa.firebasestorage.app",
+  messagingSenderId: "552260980743",
+  appId: "1:552260980743:web:f055a11755d1d7957cdaa2",
 };
 
 const app = initializeApp(firebaseConfig);

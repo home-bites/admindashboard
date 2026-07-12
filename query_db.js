@@ -3,12 +3,12 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword } f
 import { getFirestore, collection, getDocs, doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyB93_P8OgC9sAqS34QUmo3p6lcDgB3ZH88",
-  authDomain: "homebites-production.firebaseapp.com",
-  projectId: "homebites-production",
-  storageBucket: "homebites-production.firebasestorage.app",
-  messagingSenderId: "417938783027",
-  appId: "1:417938783027:web:6fa76bb9402029bf965c46",
+  apiKey: "AIzaSyAxA3kG-KQTjNoDhZ-yaUQ9c3B70YaMFHs",
+  authDomain: "homebites-production-56afa.firebaseapp.com",
+  projectId: "homebites-production-56afa",
+  storageBucket: "homebites-production-56afa.firebasestorage.app",
+  messagingSenderId: "552260980743",
+  appId: "1:552260980743:web:f055a11755d1d7957cdaa2",
 };
 
 const app = initializeApp(firebaseConfig);
@@ -17,31 +17,16 @@ const db = getFirestore(app);
 
 async function run() {
   console.log("=== FIRESTORE AUDIT SCRIPT ===");
-  const testEmail = `audit_test_${Date.now()}@homebites.com`;
-  const testPassword = "testPassword123";
+  const email = "test@hb.com";
+  const password = "password123";
   let user;
 
   try {
-    const cred = await createUserWithEmailAndPassword(auth, testEmail, testPassword);
+    const cred = await signInWithEmailAndPassword(auth, email, password);
     user = cred.user;
-    console.log(`Successfully created a new audit test user: ${testEmail} (uid: ${user.uid})`);
-    
-    // Create the user profile in Firestore
-    const userDocRef = doc(db, "users", user.uid);
-    await setDoc(userDocRef, {
-      name: "Audit Test User",
-      displayName: "Audit Display Name",
-      email: testEmail,
-      phone: "+91 99999 88888",
-      mobileNumber: "+91 99999 88888",
-      walletBalance: 250.50,
-      loyaltyPoints: 120,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-    console.log("Successfully created user profile document in Firestore users collection.");
+    console.log(`Successfully signed in as Super Admin: ${email} (uid: ${user.uid})`);
   } catch (e) {
-    console.error("Error creating/authenticating test user:", e.message);
+    console.error("Error authenticating admin user:", e.message);
     return;
   }
 

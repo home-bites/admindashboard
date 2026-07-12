@@ -9,7 +9,7 @@ async function getAccessToken() {
 }
 
 async function queryMetric(accessToken, metricType, startTimeStr, endTimeStr) {
-  const projectId = 'homebites-production';
+  const projectId = 'homebites-production-56afa';
   const url = `https://monitoring.googleapis.com/v3/projects/${projectId}/timeSeries`;
   
   const filter = `metric.type="${metricType}"`;

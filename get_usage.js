@@ -10,7 +10,7 @@ async function getAccessToken() {
 }
 
 async function queryMetric(accessToken, metricType) {
-  const projectId = 'homebites-production';
+  const projectId = 'homebites-production-56afa';
   const url = `https://monitoring.googleapis.com/v3/projects/${projectId}/timeSeries`;
   
   // Set time interval: last 30 minutes
