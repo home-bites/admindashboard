@@ -241,38 +241,68 @@ export const OrderService = {
         }
       }
       
-      // Write user notification for status change
+      // Write user and rider notifications for status change
       try {
         const order = await repos.orderRepository.getById(orderId);
-        if (order && order.customerId) {
-          let title = "Order Status Update";
-          let message = `Your order #${order.orderId || orderId} is now ${status}.`;
-          if (status === "Accepted") {
-            title = "Order Confirmed";
-            message = `Your order #${order.orderId || orderId} has been accepted by the Home Chef.`;
-          } else if (status === "Preparing") {
-            title = "Preparing Your Meal";
-            message = `Your gourmet meal for order #${order.orderId || orderId} is being prepared.`;
-          } else if (status === "Ready") {
-            title = "Order Ready for Pickup";
-            message = `Your order #${order.orderId || orderId} is cooked and ready for pickup!`;
-          } else if (status === "Delivered") {
-            title = "Order Delivered";
-            message = `Your order #${order.orderId || orderId} has been successfully delivered. Enjoy!`;
-          } else if (status === "Cancelled") {
-            title = "Order Cancelled";
-            message = `Your order #${order.orderId || orderId} has been cancelled.`;
+        if (order) {
+          if (order.customerId) {
+            let title = "Order Status Update";
+            let message = `Your order #${order.orderId || orderId} is now ${status}.`;
+            if (status === "Accepted") {
+              title = "Order Confirmed";
+              message = `Your order #${order.orderId || orderId} has been accepted by the Home Chef.`;
+            } else if (status === "Preparing") {
+              title = "Preparing Your Meal";
+              message = `Your gourmet meal for order #${order.orderId || orderId} is being prepared.`;
+            } else if (status === "Ready") {
+              title = "Order Ready for Pickup";
+              message = `Your order #${order.orderId || orderId} is cooked and ready for pickup!`;
+            } else if (status === "Delivered") {
+              title = "Order Delivered";
+              message = `Your order #${order.orderId || orderId} has been successfully delivered. Enjoy!`;
+            } else if (status === "Cancelled") {
+              title = "Order Cancelled";
+              message = `Your order #${order.orderId || orderId} has been cancelled.`;
+            }
+            await repos.notificationRepository.create({
+              userId: order.customerId,
+              title,
+              message,
+              type: "orders",
+              referenceId: orderId,
+              isRead: false,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
           }
-          await repos.notificationRepository.create({
-            userId: order.customerId,
-            title,
-            message,
-            type: "orders",
-            referenceId: orderId,
-            isRead: false,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp()
-          });
+
+          const riderId = order.assignedPartnerId || order.deliveryPartnerId;
+          if (riderId) {
+            let riderTitle = "";
+            let riderMessage = "";
+            if (status === "Preparing") {
+              riderTitle = "Meal Preparing";
+              riderMessage = `Order #${order.orderId || orderId} is being prepared by the Home Chef.`;
+            } else if (status === "Ready") {
+              riderTitle = "Order Ready for Pickup";
+              riderMessage = `Order #${order.orderId || orderId} is ready! Please pick it up from the Home Chef.`;
+            } else if (status === "Cancelled") {
+              riderTitle = "Order Cancelled";
+              riderMessage = `Order #${order.orderId || orderId} has been cancelled by the customer/chef.`;
+            }
+            if (riderTitle) {
+              await repos.notificationRepository.create({
+                userId: riderId,
+                title: riderTitle,
+                message: riderMessage,
+                type: "orders",
+                referenceId: orderId,
+                isRead: false,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
+              });
+            }
+          }
         }
       } catch (notiErr) {
         console.warn("Could not write notification:", notiErr.message);
@@ -311,20 +341,34 @@ export const OrderService = {
       });
       await repos.auditLogRepository.logAction(actor?.uid || "system", "orders", "DELIVERY_ASSIGNMENT", { orderId, partnerId, partnerName });
       
-      // Write user notification for delivery assignment
+      // Write user and partner notifications for delivery assignment
       try {
         const order = await repos.orderRepository.getById(orderId);
-        if (order && order.customerId) {
-          await repos.notificationRepository.create({
-            userId: order.customerId,
-            title: "Out for Delivery",
-            message: `Your order #${order.orderId || orderId} is out for delivery with ${partnerName || "Rider"}.`,
-            type: "orders",
-            referenceId: orderId,
-            isRead: false,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp()
-          });
+        if (order) {
+          if (order.customerId) {
+            await repos.notificationRepository.create({
+              userId: order.customerId,
+              title: "Out for Delivery",
+              message: `Your order #${order.orderId || orderId} is out for delivery with ${partnerName || "Rider"}.`,
+              type: "orders",
+              referenceId: orderId,
+              isRead: false,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+          }
+          if (partnerId) {
+            await repos.notificationRepository.create({
+              userId: partnerId,
+              title: "New Order Assigned",
+              message: `You have been assigned order #${order.orderId || orderId}. Please pick it up.`,
+              type: "orders",
+              referenceId: orderId,
+              isRead: false,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+          }
         }
       } catch (notiErr) {
         console.warn("Could not write notification:", notiErr.message);

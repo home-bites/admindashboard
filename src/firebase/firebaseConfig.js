@@ -8,13 +8,13 @@ import { getAnalytics } from "firebase/analytics";
 import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyAxA3kG-KQTjNoDhZ-yaUQ9c3B70YaMFHs",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "homebites-production-56afa.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "homebites-production-56afa",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "homebites-production-56afa.appspot.com",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "552260980743",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:552260980743:web:f055a11755d1d7957cdaa2",
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-CFB7VD64E0",
 };
 
 // Check if we have minimum config to initialize
