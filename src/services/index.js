@@ -604,7 +604,9 @@ export const CouponService = {
         discountValue: couponData.discountValue !== undefined ? Number(couponData.discountValue) : 0,
         minimumOrderValue: couponData.minOrder !== undefined ? Number(couponData.minOrder) : 0,
         expiryDate: couponData.expiryDate || couponData.expiry || "",
-        isActive: couponData.status === "Active" || couponData.isActive !== false,
+        isActive: couponData.status === "Active" || couponData.status === "Hidden" || couponData.isActive !== false,
+        isHidden: couponData.status === "Hidden" || !!couponData.isHidden,
+        status: couponData.status || "Active",
         type: couponData.type || "",
         usageLimit: couponData.usageLimit || 1000,
         usedCount: couponData.usedCount || 0
@@ -625,7 +627,13 @@ export const CouponService = {
         discountValue: couponData.discountValue !== undefined ? Number(couponData.discountValue) : undefined,
         minimumOrderValue: couponData.minOrder !== undefined ? Number(couponData.minOrder) : undefined,
         expiryDate: couponData.expiryDate || couponData.expiry,
-        isActive: couponData.status !== undefined ? (couponData.status === "Active") : couponData.isActive,
+        isActive: couponData.status !== undefined 
+          ? (couponData.status === "Active" || couponData.status === "Hidden") 
+          : couponData.isActive,
+        isHidden: couponData.status !== undefined 
+          ? (couponData.status === "Hidden") 
+          : couponData.isHidden,
+        status: couponData.status,
         type: couponData.type
       };
       Object.keys(payload).forEach(key => payload[key] === undefined && delete payload[key]);

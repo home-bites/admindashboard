@@ -260,15 +260,34 @@ export const Coupons = () => {
                       <span className="text-[#555f6f]">{coupon.expiry}</span>
                     </td>
                     <td className="px-6 py-4">
-                      <span
-                        className={`inline-flex items-center px-2.5 py-1 rounded-full font-label-sm text-[10px] uppercase tracking-wide border ${
-                          coupon.status === "Active"
-                            ? "bg-[#ecfdf5] text-[#006c49] border-[#10b981]"
-                            : "bg-[#ffdad6] text-[#93000a] border-[#ba1a1a]"
-                        }`}
-                      >
-                        {coupon.status}
-                      </span>
+                      {(() => {
+                        let displayStatus = coupon.status || (coupon.isActive !== false ? "Active" : "Disabled");
+                        if (coupon.expiryDate) {
+                          const expiry = new Date(coupon.expiryDate);
+                          if (expiry < new Date()) {
+                            displayStatus = "Expired";
+                          }
+                        }
+                        
+                        let badgeClass = "bg-[#ffdad6] text-[#93000a] border-[#ba1a1a]"; // default Disabled
+                        if (displayStatus === "Active") {
+                          badgeClass = "bg-[#ecfdf5] text-[#006c49] border-[#10b981]";
+                        } else if (displayStatus === "Hidden") {
+                          badgeClass = "bg-[#fef3c7] text-[#92400e] border-[#f59e0b]";
+                        } else if (displayStatus === "Expired") {
+                          badgeClass = "bg-[#f3f4f6] text-[#374151] border-[#d1d5db]";
+                        } else if (displayStatus === "Scheduled") {
+                          badgeClass = "bg-[#e0f2fe] text-[#0369a1] border-[#38bdf8]";
+                        } else if (displayStatus === "Draft") {
+                          badgeClass = "bg-[#f5f5f5] text-[#737373] border-[#d4d4d4]";
+                        }
+                        
+                        return (
+                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full font-label-sm text-[10px] uppercase tracking-wide border ${badgeClass}`}>
+                            {displayStatus}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-6 py-4 text-right">
                       <button
@@ -394,7 +413,11 @@ export const Coupons = () => {
                     className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm font-body-sm"
                   >
                     <option value="Active">Active</option>
+                    <option value="Hidden">Hidden (Private Campaign)</option>
                     <option value="Expired">Expired</option>
+                    <option value="Disabled">Disabled</option>
+                    <option value="Scheduled">Scheduled</option>
+                    <option value="Draft">Draft</option>
                   </select>
                 </div>
               </div>
