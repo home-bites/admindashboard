@@ -1,4 +1,4 @@
-import { signInWithEmailAndPassword, signOut as firebaseSignOut } from "firebase/auth";
+import { signInWithEmailAndPassword, signOut as firebaseSignOut, sendPasswordResetEmail } from "firebase/auth";
 import { arrayUnion, serverTimestamp, Timestamp } from "firebase/firestore";
 import { auth, isFirebaseConfigured } from "../firebase/firebaseConfig";
 import * as repos from "../repositories";
@@ -10,8 +10,23 @@ export const AuthService = {
       throw new Error("Firebase is not configured.");
     }
 
-    // Standard Firebase authentication
-    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    // Standard Firebase authentication with automatic migration fallback
+    let userCredential;
+    try {
+      userCredential = await signInWithEmailAndPassword(auth, email, password);
+    } catch (e) {
+      if (e.code === "auth/wrong-password" || e.code === "auth/invalid-credential" || e.code === "auth/user-not-found") {
+        try {
+          await sendPasswordResetEmail(auth, email.trim());
+          throw new Error(`We have migrated our systems! A password reset link has been sent to ${email}. Please check your inbox and set a new password to access your Admin Command Center.`);
+        } catch (resetErr) {
+          if (resetErr.message && resetErr.message.includes("migrated")) {
+            throw resetErr;
+          }
+        }
+      }
+      throw e;
+    }
     const user = userCredential.user;
     const uid = user.uid;
 

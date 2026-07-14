@@ -14,7 +14,7 @@ const firebaseConfig = {
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "homebites-production-56afa.appspot.com",
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "552260980743",
   appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:552260980743:web:f055a11755d1d7957cdaa2",
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-CFB7VD64E0",
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-4Q3K42WZRT",
 };
 
 // Check if we have minimum config to initialize
