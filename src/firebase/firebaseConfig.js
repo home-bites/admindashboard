@@ -8,10 +8,10 @@ import { getAnalytics } from "firebase/analytics";
 import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyAxA3kG-KQTjNoDhZ-yaUQ9c3B70YaMFHs",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyB3L_bSiYBsJ8vG5Fg0Xi7-so6M0XAmkew",
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "homebites-production-56afa.firebaseapp.com",
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "homebites-production-56afa",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "homebites-production-56afa.appspot.com",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "homebites-production-56afa.firebasestorage.app",
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "552260980743",
   appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:552260980743:web:f055a11755d1d7957cdaa2",
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-4Q3K42WZRT",
