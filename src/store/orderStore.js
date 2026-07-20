@@ -138,6 +138,16 @@ export const useOrderStore = create((set, get) => ({
       set({ error: err.message, loading: false });
       throw err;
     }
+  },
+
+  unassignDeliveryPartner: async (id, actor) => {
+    set({ loading: true, error: null });
+    try {
+      await OrderService.unassignDeliveryPartner(id, actor);
+    } catch (err) {
+      set({ error: err.message, loading: false });
+      throw err;
+    }
   }
 }));
 

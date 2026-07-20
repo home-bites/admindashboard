@@ -187,7 +187,7 @@ export const Login = () => {
                     <input
                       className="block w-full pl-10 pr-3 py-3 border border-[#d3daea] rounded-xl bg-slate-50 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#10b981]/10 focus:border-[#10b981] text-sm transition-all text-[#151c27] font-semibold"
                       id="email"
-                      placeholder="admin@homebites.com"
+                      placeholder="support@hombites.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       required

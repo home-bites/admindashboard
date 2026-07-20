@@ -20,7 +20,8 @@ export const Orders = () => {
     disconnectOrders, 
     addOrder, 
     updateOrderStatus, 
-    assignDeliveryPartner 
+    assignDeliveryPartner,
+    unassignDeliveryPartner 
   } = useOrderStore();
   
   const { deliveryPartners, fetchDeliveryPartners } = useDeliveryPartnerStore();
@@ -1595,12 +1596,22 @@ export const Orders = () => {
                             </a>
                           </div>
                           <button
-                            onClick={() => {
+                            onClick={async () => {
+                              if (selectedOrder && selectedOrder.id) {
+                                try {
+                                  await unassignDeliveryPartner(selectedOrder.id, user);
+                                  addToast(`Unassigned rider from Order #${selectedOrder.id}`, "info");
+                                } catch (e) {
+                                  console.warn("Unassign failed:", e.message);
+                                }
+                              }
                               setSelectedOrder(prev => ({
                                 ...prev,
                                 assignedPartnerId: null,
                                 assignedPartnerName: null,
-                                rider: "Assigning..."
+                                rider: "Assigning...",
+                                assignmentStatus: "Unassigned",
+                                assignmentMethod: "Unassigned"
                               }));
                             }}
                             className="text-[10px] text-rose-600 hover:underline font-bold bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-100 hover:bg-rose-100 transition-colors shrink-0"
@@ -1611,7 +1622,11 @@ export const Orders = () => {
                         <div className="border-t border-slate-200 pt-2 flex flex-col gap-1.5 text-[11px] text-slate-500 font-medium">
                           <div>
                             <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Assignment Method</span>
-                            <span className="font-semibold text-slate-700">{selectedOrder.assignmentMethod || "Manual Assignment"}</span>
+                            <span className="font-semibold text-slate-700">
+                              {selectedOrder.assignmentMethod === "SELF_ACCEPTED" || selectedOrder.assignmentMethod === "SELF_ACCEPTED_QR" || selectedOrder.assignmentMethod === "QR Claim"
+                                ? `Self Accepted (${selectedOrder.assignmentMethod})`
+                                : selectedOrder.assignmentMethod || "Admin Assigned"}
+                            </span>
                           </div>
                           {selectedOrder.assignedAt && (
                             <div>
