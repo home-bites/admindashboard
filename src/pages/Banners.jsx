@@ -12,9 +12,9 @@ import * as LoadingComponents from "../components/LoadingComponents";
 export const Banners = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
-  const { banners, loading, error, fetchBanners, addBanner, updateBanner, deleteBanner } = useBannerStore();
-  const { categories, fetchCategories } = useCategoryStore();
-  const { menuItems, fetchMenuItems } = useMenuStore();
+  const { banners, loading, error, subscribeBanners, disconnectBanners, addBanner, updateBanner, deleteBanner } = useBannerStore();
+  const { categories, subscribeCategories, disconnectCategories } = useCategoryStore();
+  const { menuItems, subscribeMenuItems, disconnectMenuItems } = useMenuStore();
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [editBannerId, setEditBannerId] = useState(null);
@@ -31,10 +31,15 @@ export const Banners = () => {
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
-    fetchBanners();
-    fetchCategories();
-    fetchMenuItems();
-  }, [fetchBanners, fetchCategories, fetchMenuItems]);
+    subscribeBanners();
+    subscribeCategories();
+    subscribeMenuItems();
+    return () => {
+      disconnectBanners();
+      disconnectCategories();
+      disconnectMenuItems();
+    };
+  }, [subscribeBanners, subscribeCategories, subscribeMenuItems, disconnectBanners, disconnectCategories, disconnectMenuItems]);
 
   const handleOpenAddDrawer = () => {
     setEditBannerId(null);

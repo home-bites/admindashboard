@@ -1,4 +1,4 @@
-import { signInWithEmailAndPassword, signOut as firebaseSignOut, sendPasswordResetEmail } from "firebase/auth";
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut as firebaseSignOut, sendPasswordResetEmail } from "firebase/auth";
 import { arrayUnion, serverTimestamp, Timestamp } from "firebase/firestore";
 import { auth, isFirebaseConfigured } from "../firebase/firebaseConfig";
 import * as repos from "../repositories";
@@ -12,44 +12,69 @@ export const AuthService = {
 
     const cleanEmail = email ? email.trim().toLowerCase() : "";
 
-    // Super Admin Direct Instant Login
+    // Super Admin direct login logic
     if (
-      !cleanEmail ||
       cleanEmail === "support@hombites.com" ||
       cleanEmail === "admin@homebites.com" ||
-      cleanEmail === "admin@homebites.local" ||
-      cleanEmail.includes("admin") ||
-      cleanEmail.includes("support")
+      cleanEmail === "admin@homebites.local"
     ) {
-      return {
-        uid: "super_admin_master_uid",
-        email: "support@hombites.com",
-        name: "Super Admin",
-        displayName: "Super Admin",
-        role: "Super Admin",
-        status: "Active",
-        permissions: ["ALL"],
-        createdAt: new Date().toISOString(),
-      };
+      try {
+        // Attempt normal login first
+        const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+        const uid = cred.user.uid;
+        
+        // Ensure Firestore role is set
+        let userProfile = await repos.userRepository.getById(uid);
+        if (!userProfile) {
+          userProfile = {
+            uid: uid,
+            email: cleanEmail,
+            displayName: "Super Admin",
+            role: "Super Admin",
+            status: "Active",
+            permissions: ["ALL"],
+          };
+          await repos.userRepository.set(uid, userProfile);
+        }
+        return userProfile;
+        
+      } catch (e) {
+        // If login fails (user doesn't exist), create the user automatically!
+        if (e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential' || e.message.includes('400')) {
+          try {
+            const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+            const uid = cred.user.uid;
+            
+            const userProfile = {
+              uid: uid,
+              email: cleanEmail,
+              displayName: "Super Admin",
+              role: "Super Admin",
+              status: "Active",
+              permissions: ["ALL"],
+            };
+            await repos.userRepository.set(uid, userProfile);
+            return userProfile;
+          } catch (createErr) {
+            console.error("Auto-registration failed:", createErr);
+            throw new Error(`Auto-registration failed: ${createErr.message}`);
+          }
+        }
+        throw e;
+      }
     }
 
+    // Normal User Login
     try {
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
       const uid = cred.user.uid;
-      let userProfile = await repos.userRepository.getById(uid);
+      const userProfile = await repos.userRepository.getById(uid);
       if (!userProfile) {
-        userProfile = {
-          uid: uid,
-          email: cred.user.email || cleanEmail,
-          displayName: cred.user.displayName || "Admin User",
-          role: "Admin",
-          status: "Active",
-          permissions: ["ALL"],
-        };
+        throw new Error("User profile not found in database.");
       }
       return userProfile;
     } catch (e) {
-      throw new Error("Invalid admin credentials. Please enter email: support@hombites.com and your admin password.");
+      throw new Error("Invalid credentials. Please verify your email and password.");
     }
   },
 

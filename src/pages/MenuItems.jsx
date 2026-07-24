@@ -11,8 +11,8 @@ export const MenuItems = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
   
-  const { menuItems, loading: menuLoading, fetchMenuItems, addMenuItem, updateMenuItem, deleteMenuItem } = useMenuStore();
-  const { categories, fetchCategories } = useCategoryStore();
+  const { menuItems, loading: menuLoading, subscribeMenuItems, disconnectMenuItems, addMenuItem, updateMenuItem, deleteMenuItem } = useMenuStore();
+  const { categories, subscribeCategories, disconnectCategories } = useCategoryStore();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -37,9 +37,13 @@ export const MenuItems = () => {
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
-    fetchMenuItems();
-    fetchCategories();
-  }, [fetchMenuItems, fetchCategories]);
+    subscribeMenuItems();
+    subscribeCategories();
+    return () => {
+      disconnectMenuItems();
+      disconnectCategories();
+    };
+  }, [subscribeMenuItems, subscribeCategories, disconnectMenuItems, disconnectCategories]);
 
   useEffect(() => {
     if (categories.length > 0 && !itemCategory) {

@@ -16,6 +16,38 @@ export const useMenuStore = create((set, get) => ({
     }
   },
 
+  unsubscribeMenuItems: null,
+
+  subscribeMenuItems: () => {
+    if (get().unsubscribeMenuItems) return;
+    
+    set({ loading: true, error: null });
+    
+    // Fallback to fetch if mock mode
+    const isMock = import.meta.env.VITE_ENABLE_MOCK_DATA === "true";
+    if (isMock) {
+      get().fetchMenuItems();
+      return;
+    }
+
+    import("../repositories").then((repos) => {
+      const unsub = repos.menuItemRepository.listenAll((items) => {
+        set({ menuItems: items, loading: false });
+      });
+      set({ unsubscribeMenuItems: unsub });
+    }).catch(err => {
+      set({ error: err.message, loading: false });
+    });
+  },
+
+  disconnectMenuItems: () => {
+    const unsub = get().unsubscribeMenuItems;
+    if (unsub) {
+      unsub();
+      set({ unsubscribeMenuItems: null });
+    }
+  },
+
   addMenuItem: async (menuData, actor) => {
     set({ loading: true, error: null });
     try {

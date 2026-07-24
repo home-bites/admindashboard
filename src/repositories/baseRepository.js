@@ -8,7 +8,8 @@ import {
   updateDoc, 
   query, 
   where,
-  serverTimestamp 
+  serverTimestamp,
+  onSnapshot
 } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
 
@@ -95,6 +96,35 @@ export class BaseRepository {
       }
     });
     return items;
+  }
+
+  listenAll(callback) {
+    this.verifyConfiguration();
+    if (this.isMockMode()) {
+      // In mock mode, we just call the callback once with current data.
+      // To fully mock real-time, we'd need an event emitter, but this is a good fallback.
+      const items = mockDatabases[this.collectionName]
+        .filter((t) => t.isDeleted !== true)
+        .map((t) => ({ ...t }));
+      callback(items);
+      return () => {}; // Unsubscribe function
+    }
+
+    const colRef = this.getCollection();
+    const unsubscribe = onSnapshot(colRef, (querySnapshot) => {
+      const items = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.isDeleted !== true) {
+          items.push({ id: doc.id, ...data });
+        }
+      });
+      callback(items);
+    }, (error) => {
+      console.error(`Error listening to ${this.collectionName}:`, error);
+    });
+
+    return unsubscribe;
   }
 
   async create(data) {
@@ -244,5 +274,33 @@ export class BaseRepository {
       }
     });
     return items;
+  }
+
+  listenByField(fieldName, value, callback) {
+    this.verifyConfiguration();
+    if (this.isMockMode()) {
+      const items = mockDatabases[this.collectionName]
+        .filter((t) => t[fieldName] === value && t.isDeleted !== true)
+        .map((t) => ({ ...t }));
+      callback(items);
+      return () => {};
+    }
+
+    const colRef = this.getCollection();
+    const q = query(colRef, where(fieldName, "==", value));
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const items = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.isDeleted !== true) {
+          items.push({ id: doc.id, ...data });
+        }
+      });
+      callback(items);
+    }, (error) => {
+      console.error(`Error listening to ${this.collectionName} where ${fieldName}==${value}:`, error);
+    });
+
+    return unsubscribe;
   }
 }

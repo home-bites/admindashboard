@@ -16,6 +16,37 @@ export const useCouponStore = create((set, get) => ({
     }
   },
 
+  unsubscribeCoupons: null,
+
+  subscribeCoupons: () => {
+    if (get().unsubscribeCoupons) return;
+    
+    set({ loading: true, error: null });
+    
+    const isMock = import.meta.env.VITE_ENABLE_MOCK_DATA === "true";
+    if (isMock) {
+      get().fetchCoupons();
+      return;
+    }
+
+    import("../repositories").then((repos) => {
+      const unsub = repos.couponRepository.listenAll((couponsList) => {
+        set({ coupons: couponsList, loading: false });
+      });
+      set({ unsubscribeCoupons: unsub });
+    }).catch(err => {
+      set({ error: err.message, loading: false });
+    });
+  },
+
+  disconnectCoupons: () => {
+    const unsub = get().unsubscribeCoupons;
+    if (unsub) {
+      unsub();
+      set({ unsubscribeCoupons: null });
+    }
+  },
+
   addCoupon: async (couponData, actor) => {
     set({ loading: true, error: null });
     try {

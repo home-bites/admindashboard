@@ -9,7 +9,7 @@ import * as LoadingComponents from "../components/LoadingComponents";
 export const Coupons = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
-  const { coupons, loading, fetchCoupons, addCoupon, updateCoupon, deleteCoupon } = useCouponStore();
+  const { coupons, loading, subscribeCoupons, disconnectCoupons, addCoupon, updateCoupon, deleteCoupon } = useCouponStore();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -24,8 +24,9 @@ export const Coupons = () => {
   const [status, setStatus] = useState("Active");
 
   useEffect(() => {
-    fetchCoupons();
-  }, [fetchCoupons]);
+    subscribeCoupons();
+    return () => disconnectCoupons();
+  }, [subscribeCoupons, disconnectCoupons]);
 
   const handleOpenAddModal = () => {
     setEditCouponId(null);

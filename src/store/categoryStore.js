@@ -16,6 +16,37 @@ export const useCategoryStore = create((set, get) => ({
     }
   },
 
+  unsubscribeCategories: null,
+
+  subscribeCategories: () => {
+    if (get().unsubscribeCategories) return;
+    
+    set({ loading: true, error: null });
+    
+    const isMock = import.meta.env.VITE_ENABLE_MOCK_DATA === "true";
+    if (isMock) {
+      get().fetchCategories();
+      return;
+    }
+
+    import("../repositories").then((repos) => {
+      const unsub = repos.categoryRepository.listenAll((cats) => {
+        set({ categories: cats, loading: false });
+      });
+      set({ unsubscribeCategories: unsub });
+    }).catch(err => {
+      set({ error: err.message, loading: false });
+    });
+  },
+
+  disconnectCategories: () => {
+    const unsub = get().unsubscribeCategories;
+    if (unsub) {
+      unsub();
+      set({ unsubscribeCategories: null });
+    }
+  },
+
   addCategory: async (categoryData, actor) => {
     set({ loading: true, error: null });
     try {

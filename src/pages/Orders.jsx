@@ -24,7 +24,7 @@ export const Orders = () => {
     unassignDeliveryPartner 
   } = useOrderStore();
   
-  const { deliveryPartners, fetchDeliveryPartners } = useDeliveryPartnerStore();
+  const { deliveryPartners, fetchDeliveryPartners, subscribeDeliveryPartners, disconnectDeliveryPartners } = useDeliveryPartnerStore();
   const { menuItems, fetchMenuItems } = useMenuStore();
 
   // Tabs: "active" (Live kitchen dashboard) or "history" (Order history directory)
@@ -124,8 +124,9 @@ export const Orders = () => {
   }, [subscribeOrders, disconnectOrders]);
 
   useEffect(() => {
-    fetchDeliveryPartners();
-  }, [fetchDeliveryPartners]);
+    subscribeDeliveryPartners();
+    return () => disconnectDeliveryPartners();
+  }, [subscribeDeliveryPartners, disconnectDeliveryPartners]);
 
   useEffect(() => {
     fetchMenuItems();

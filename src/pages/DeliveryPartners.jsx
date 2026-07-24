@@ -14,6 +14,8 @@ export const DeliveryPartners = () => {
     deliveryPartners,
     loading,
     fetchDeliveryPartners,
+    subscribeDeliveryPartners,
+    disconnectDeliveryPartners,
     addDeliveryPartner,
     updateDeliveryPartner,
     deleteDeliveryPartner,
@@ -123,8 +125,9 @@ export const DeliveryPartners = () => {
   };
 
   useEffect(() => {
-    fetchDeliveryPartners();
-  }, [fetchDeliveryPartners]);
+    subscribeDeliveryPartners();
+    return () => disconnectDeliveryPartners();
+  }, [subscribeDeliveryPartners, disconnectDeliveryPartners]);
 
   // Reset pagination on filter or search query changes
   useEffect(() => {

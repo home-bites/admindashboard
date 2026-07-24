@@ -16,6 +16,38 @@ export const useDeliveryPartnerStore = create((set, get) => ({
     }
   },
 
+  unsubscribePartners: null,
+
+  subscribeDeliveryPartners: () => {
+    if (get().unsubscribePartners) return;
+    
+    set({ loading: true, error: null });
+    
+    // Fallback to fetch if mock mode
+    const isMock = import.meta.env.VITE_ENABLE_MOCK_DATA === "true";
+    if (isMock) {
+      get().fetchDeliveryPartners();
+      return;
+    }
+
+    import("../repositories").then((repos) => {
+      const unsub = repos.deliveryPartnerRepository.listenAll((partners) => {
+        set({ deliveryPartners: partners, loading: false });
+      });
+      set({ unsubscribePartners: unsub });
+    }).catch(err => {
+      set({ error: err.message, loading: false });
+    });
+  },
+
+  disconnectDeliveryPartners: () => {
+    const unsub = get().unsubscribePartners;
+    if (unsub) {
+      unsub();
+      set({ unsubscribePartners: null });
+    }
+  },
+
   addDeliveryPartner: async (partnerData, actor) => {
     set({ loading: true, error: null });
     try {

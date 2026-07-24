@@ -9,7 +9,7 @@ import * as LoadingComponents from "../components/LoadingComponents";
 export const Categories = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
-  const { categories, loading, error, fetchCategories, addCategory, updateCategory, deleteCategory } = useCategoryStore();
+  const { categories, loading, error, subscribeCategories, disconnectCategories, addCategory, updateCategory, deleteCategory } = useCategoryStore();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -24,8 +24,9 @@ export const Categories = () => {
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
-    fetchCategories();
-  }, [fetchCategories]);
+    subscribeCategories();
+    return () => disconnectCategories();
+  }, [subscribeCategories, disconnectCategories]);
 
   const handleOpenAddModal = () => {
     setEditCategoryId(null);
