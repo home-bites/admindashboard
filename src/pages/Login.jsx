@@ -12,9 +12,15 @@ export const Login = () => {
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   
-  const { login, error: authError, clearError, loading } = useAuthStore();
+  const { login, isAuthenticated, error: authError, clearError, loading } = useAuthStore();
   const { addToast } = useUiStore();
   const navigate = useNavigate();
+
+  React.useEffect(() => {
+    if (isAuthenticated) {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
 
   const handleEmailLogin = async (e) => {
     e.preventDefault();

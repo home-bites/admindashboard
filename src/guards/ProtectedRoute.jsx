@@ -5,18 +5,17 @@ import { useUiStore } from "../store/uiStore";
 import { auth } from "../firebase/firebaseConfig";
 
 export const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
   const { setLastVisitedPage } = useUiStore();
   const location = useLocation();
-  const isMock = import.meta.env.VITE_ENABLE_MOCK_DATA === "true";
 
   useEffect(() => {
-    if (isAuthenticated && (isMock || auth.currentUser)) {
+    if (isAuthenticated && user) {
       setLastVisitedPage(location.pathname + location.search);
     }
-  }, [isAuthenticated, isMock, location, setLastVisitedPage]);
+  }, [isAuthenticated, user, location, setLastVisitedPage]);
 
-  if (!isAuthenticated || (!isMock && !auth.currentUser)) {
+  if (!isAuthenticated || !user) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
