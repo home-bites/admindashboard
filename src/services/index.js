@@ -899,3 +899,309 @@ export const AuditLogService = {
     }
   }
 };
+
+// 14. Diet Foods Service
+export const DietFoodService = {
+  async getAll() {
+    try {
+      return await repos.dietFoodRepository.getAll();
+    } catch (e) {
+      console.warn("Offline fallback for getDietFoods:", e.message);
+      return [];
+    }
+  },
+  async create(data, actor) {
+    try {
+      const payload = {
+        ...data,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        calories: Number(data.calories || 0),
+        proteinGrams: Number(data.proteinGrams || 0),
+        carbsGrams: Number(data.carbsGrams || 0),
+        fatsGrams: Number(data.fatsGrams || 0),
+        fiberGrams: Number(data.fiberGrams || 0),
+        glycemicIndex: Number(data.glycemicIndex || 0),
+        isDiet: true,
+        healthTags: Array.isArray(data.healthTags) ? data.healthTags : [],
+        allergens: Array.isArray(data.allergens) ? data.allergens : [],
+        ingredients: Array.isArray(data.ingredients) ? data.ingredients : []
+      };
+      const id = await repos.dietFoodRepository.create(payload);
+      await repos.auditLogRepository.logAction(actor?.uid || "system", "dietFoods", "DIET_FOOD_CREATE", { id, name: data.name });
+      return id;
+    } catch (e) {
+      console.error("Error creating diet food:", e);
+      throw e;
+    }
+  },
+  async update(id, data, actor) {
+    try {
+      const payload = {
+        ...data,
+        updatedAt: new Date().toISOString(),
+        calories: Number(data.calories || 0),
+        proteinGrams: Number(data.proteinGrams || 0),
+        carbsGrams: Number(data.carbsGrams || 0),
+        fatsGrams: Number(data.fatsGrams || 0),
+        fiberGrams: Number(data.fiberGrams || 0),
+        glycemicIndex: Number(data.glycemicIndex || 0)
+      };
+      await repos.dietFoodRepository.update(id, payload);
+      await repos.auditLogRepository.logAction(actor?.uid || "system", "dietFoods", "DIET_FOOD_UPDATE", { id, changes: Object.keys(data) });
+      return id;
+    } catch (e) {
+      console.error("Error updating diet food:", e);
+      throw e;
+    }
+  },
+  async delete(id, actor) {
+    try {
+      await repos.dietFoodRepository.delete(id);
+      await repos.auditLogRepository.logAction(actor?.uid || "system", "dietFoods", "DIET_FOOD_DELETE", { id });
+      return id;
+    } catch (e) {
+      console.error("Error deleting diet food:", e);
+      throw e;
+    }
+  }
+};
+
+// 15. Meal Plans Service
+export const MealPlanService = {
+  async getAll() {
+    try {
+      return await repos.mealPlanRepository.getAll();
+    } catch (e) {
+      console.warn("Offline fallback for getMealPlans:", e.message);
+      return [];
+    }
+  },
+  async create(data, actor) {
+    try {
+      const payload = {
+        ...data,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        price: Number(data.price || 0),
+        discountedPrice: Number(data.discountedPrice || data.price || 0),
+        durationDays: Number(data.durationDays || 7),
+        activeSubscribers: Number(data.activeSubscribers || 0),
+        weeklySchedule: data.weeklySchedule || {}
+      };
+      const id = await repos.mealPlanRepository.create(payload);
+      await repos.auditLogRepository.logAction(actor?.uid || "system", "mealPlans", "MEAL_PLAN_CREATE", { id, name: data.title });
+      return id;
+    } catch (e) {
+      console.error("Error creating meal plan:", e);
+      throw e;
+    }
+  },
+  async update(id, data, actor) {
+    try {
+      const payload = {
+        ...data,
+        updatedAt: new Date().toISOString()
+      };
+      await repos.mealPlanRepository.update(id, payload);
+      await repos.auditLogRepository.logAction(actor?.uid || "system", "mealPlans", "MEAL_PLAN_UPDATE", { id });
+      return id;
+    } catch (e) {
+      console.error("Error updating meal plan:", e);
+      throw e;
+    }
+  },
+  async delete(id, actor) {
+    try {
+      await repos.mealPlanRepository.delete(id);
+      await repos.auditLogRepository.logAction(actor?.uid || "system", "mealPlans", "MEAL_PLAN_DELETE", { id });
+      return id;
+    } catch (e) {
+      console.error("Error deleting meal plan:", e);
+      throw e;
+    }
+  }
+};
+
+// 16. Diet Categories Service
+export const DietCategoryService = {
+  async getAll() {
+    try {
+      return await repos.dietCategoryRepository.getAll();
+    } catch (e) {
+      return [];
+    }
+  },
+  async create(data, actor) {
+    const payload = { ...data, createdAt: new Date().toISOString() };
+    const id = await repos.dietCategoryRepository.create(payload);
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "dietCategories", "DIET_CATEGORY_CREATE", { id, name: data.name });
+    return id;
+  },
+  async update(id, data, actor) {
+    await repos.dietCategoryRepository.update(id, { ...data, updatedAt: new Date().toISOString() });
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "dietCategories", "DIET_CATEGORY_UPDATE", { id });
+    return id;
+  },
+  async delete(id, actor) {
+    await repos.dietCategoryRepository.delete(id);
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "dietCategories", "DIET_CATEGORY_DELETE", { id });
+    return id;
+  }
+};
+
+// 17. Diet Offers Service
+export const DietOfferService = {
+  async getAll() {
+    try {
+      return await repos.dietOfferRepository.getAll();
+    } catch (e) {
+      return [];
+    }
+  },
+  async create(data, actor) {
+    const payload = { ...data, createdAt: new Date().toISOString() };
+    const id = await repos.dietOfferRepository.create(payload);
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "dietOffers", "DIET_OFFER_CREATE", { id });
+    return id;
+  },
+  async delete(id, actor) {
+    await repos.dietOfferRepository.delete(id);
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "dietOffers", "DIET_OFFER_DELETE", { id });
+    return id;
+  }
+};
+
+// 18. Diet Banners Service
+export const DietBannerService = {
+  async getAll() {
+    try {
+      return await repos.dietBannerRepository.getAll();
+    } catch (e) {
+      return [];
+    }
+  },
+  async create(data, actor) {
+    const payload = { ...data, createdAt: new Date().toISOString() };
+    const id = await repos.dietBannerRepository.create(payload);
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "dietBanners", "DIET_BANNER_CREATE", { id });
+    return id;
+  },
+  async delete(id, actor) {
+    await repos.dietBannerRepository.delete(id);
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "dietBanners", "DIET_BANNER_DELETE", { id });
+    return id;
+  }
+};
+
+// 17. Subscriptions Service
+export const SubscriptionService = {
+  async getAll() {
+    try {
+      return await repos.subscriptionRepository.getAll();
+    } catch (e) {
+      return [];
+    }
+  },
+  async updateStatus(id, status, actor, reason = "") {
+    try {
+      await repos.subscriptionRepository.update(id, {
+        status,
+        updatedAt: new Date().toISOString(),
+        statusChangeReason: reason
+      });
+      await repos.auditLogRepository.logAction(actor?.uid || "system", "subscriptions", "SUBSCRIPTION_STATUS_CHANGE", { id, status, reason });
+      return id;
+    } catch (e) {
+      console.error("Error updating subscription status:", e);
+      throw e;
+    }
+  }
+};
+
+// 18. Reports Export Service (PDF, Excel, CSV)
+export const ReportExportService = {
+  exportCSV(filename, headers, rows) {
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.setAttribute("download", `${filename}_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  },
+
+  exportExcel(filename, headers, rows) {
+    // Generates an Excel XML / TSV format compatible with Excel and Google Sheets
+    let xml = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+    <head><meta charset="utf-8"/><style>td { mso-number-format:"\\@"; }</style></head>
+    <body><table><thead><tr>`;
+    headers.forEach(h => { xml += `<th style="background-color:#10b981;color:#ffffff;font-weight:bold;">${h}</th>`; });
+    xml += `</tr></thead><tbody>`;
+    rows.forEach(r => {
+      xml += `<tr>`;
+      r.forEach(c => { xml += `<td>${String(c ?? "")}</td>`; });
+      xml += `</tr>`;
+    });
+    xml += `</tbody></table></body></html>`;
+
+    const blob = new Blob([xml], { type: "application/vnd.ms-excel" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.setAttribute("download", `${filename}_${new Date().toISOString().slice(0, 10)}.xls`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  },
+
+  exportPDF(title, headers, rows) {
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+
+    const tableRows = rows.map(r => `<tr>${r.map(c => `<td style="border:1px solid #e2e8f0;padding:8px;font-size:12px;">${c}</td>`).join("")}</tr>`).join("");
+    const tableHeaders = headers.map(h => `<th style="border:1px solid #10b981;background:#10b981;color:white;padding:10px;font-size:13px;text-align:left;">${h}</th>`).join("");
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>${title} - HomeBites Executive Report</title>
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 24px; color: #1e293b; }
+            .header { border-bottom: 2px solid #10b981; padding-bottom: 12px; margin-bottom: 20px; display: flex; justify-space-between; align-items: center; }
+            .title { font-size: 22px; font-weight: bold; color: #0f172a; }
+            .subtitle { font-size: 12px; color: #64748b; }
+            table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+            .footer { margin-top: 24px; font-size: 11px; color: #94a3b8; text-align: center; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div>
+              <div class="title">HomeBites Command Center - ${title}</div>
+              <div class="subtitle">Generated on ${new Date().toLocaleString()} | Enterprise Audit Report</div>
+            </div>
+          </div>
+          <table>
+            <thead><tr>${tableHeaders}</tr></thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+          <div class="footer">Confidential - HomeBites Executive Dashboard &amp; Analytics</div>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+    }, 500);
+  }
+};
+

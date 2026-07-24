@@ -14,24 +14,55 @@ export const SideNavBar = () => {
     navigate("/login");
   };
 
-  const navItems = [
-    { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
-    { to: "/orders", label: "Orders", icon: "receipt_long" },
-    { to: "/menu", label: "Menu Items", icon: "restaurant_menu" },
-    { to: "/categories", label: "Categories", icon: "category" },
-    { to: "/banners", label: "Banners", icon: "ads_click" },
-    { to: "/coupons", label: "Coupons", icon: "confirmation_number" },
-    { to: "/deals", label: "Deals", icon: "local_offer" },
-    { to: "/delivery-partners", label: "Delivery Partners", icon: "local_shipping" },
-    { to: "/customers", label: "Customers", icon: "group" },
-    { to: "/analytics", label: "Analytics", icon: "analytics" },
-    { to: "/reports", label: "Reports", icon: "bar_chart" },
-    { to: "/support", label: "Customer Support", icon: "contact_support" },
-    { to: "/reviews", label: "Customer Reviews", icon: "rate_review" },
-    { to: "/wallet", label: "Wallet", icon: "account_balance_wallet" },
-    { to: "/settings", label: "Settings", icon: "settings" },
-    { to: "/security", label: "Security Dashboard", icon: "shield" },
-    { to: "/security-settings", label: "Security Settings", icon: "lock" }
+  const navSections = [
+    {
+      title: "Core Operations",
+      items: [
+        { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
+        { to: "/live-command", label: "Live Radar", icon: "radar" },
+        { to: "/orders", label: "Live Orders", icon: "receipt_long" },
+        { to: "/customers", label: "Customers", icon: "group" },
+        { to: "/delivery-partners", label: "Rider Fleet", icon: "local_shipping" },
+      ]
+    },
+    {
+      title: "Diet & Health Suite",
+      items: [
+        { to: "/diet-foods", label: "Diet Foods", icon: "nutrition" },
+        { to: "/meal-plans", label: "Meal Plans", icon: "calendar_month" },
+        { to: "/nutrition", label: "Nutrition Analytics", icon: "monitoring" },
+        { to: "/diet-categories", label: "Diet Categories", icon: "spa" },
+        { to: "/subscriptions", label: "Subscriptions", icon: "autorenew" },
+        { to: "/diet-offers-banners", label: "Diet Offers & Banners", icon: "campaign" },
+      ]
+    },
+    {
+      title: "Food & Catalog",
+      items: [
+        { to: "/menu", label: "Regular Menu", icon: "restaurant_menu" },
+        { to: "/categories", label: "Categories", icon: "category" },
+        { to: "/banners", label: "Hero Banners", icon: "ads_click" },
+        { to: "/coupons", label: "Coupons", icon: "confirmation_number" },
+        { to: "/deals", label: "Deals & Promos", icon: "local_offer" },
+      ]
+    },
+    {
+      title: "Finance & Growth",
+      items: [
+        { to: "/wallet", label: "Wallet & Ledger", icon: "account_balance_wallet" },
+        { to: "/reports", label: "Reports & Exports", icon: "bar_chart" },
+        { to: "/analytics", label: "Financial Analytics", icon: "analytics" },
+      ]
+    },
+    {
+      title: "System & Security",
+      items: [
+        { to: "/support", label: "Customer Support", icon: "contact_support" },
+        { to: "/reviews", label: "Reviews & Ratings", icon: "rate_review" },
+        { to: "/security", label: "Security & Audit", icon: "shield" },
+        { to: "/settings", label: "App Settings", icon: "settings" },
+      ]
+    }
   ];
 
   return (
@@ -51,7 +82,7 @@ export const SideNavBar = () => {
             />
             <div>
               <h1 className="font-bold text-base text-white leading-none tracking-tight" style={{ fontFamily: "Outfit, sans-serif" }}>HomeBites</h1>
-              <span className="text-[9px] text-[#10b981] font-bold tracking-wider uppercase mt-1 block">Enterprise Admin</span>
+              <span className="text-[9px] text-[#10b981] font-bold tracking-wider uppercase mt-1 block">Enterprise Command</span>
             </div>
           </div>
         ) : (
@@ -65,30 +96,39 @@ export const SideNavBar = () => {
         )}
       </div>
 
-      {/* Navigation Menu Link List */}
-      <div className="flex-grow overflow-y-auto py-4 px-3 space-y-1 scrollbar-thin">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-150 group font-medium ${
-                isActive
-                  ? "text-white bg-[#10b981]/20 font-bold border-l-4 border-[#10b981] shadow-[0_4px_12px_rgba(16,185,129,0.1)]"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
-              }`
-            }
-          >
-            <span 
-              className="material-symbols-outlined shrink-0 text-slate-400 group-hover:text-white transition-colors animate-none" 
-              style={{ fontSize: "18px" }}
-            >
-              {item.icon}
-            </span>
+      {/* Grouped Navigation Menu */}
+      <div className="flex-grow overflow-y-auto py-3 px-3 space-y-4 scrollbar-thin">
+        {navSections.map((section, sIdx) => (
+          <div key={sIdx} className="space-y-1">
             {!sidebarCollapsed && (
-              <span className="text-[12.5px] tracking-wide truncate">{item.label}</span>
+              <h3 className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">
+                {section.title}
+              </h3>
             )}
-          </NavLink>
+            {section.items.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-150 group font-medium ${
+                    isActive
+                      ? "text-white bg-[#10b981]/20 font-bold border-l-4 border-[#10b981] shadow-[0_4px_12px_rgba(16,185,129,0.1)]"
+                      : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                  }`
+                }
+              >
+                <span 
+                  className="material-symbols-outlined shrink-0 text-slate-400 group-hover:text-white transition-colors" 
+                  style={{ fontSize: "18px" }}
+                >
+                  {item.icon}
+                </span>
+                {!sidebarCollapsed && (
+                  <span className="text-[12.5px] tracking-wide truncate">{item.label}</span>
+                )}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </div>
 

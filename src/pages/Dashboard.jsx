@@ -93,6 +93,8 @@ export const Dashboard = () => {
       if (docSnap.exists()) {
         setKitchenOnline(docSnap.data().storeOpen ?? true);
       }
+    }, (err) => {
+      console.error("Dashboard Kitchen Error:", err);
     });
 
     const unsubOrders = onSnapshot(collection(db, "orders"), (snapshot) => {
@@ -115,6 +117,10 @@ export const Dashboard = () => {
       });
       setOrders(list);
       setLoading(false);
+    }, (err) => {
+      console.error("Dashboard Orders Sync Error:", err);
+      addToast(`Orders Sync Error: ${err.message}`, "error");
+      setLoading(false);
     });
 
     const unsubUsers = onSnapshot(collection(db, "users"), (snapshot) => {
@@ -129,6 +135,9 @@ export const Dashboard = () => {
         }
       });
       setCustomers(list);
+    }, (err) => {
+      console.error("Dashboard Users Sync Error:", err);
+      addToast(`Users Sync Error: ${err.message}`, "error");
     });
 
     const unsubPartners = onSnapshot(collection(db, "deliveryPartners"), (snapshot) => {
@@ -143,6 +152,9 @@ export const Dashboard = () => {
         }
       });
       setPartners(list);
+    }, (err) => {
+      console.error("Dashboard Partners Sync Error:", err);
+      addToast(`Partners Sync Error: ${err.message}`, "error");
     });
 
     const unsubMenuItems = onSnapshot(collection(db, "menuItems"), (snapshot) => {
@@ -154,6 +166,8 @@ export const Dashboard = () => {
         }
       });
       setMenuItems(list);
+    }, (err) => {
+      console.error("Dashboard Menu Items Sync Error:", err);
     });
 
     const unsubCategories = onSnapshot(collection(db, "categories"), (snapshot) => {
@@ -165,6 +179,8 @@ export const Dashboard = () => {
         }
       });
       setCategories(list);
+    }, (err) => {
+      console.error("Dashboard Categories Sync Error:", err);
     });
 
     return () => {
@@ -210,7 +226,7 @@ export const Dashboard = () => {
         return;
       }
 
-      const { doc, updateDoc, arrayUnion, serverTimestamp } = await import("firebase/firestore");
+      const { doc, updateDoc, arrayUnion, serverTimestamp, Timestamp } = await import("firebase/firestore");
       await updateDoc(doc(db, "orders", orderId), {
         deliveryPartnerId: partnerId,
         assignedPartnerId: partnerId,
@@ -220,7 +236,7 @@ export const Dashboard = () => {
         status: "Out for Delivery",
         statusHistory: arrayUnion({
           status: "Out for Delivery",
-          timestamp: new Date(),
+          timestamp: Timestamp.now(),
         }),
         updatedAt: serverTimestamp()
       });

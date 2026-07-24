@@ -106,6 +106,72 @@ export class AuditLogRepository extends BaseRepository {
   }
 }
 
+export class DietFoodRepository extends BaseRepository {
+  constructor() {
+    super("dietFoods");
+  }
+}
+
+export class MealPlanRepository extends BaseRepository {
+  constructor() {
+    super("mealPlans");
+  }
+}
+
+export class DietCategoryRepository extends BaseRepository {
+  constructor() {
+    super("dietCategories");
+  }
+}
+
+export class DietOfferRepository extends BaseRepository {
+  constructor() {
+    super("dietOffers");
+  }
+}
+
+export class DietBannerRepository extends BaseRepository {
+  constructor() {
+    super("dietBanners");
+  }
+}
+
+export class SubscriptionRepository extends BaseRepository {
+  constructor() {
+    super("subscriptions");
+  }
+}
+
+export class PaymentRepository extends BaseRepository {
+  constructor() {
+    super("payments");
+  }
+}
+
+export class FavoriteRepository extends BaseRepository {
+  constructor() {
+    super("favorites");
+  }
+}
+
+export class CartRepository extends BaseRepository {
+  constructor() {
+    super("carts");
+  }
+}
+
+export class SystemCounterRepository extends BaseRepository {
+  constructor() {
+    super("systemCounters");
+  }
+}
+
+export class ThreatScoreRepository extends BaseRepository {
+  constructor() {
+    super("threatScores");
+  }
+}
+
 // Instantiate and export singleton instances for easy usage
 export const userRepository = new UserRepository();
 export const addressRepository = new AddressRepository();
@@ -123,3 +189,15 @@ export const notificationRepository = new NotificationRepository();
 export const reviewRepository = new ReviewRepository();
 export const appSettingsRepository = new AppSettingsRepository();
 export const auditLogRepository = new AuditLogRepository();
+export const dietFoodRepository = new DietFoodRepository();
+export const mealPlanRepository = new MealPlanRepository();
+export const dietCategoryRepository = new DietCategoryRepository();
+export const dietOfferRepository = new DietOfferRepository();
+export const dietBannerRepository = new DietBannerRepository();
+export const subscriptionRepository = new SubscriptionRepository();
+export const paymentRepository = new PaymentRepository();
+export const favoriteRepository = new FavoriteRepository();
+export const cartRepository = new CartRepository();
+export const systemCounterRepository = new SystemCounterRepository();
+export const threatScoreRepository = new ThreatScoreRepository();
+

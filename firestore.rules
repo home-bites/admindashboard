@@ -168,5 +168,61 @@ service cloud.firestore {
     match /loyaltyPoints/{userId} {
       allow read, write: if isOwner(userId) || isDashboardAdmin();
     }
+
+    // 22. Payments Collection
+    match /payments/{paymentId} {
+      allow read: if isDashboardAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isDashboardAdmin();
+    }
+
+    // 23. System Counters Collection
+    match /systemCounters/{counterId} {
+      allow read: if isSignedIn();
+      allow write: if isDashboardAdmin();
+    }
+
+    // 24. Threat Scores Collection
+    match /threatScores/{scoreId} {
+      allow read, write: if isDashboardAdmin() || (isSignedIn() && request.auth.uid == scoreId);
+    }
+
+    // 25. Diet Foods Collection
+    match /dietFoods/{foodId} {
+      allow read: if true;
+      allow write: if isDashboardAdmin();
+    }
+
+    // 26. Meal Plans Collection
+    match /mealPlans/{planId} {
+      allow read: if true;
+      allow write: if isDashboardAdmin();
+    }
+
+    // 27. Diet Categories Collection
+    match /dietCategories/{categoryId} {
+      allow read: if true;
+      allow write: if isDashboardAdmin();
+    }
+
+    // 28. Diet Offers Collection
+    match /dietOffers/{offerId} {
+      allow read: if true;
+      allow write: if isDashboardAdmin();
+    }
+
+    // 29. Diet Banners Collection
+    match /dietBanners/{bannerId} {
+      allow read: if true;
+      allow write: if isDashboardAdmin();
+    }
+
+    // 30. Subscriptions Collection
+    match /subscriptions/{subscriptionId} {
+      allow read: if isDashboardAdmin() || (isSignedIn() && (resource == null || resource.data.userId == request.auth.uid));
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isDashboardAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow delete: if isDashboardAdmin();
+    }
   }
 }

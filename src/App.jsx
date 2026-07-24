@@ -28,6 +28,13 @@ import Reviews from "./pages/Reviews";
 import Customers from "./pages/Customers";
 import SecurityDashboard from "./pages/SecurityDashboard";
 import SecuritySettings from "./pages/SecuritySettings";
+import DietFoods from "./pages/DietFoods";
+import MealPlans from "./pages/MealPlans";
+import NutritionDashboard from "./pages/NutritionDashboard";
+import DietCategories from "./pages/DietCategories";
+import Subscriptions from "./pages/Subscriptions";
+import DietOffersBanners from "./pages/DietOffersBanners";
+import LiveCommandCenter from "./pages/LiveCommandCenter";
 
 import { isFirebaseConfigured, auth } from "./firebase/firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
@@ -99,6 +106,57 @@ export const App = () => {
 
             {/* Dashboard (All roles) */}
             <Route path="dashboard" element={<Dashboard />} />
+            <Route path="live-command" element={<LiveCommandCenter />} />
+
+            {/* Diet & Health Suite (Super Admin & Admin roles) */}
+            <Route
+              path="diet-foods"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <DietFoods />
+                </RBACGuard>
+              }
+            />
+            <Route
+              path="meal-plans"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <MealPlans />
+                </RBACGuard>
+              }
+            />
+            <Route
+              path="nutrition"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <NutritionDashboard />
+                </RBACGuard>
+              }
+            />
+            <Route
+              path="diet-categories"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <DietCategories />
+                </RBACGuard>
+              }
+            />
+            <Route
+              path="subscriptions"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <Subscriptions />
+                </RBACGuard>
+              }
+            />
+            <Route
+              path="diet-offers-banners"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <DietOffersBanners />
+                </RBACGuard>
+              }
+            />
 
             {/* Orders management (All roles) */}
             <Route path="orders" element={<Orders />} />

@@ -5,12 +5,13 @@ import { SideNavBar } from "../components/SideNavBar";
 import { TopNavBar } from "../components/TopNavBar";
 import { ToastContainer } from "../components/ToastContainer";
 import { ErrorBoundary } from "../components/ErrorBoundary";
+import { GlobalSearchModal } from "../components/GlobalSearchModal";
 
 export const AdminLayout = () => {
   const { sidebarCollapsed } = useUiStore();
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] text-[#151c27] flex">
+    <div className="min-h-screen bg-[#f9f9ff] dark:bg-slate-950 text-[#151c27] dark:text-slate-100 flex transition-colors duration-200">
       {/* Sidebar Navigation */}
       <SideNavBar />
 
@@ -24,16 +25,18 @@ export const AdminLayout = () => {
         <TopNavBar />
 
         {/* Page Content */}
-        <main className="flex-1 mt-16 overflow-y-auto bg-[#f9f9ff]">
+        <main className="flex-1 mt-16 overflow-y-auto bg-[#f9f9ff] dark:bg-slate-950 p-6">
           <ErrorBoundary>
             <Outlet />
           </ErrorBoundary>
         </main>
       </div>
 
-      {/* Global Toasts */}
+      {/* Global Modals & Toasts */}
+      <GlobalSearchModal />
       <ToastContainer />
     </div>
   );
 };
 export default AdminLayout;
+

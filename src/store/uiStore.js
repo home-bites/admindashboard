@@ -8,9 +8,13 @@ export const useUiStore = create(
       theme: "light",
       lastVisitedPage: "/dashboard",
       toasts: [],
+      isSearchOpen: false,
 
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+      
+      toggleSearch: () => set((state) => ({ isSearchOpen: !state.isSearchOpen })),
+      setSearchOpen: (open) => set({ isSearchOpen: open }),
       
       setTheme: (theme) => {
         if (theme === "dark") {
