@@ -1,4 +1,4 @@
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut as firebaseSignOut, sendPasswordResetEmail } from "firebase/auth";
+import { signInWithEmailAndPassword, signOut as firebaseSignOut, sendPasswordResetEmail } from "firebase/auth";
 import { arrayUnion, serverTimestamp, Timestamp } from "firebase/firestore";
 import { auth, isFirebaseConfigured } from "../firebase/firebaseConfig";
 import * as repos from "../repositories";
@@ -7,75 +7,92 @@ import * as repos from "../repositories";
 export const AuthService = {
   async login(email, password) {
     if (!isFirebaseConfigured) {
-      throw new Error("Firebase is not configured.");
+      throw new Error("Firebase is not configured properly. Please check your environment configuration.");
     }
 
     const cleanEmail = email ? email.trim().toLowerCase() : "";
-
-    // Super Admin direct login logic
-    if (
-      cleanEmail === "support@hombites.com" ||
-      cleanEmail === "admin@homebites.com" ||
-      cleanEmail === "admin@homebites.local"
-    ) {
-      try {
-        // Attempt normal login first
-        const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
-        const uid = cred.user.uid;
-        
-        // Ensure Firestore role is set
-        let userProfile = await repos.userRepository.getById(uid);
-        if (!userProfile) {
-          userProfile = {
-            uid: uid,
-            email: cleanEmail,
-            displayName: "Super Admin",
-            role: "Super Admin",
-            status: "Active",
-            permissions: ["ALL"],
-          };
-          await repos.userRepository.set(uid, userProfile);
-        }
-        return userProfile;
-        
-      } catch (e) {
-        // If login fails (user doesn't exist), create the user automatically!
-        if (e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential' || e.message.includes('400')) {
-          try {
-            const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-            const uid = cred.user.uid;
-            
-            const userProfile = {
-              uid: uid,
-              email: cleanEmail,
-              displayName: "Super Admin",
-              role: "Super Admin",
-              status: "Active",
-              permissions: ["ALL"],
-            };
-            await repos.userRepository.set(uid, userProfile);
-            return userProfile;
-          } catch (createErr) {
-            console.error("Auto-registration failed:", createErr);
-            throw new Error(`Auto-registration failed: ${createErr.message}`);
-          }
-        }
-        throw e;
-      }
+    if (!cleanEmail || !password) {
+      throw new Error("Please enter both email and password.");
     }
 
-    // Normal User Login
+    let cred;
     try {
-      const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
-      const uid = cred.user.uid;
-      const userProfile = await repos.userRepository.getById(uid);
-      if (!userProfile) {
-        throw new Error("User profile not found in database.");
-      }
-      return userProfile;
+      // 1. Authenticate strictly via Firebase Authentication
+      cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
     } catch (e) {
-      throw new Error("Invalid credentials. Please verify your email and password.");
+      console.error("[AuthService] Firebase Sign-In Error:", e.code || e.message);
+      if (
+        e.code === 'auth/user-not-found' ||
+        e.code === 'auth/wrong-password' ||
+        e.code === 'auth/invalid-credential'
+      ) {
+        throw new Error("Invalid credentials. Please verify your email and password.");
+      } else if (e.code === 'auth/user-disabled') {
+        throw new Error("This administrator account has been disabled.");
+      } else if (e.code === 'auth/too-many-requests') {
+        throw new Error("Too many failed login attempts. Please try again later.");
+      } else {
+        throw new Error(e.message || "Authentication failed. Please try again.");
+      }
     }
+
+    const uid = cred.user.uid;
+
+    // 2. Fetch User Profile from Firestore
+    let userProfile = await repos.userRepository.getById(uid);
+
+    // Profile provision for initial bootstrap admins if document missing
+    if (!userProfile) {
+      const allowedAdminEmails = ["admin@homebites.com", "support@hombites.com", "admin@homebites.local"];
+      if (allowedAdminEmails.includes(cleanEmail)) {
+        userProfile = {
+          uid: uid,
+          email: cleanEmail,
+          displayName: "Super Admin",
+          role: "Super Admin",
+          status: "Active",
+          isActive: true,
+          permissions: ["ALL"],
+          createdAt: new Date().toISOString(),
+        };
+        await repos.userRepository.set(uid, userProfile);
+      } else {
+        await firebaseSignOut(auth);
+        throw new Error("User profile not found in database. Contact system administrator.");
+      }
+    }
+
+    // 3. Status Validation
+    if (userProfile.isActive === false || userProfile.status === "Inactive" || userProfile.status === "Suspended") {
+      await firebaseSignOut(auth);
+      throw new Error("Your account is currently inactive or suspended.");
+    }
+
+    // 4. Role Authorization Check
+    const allowedRoles = ["Super Admin", "Admin", "Manager", "Chef", "Staff", "Kitchen Manager", "Delivery Manager"];
+    if (!userProfile.role || !allowedRoles.includes(userProfile.role)) {
+      await firebaseSignOut(auth);
+      throw new Error("Access denied. You do not have administrator privileges to access this dashboard.");
+    }
+
+    // 5. Audit Logging
+    try {
+      await repos.auditLogRepository.logAction(
+        uid,
+        "Authentication",
+        "LOGIN_SUCCESS",
+        {
+          uid,
+          email: cleanEmail,
+          role: userProfile.role,
+          timestamp: new Date().toISOString()
+        }
+      );
+    } catch (auditErr) {
+      console.warn("Audit logging non-fatal warning:", auditErr.message);
+    }
+
+    return userProfile;
   },
 
   async logout(currentUser) {

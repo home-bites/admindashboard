@@ -56,12 +56,16 @@ export const App = () => {
   const [authReady, setAuthReady] = useState(false);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
+    const unsub = onAuthStateChanged(auth, (firebaseUser) => {
       setAuthReady(true);
-      if (user) {
-        secureCore.authGuard.monitorSession(user.uid);
+      if (firebaseUser) {
+        secureCore.authGuard.monitorSession(firebaseUser.uid);
       } else {
         secureCore.authGuard.stopMonitoring();
+        const { isAuthenticated } = useAuthStore.getState();
+        if (isAuthenticated) {
+          useAuthStore.setState({ user: null, isAuthenticated: false });
+        }
       }
     });
     return () => unsub();
