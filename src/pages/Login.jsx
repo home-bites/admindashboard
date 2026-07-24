@@ -79,38 +79,6 @@ export const Login = () => {
               </div>
             </div>
 
-            {/* Auth Tabs */}
-            <div className="flex p-1 bg-[#f0f3ff] rounded-xl border border-[#d3daea]/50 shadow-inner">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab("otp");
-                  clearError();
-                }}
-                className={`flex-1 py-2 px-4 rounded-lg font-bold text-xs transition-all active:scale-95 duration-100 ${
-                  activeTab === "otp"
-                    ? "bg-white text-[#151c27] shadow-sm border border-[#dce2f3]"
-                    : "text-[#555f6f] hover:text-[#151c27]"
-                }`}
-              >
-                Mobile OTP
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab("email");
-                  clearError();
-                }}
-                className={`flex-1 py-2 px-4 rounded-lg font-bold text-xs transition-all active:scale-95 duration-100 ${
-                  activeTab === "email"
-                    ? "bg-white text-[#151c27] shadow-sm border border-[#dce2f3]"
-                    : "text-[#555f6f] hover:text-[#151c27]"
-                }`}
-              >
-                Email Access
-              </button>
-            </div>
-
             {authError && (
               <div className="p-3.5 bg-[#ffdad6] border border-[#ba1a1a]/20 text-[#93000a] text-xs rounded-xl font-bold flex items-center gap-2">
                 <span className="material-symbols-outlined text-[18px]">error</span>
@@ -118,119 +86,56 @@ export const Login = () => {
               </div>
             )}
 
-            {/* OTP Form */}
-            {activeTab === "otp" && (
-              <form onSubmit={handleOtpSubmit} className="space-y-6">
-                <div className="space-y-2">
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider" htmlFor="mobile">
-                    Mobile Number
-                  </label>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-[#555f6f] pointer-events-none">
-                      <span className="material-symbols-outlined text-[20px]">phone_iphone</span>
-                    </span>
-                    <input
-                      className="block w-full pl-10 pr-3 py-3 border border-[#d3daea] rounded-xl bg-slate-50 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#10b981]/10 focus:border-[#10b981] text-sm transition-all text-[#151c27] font-semibold"
-                      id="mobile"
-                      placeholder="+91 98765 00123"
-                      value={mobile}
-                      onChange={(e) => setMobile(e.target.value)}
-                      required
-                      type="tel"
-                    />
-                  </div>
-                </div>
-
-                {otpSent && (
-                  <div className="space-y-3 animate-slide-up">
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">One-Time Password</label>
-                    <div className="flex gap-2 justify-between">
-                      {otp.map((val, idx) => (
-                        <input
-                          key={idx}
-                          id={`otp-${idx}`}
-                          className="w-12 h-14 text-center border border-[#d3daea] rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#10b981]/15 focus:border-[#10b981] font-headline-md text-headline-md text-[#151c27] font-black transition-all shadow-inner"
-                          maxLength={1}
-                          value={val}
-                          onChange={(e) => {
-                            const newOtp = [...otp];
-                            newOtp[idx] = e.target.value;
-                            setOtp(newOtp);
-                            if (e.target.value && idx < 5) {
-                              document.getElementById(`otp-${idx + 1}`)?.focus();
-                            }
-                          }}
-                          type="text"
-                        />
-                      ))}
-                    </div>
-                    <p className="text-right text-xs text-[#10b981] font-bold hover:underline cursor-pointer">
-                      Resend OTP code
-                    </p>
-                  </div>
-                )}
-
-                <button
-                  className="w-full flex justify-center py-3 px-4 border border-transparent rounded-xl shadow-xs font-bold text-xs text-white bg-[#10b981] hover:bg-[#059669] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#10b981] transition-colors border-t border-t-white/20 inner-shine active:scale-[0.99]"
-                  type="submit"
-                >
-                  {otpSent ? "Verify Security Code" : "Send Security Code"}
-                </button>
-              </form>
-            )}
-
             {/* Email & Password Form */}
-            {activeTab === "email" && (
-              <form onSubmit={handleEmailLogin} className="space-y-5">
-                <div className="space-y-2">
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider" htmlFor="email">
-                    Email Address
-                  </label>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-[#555f6f] pointer-events-none">
-                      <span className="material-symbols-outlined text-[20px]">mail</span>
-                    </span>
-                    <input
-                      className="block w-full pl-10 pr-3 py-3 border border-[#d3daea] rounded-xl bg-slate-50 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#10b981]/10 focus:border-[#10b981] text-sm transition-all text-[#151c27] font-semibold"
-                      id="email"
-                      placeholder="support@hombites.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      required
-                      type="email"
-                    />
-                  </div>
+            <form onSubmit={handleEmailLogin} className="space-y-5">
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider" htmlFor="email">
+                  Admin Email Address
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-[#555f6f] pointer-events-none">
+                    <span className="material-symbols-outlined text-[20px]">mail</span>
+                  </span>
+                  <input
+                    className="block w-full pl-10 pr-3 py-3 border border-[#d3daea] rounded-xl bg-slate-50 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#10b981]/10 focus:border-[#10b981] text-sm transition-all text-[#151c27] font-semibold"
+                    id="email"
+                    placeholder="admin@hombites.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    type="email"
+                  />
                 </div>
+              </div>
 
-                <div className="space-y-2">
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider" htmlFor="password">
-                    Password Key
-                  </label>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-[#555f6f] pointer-events-none">
-                      <span className="material-symbols-outlined text-[20px]">lock</span>
-                    </span>
-                    <input
-                      className="block w-full pl-10 pr-3 py-3 border border-[#d3daea] rounded-xl bg-slate-50 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#10b981]/10 focus:border-[#10b981] text-sm transition-all text-[#151c27] font-semibold"
-                      id="password"
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                      type="password"
-                    />
-                  </div>
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider" htmlFor="password">
+                  Password Key
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-[#555f6f] pointer-events-none">
+                    <span className="material-symbols-outlined text-[20px]">lock</span>
+                  </span>
+                  <input
+                    className="block w-full pl-10 pr-3 py-3 border border-[#d3daea] rounded-xl bg-slate-50 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#10b981]/10 focus:border-[#10b981] text-sm transition-all text-[#151c27] font-semibold"
+                    id="password"
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    type="password"
+                  />
                 </div>
+              </div>
 
-                <button
-                  disabled={loading}
-                  className="w-full flex justify-center py-3 px-4 border border-transparent rounded-xl shadow-xs font-bold text-xs text-white bg-[#10b981] hover:bg-[#059669] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#10b981] transition-colors border-t border-t-white/20 disabled:opacity-50 inner-shine active:scale-[0.99]"
-                  type="submit"
-                >
-                  {loading ? "Decrypting credentials..." : "Initialize Command Center"}
-                </button>
-              </form>
-            )}
+              <button
+                disabled={loading}
+                className="w-full flex justify-center py-3.5 px-4 border border-transparent rounded-xl shadow-xs font-bold text-xs text-white bg-[#10b981] hover:bg-[#059669] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#10b981] transition-colors border-t border-t-white/20 disabled:opacity-50 inner-shine active:scale-[0.99]"
+                type="submit"
+              >
+                {loading ? "Decrypting credentials..." : "Initialize Command Center"}
+              </button>
+            </form>
 
             <div className="pt-6 border-t border-[#dce2f3]">
               <div className="flex items-center justify-center gap-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
