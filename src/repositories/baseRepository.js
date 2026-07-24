@@ -101,8 +101,6 @@ export class BaseRepository {
   listenAll(callback) {
     this.verifyConfiguration();
     if (this.isMockMode()) {
-      // In mock mode, we just call the callback once with current data.
-      // To fully mock real-time, we'd need an event emitter, but this is a good fallback.
       const items = mockDatabases[this.collectionName]
         .filter((t) => t.isDeleted !== true)
         .map((t) => ({ ...t }));
@@ -121,10 +119,15 @@ export class BaseRepository {
       });
       callback(items);
     }, (error) => {
-      console.error(`Error listening to ${this.collectionName}:`, error);
+      console.warn(`Error listening to ${this.collectionName}:`, error.message);
+      callback([]);
     });
 
     return unsubscribe;
+  }
+
+  subscribeToAll(callback) {
+    return this.listenAll(callback);
   }
 
   async create(data) {
