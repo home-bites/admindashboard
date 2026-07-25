@@ -33,8 +33,8 @@ import MealPlans from "./pages/MealPlans";
 import NutritionDashboard from "./pages/NutritionDashboard";
 import DietCategories from "./pages/DietCategories";
 import Subscriptions from "./pages/Subscriptions";
-import DietOffersBanners from "./pages/DietOffersBanners";
 import LiveCommandCenter from "./pages/LiveCommandCenter";
+import { MediaLibrary } from "./pages/MediaLibrary";
 
 import { isFirebaseConfigured, auth } from "./firebase/firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
@@ -185,12 +185,20 @@ export const App = () => {
               }
             />
 
-            {/* Promo Banners (Super Admin & Admin roles) */}
+            {/* Promo Banners & Media Library (Super Admin & Admin roles) */}
             <Route
               path="banners"
               element={
                 <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
                   <Banners />
+                </RBACGuard>
+              }
+            />
+            <Route
+              path="media-library"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <MediaLibrary />
                 </RBACGuard>
               }
             />

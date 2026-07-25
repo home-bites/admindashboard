@@ -42,6 +42,7 @@ export const SideNavBar = () => {
         { to: "/menu", label: "Regular Menu", icon: "restaurant_menu" },
         { to: "/categories", label: "Categories", icon: "category" },
         { to: "/banners", label: "Hero Banners", icon: "ads_click" },
+        { to: "/media-library", label: "Media Library", icon: "photo_library" },
         { to: "/coupons", label: "Coupons", icon: "confirmation_number" },
         { to: "/deals", label: "Deals & Promos", icon: "local_offer" },
       ]
