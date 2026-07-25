@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { DietFoodService, DietCategoryService } from "../services";
 import { useUiStore } from "../store/uiStore";
+import { ImageUploader } from "../components/ImageUploader";
 
 export const DietFoods = () => {
   const { addToast } = useUiStore();
@@ -386,15 +387,14 @@ export const DietFoods = () => {
                     className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
                   />
                 </div>
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Image URL</label>
-                  <input
-                    type="text"
-                    value={formData.imageUrl}
-                    onChange={(e) => setFormData({ ...formData, imageUrl: e.target.value })}
-                    className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
-                  />
-                </div>
+              <div className="col-span-full">
+                <ImageUploader
+                  value={formData.imageUrl}
+                  onChange={(url) => setFormData({ ...formData, imageUrl: url })}
+                  folder="diet_foods"
+                  label="Diet Meal Photo"
+                />
+              </div>
               </div>
 
               {/* Macros Breakdown */}

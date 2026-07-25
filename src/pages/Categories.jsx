@@ -5,6 +5,7 @@ import { useCategoryStore } from "../store/categoryStore";
 import { uploadFile } from "../firebase/storage";
 import EmptyState from "../components/EmptyState";
 import * as LoadingComponents from "../components/LoadingComponents";
+import { ImageUploader } from "../components/ImageUploader";
 
 export const Categories = () => {
   const { addToast } = useUiStore();
@@ -259,29 +260,14 @@ export const Categories = () => {
                   />
                 </div>
 
-                {/* Image Upload */}
+                {/* Image Upload & URL */}
                 <div>
-                  <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-2">Category Image</label>
-                  <div className="flex items-center gap-4">
-                    <div className="w-16 h-16 rounded-xl bg-slate-50 border border-slate-200 overflow-hidden flex items-center justify-center flex-shrink-0">
-                      {catImage ? (
-                        <img src={catImage} alt="Preview" className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="material-symbols-outlined text-3xl text-slate-400">image</span>
-                      )}
-                    </div>
-                    <label className="cursor-pointer bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs px-4 py-2 rounded-lg border border-slate-200 transition-all flex items-center gap-2">
-                      <span className="material-symbols-outlined text-[18px]">cloud_upload</span>
-                      {uploading ? "Uploading..." : "Upload Image"}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageChange}
-                        className="hidden"
-                        disabled={uploading}
-                      />
-                    </label>
-                  </div>
+                  <ImageUploader
+                    value={catImage}
+                    onChange={(url) => setCatImage(url)}
+                    folder="categories"
+                    label="Category Image"
+                  />
                 </div>
 
                 {/* Status Toggle */}

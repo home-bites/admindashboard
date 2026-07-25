@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { DietOfferService, DietBannerService } from "../services";
 import { useUiStore } from "../store/uiStore";
+import { ImageUploader } from "../components/ImageUploader";
 
 export const DietOffersBanners = () => {
   const { addToast } = useUiStore();
@@ -171,12 +172,11 @@ export const DietOffersBanners = () => {
                 />
               </div>
               <div>
-                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Hero Image URL</label>
-                <input
-                  type="text"
+                <ImageUploader
                   value={bannerForm.imageUrl}
-                  onChange={(e) => setBannerForm({ ...bannerForm, imageUrl: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-slate-800 border rounded-xl text-xs"
+                  onChange={(url) => setBannerForm({ ...bannerForm, imageUrl: url })}
+                  folder="diet_banners"
+                  label="Hero Banner Image"
                 />
               </div>
               <div className="flex items-center gap-3 pt-2">

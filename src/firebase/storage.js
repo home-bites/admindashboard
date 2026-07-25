@@ -1,20 +1,104 @@
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { storage, isFirebaseConfigured } from "./firebaseConfig";
 
-export const uploadFile = async (file, path) => {
-  if (isFirebaseConfigured && storage) {
-    const storageRef = ref(storage, path);
-    const snapshot = await uploadBytes(storageRef, file);
-    return await getDownloadURL(snapshot.ref);
-  } else {
-    // Return a local base64 DataURL for offline mock usage
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
+// Compress image on client canvas before uploading
+export const compressImage = (file, maxWidth = 1200, quality = 0.85) => {
+  return new Promise((resolve) => {
+    if (!file.type.startsWith("image/")) {
+      resolve(file);
+      return;
+    }
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              const compressedFile = new File([blob], file.name, {
+                type: "image/jpeg",
+                lastModified: Date.now(),
+              });
+              resolve(compressedFile);
+            } else {
+              resolve(file);
+            }
+          },
+          "image/jpeg",
+          quality
+        );
+      };
+      img.onerror = () => resolve(file);
+    };
+    reader.onerror = () => resolve(file);
+  });
+};
+
+export const uploadFile = async (file, path, onProgress = null) => {
+  try {
+    const compressed = await compressImage(file);
+
+    if (isFirebaseConfigured && storage) {
+      const storageRef = ref(storage, path);
+      const uploadTask = uploadBytesResumable(storageRef, compressed);
+
+      return new Promise((resolve, reject) => {
+        uploadTask.on(
+          "state_changed",
+          (snapshot) => {
+            if (onProgress && snapshot.totalBytes > 0) {
+              const pct = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+              onProgress(pct);
+            }
+          },
+          async (err) => {
+            console.warn("Storage upload failed, using DataURL fallback:", err);
+            // CORS or Storage permission error fallback to inline DataURL
+            const dataUrl = await fileToDataURL(compressed);
+            resolve(dataUrl);
+          },
+          async () => {
+            try {
+              const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+              resolve(downloadUrl);
+            } catch (e) {
+              const dataUrl = await fileToDataURL(compressed);
+              resolve(dataUrl);
+            }
+          }
+        );
+      });
+    } else {
+      return await fileToDataURL(compressed);
+    }
+  } catch (e) {
+    return await fileToDataURL(file);
   }
+};
+
+const fileToDataURL = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 };
 
 export { storage };
