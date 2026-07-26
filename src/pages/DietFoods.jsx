@@ -22,6 +22,7 @@ export const DietFoods = () => {
     categoryId: "",
     categoryName: "",
     imageUrl: "",
+    mealTime: "Morning",
     calories: 350,
     proteinGrams: 28,
     carbsGrams: 30,
@@ -68,6 +69,7 @@ export const DietFoods = () => {
       categoryId: categories[0]?.id || "",
       categoryName: categories[0]?.name || "Weight Loss",
       imageUrl: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80",
+      mealTime: "Morning",
       calories: 420,
       proteinGrams: 35,
       carbsGrams: 25,
@@ -93,6 +95,7 @@ export const DietFoods = () => {
       categoryId: food.categoryId || "",
       categoryName: food.categoryName || "",
       imageUrl: food.imageUrl || "",
+      mealTime: food.mealTime || "Morning",
       calories: food.calories || 0,
       proteinGrams: food.proteinGrams || 0,
       carbsGrams: food.carbsGrams || 0,
@@ -353,6 +356,27 @@ export const DietFoods = () => {
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
+                </div>
+              </div>
+
+              {/* Meal Time Selector */}
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Meal Time Filter</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {["Morning", "Afternoon", "Evening", "Night"].map((time) => (
+                    <button
+                      key={time}
+                      type="button"
+                      onClick={() => setFormData({ ...formData, mealTime: time })}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
+                        formData.mealTime === time
+                          ? "bg-emerald-500 text-white border-emerald-500 shadow-xs"
+                          : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      {time}
+                    </button>
+                  ))}
                 </div>
               </div>
 

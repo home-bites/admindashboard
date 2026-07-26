@@ -4,6 +4,7 @@ import { useAuthStore } from "../store/authStore";
 import { SettingsService } from "../services";
 import * as LoadingComponents from "../components/LoadingComponents";
 import { isFirebaseConfigured } from "../firebase/firebaseConfig";
+import { ImageUploader } from "../components/ImageUploader";
 
 export const Settings = () => {
   const { addToast } = useUiStore();
@@ -18,6 +19,8 @@ export const Settings = () => {
   const [orderInstructions, setOrderInstructions] = useState("Please note any severe allergies. Our kitchen handles nuts and dairy.");
   const [acceptingOrders, setAcceptingOrders] = useState(true);
   const [preordersAvailable, setPreordersAvailable] = useState(true);
+  const [heroBackgroundImageUrl, setHeroBackgroundImageUrl] = useState("");
+  const [dietHeroBackgroundImageUrl, setDietHeroBackgroundImageUrl] = useState("");
 
   // Financial parameters state
   const [taxRate, setTaxRate] = useState(5.0); // GST %
@@ -61,6 +64,8 @@ export const Settings = () => {
           setOrderInstructions(data.orderInstructions || "Please note any severe allergies. Our kitchen handles nuts and dairy.");
           setAcceptingOrders(data.storeOpen !== undefined ? data.storeOpen : true);
           setPreordersAvailable(data.preordersAvailable !== undefined ? data.preordersAvailable : true);
+          setHeroBackgroundImageUrl(data.heroBackgroundImageUrl || data.heroImage || "");
+          setDietHeroBackgroundImageUrl(data.dietHeroBackgroundImageUrl || data.dietHeroImage || "");
 
           setTaxRate(data.taxRate !== undefined ? data.taxRate : 5.0);
           setCommissionRate(data.commissionRate !== undefined ? data.commissionRate : 10.0);
@@ -108,6 +113,8 @@ export const Settings = () => {
       orderInstructions,
       storeOpen: acceptingOrders,
       preordersAvailable,
+      heroBackgroundImageUrl,
+      dietHeroBackgroundImageUrl,
       taxRate: Number(taxRate),
       commissionRate: Number(commissionRate),
       platformFee: Number(platformFee),
@@ -225,6 +232,17 @@ export const Settings = () => {
         >
           <span className="material-symbols-outlined text-[18px]">payments</span>
           Financial
+        </button>
+        <button
+          onClick={() => setActiveTab("customization")}
+          className={`pb-3 font-label-md text-label-md flex items-center gap-2 border-b-2 transition-all ${
+            activeTab === "customization"
+              ? "text-[#10b981] font-bold border-[#10b981]"
+              : "text-[#555f6f] hover:text-[#151c27] border-transparent"
+          }`}
+        >
+          <span className="material-symbols-outlined text-[18px]">wallpaper</span>
+          Hero & App Banner
         </button>
         <button
           onClick={() => setActiveTab("system")}
@@ -663,6 +681,119 @@ export const Settings = () => {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {activeTab === "customization" && (
+          <div className="lg:col-span-12 flex flex-col gap-6">
+            <section className="bg-white border border-[#dce2f3] rounded-xl p-6 relative overflow-hidden group shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-headline-md text-headline-md text-[#151c27] font-semibold flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[#10b981]">wallpaper</span>
+                    Customer App Hero Section Background Image
+                  </h3>
+                  <p className="font-body-sm text-body-sm text-[#555f6f] mt-1">
+                    Upload or replace the full-bleed cover image displayed behind the location header, greeting, and search bar on the Customer App Home Screen.
+                  </p>
+                </div>
+                <button
+                  onClick={handleSave}
+                  className="inner-shine bg-[#10b981] hover:bg-[#059669] text-white font-label-md text-label-md px-5 py-2 rounded-lg shadow-xs flex items-center gap-2"
+                >
+                  <span className="material-symbols-outlined text-[16px]">save</span>
+                  Save Image
+                </button>
+              </div>
+
+              {/* Live Preview of Hero Banner */}
+              <div className="mb-6 relative rounded-2xl overflow-hidden h-56 border border-slate-200 bg-slate-900 shadow-md">
+                <img
+                  src={heroBackgroundImageUrl || "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1200&q=80"}
+                  alt="Hero Background Preview"
+                  className="w-full h-full object-cover opacity-90"
+                />
+                <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/40 to-[#0F172A] flex flex-col justify-between p-6">
+                  <div className="flex items-center justify-between">
+                    <span className="text-emerald-400 font-extrabold text-[11px] tracking-wider uppercase bg-emerald-950/80 border border-emerald-500/30 px-3 py-1 rounded-full backdrop-blur-md">
+                      CUSTOMER APP LIVE COVER PREVIEW
+                    </span>
+                    <span className="bg-[#10b981] text-white text-[10px] font-bold px-2.5 py-1 rounded-full shadow-xs">
+                      ACTIVE HERO
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-white/80 font-bold text-xs uppercase tracking-widest block">BONJOUR,</span>
+                    <span className="text-white font-black text-3xl tracking-tight">Customer Name</span>
+                    <div className="mt-4 bg-white/95 backdrop-blur-md rounded-full px-4 py-2.5 text-slate-400 text-xs font-semibold flex items-center gap-2 max-w-md shadow-lg">
+                      <span className="material-symbols-outlined text-[#10b981] text-base">search</span>
+                      Search homemade biryani, pizza, thalis...
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Image Uploader Component */}
+              <ImageUploader
+                value={heroBackgroundImageUrl}
+                onChange={(url) => setHeroBackgroundImageUrl(url)}
+                folder="settings/hero"
+                label="Upload / Change Home Hero Background Cover Image"
+              />
+            </section>
+
+            {/* Diet Page Hero Customization */}
+            <section className="bg-white border border-[#dce2f3] rounded-xl p-6 relative overflow-hidden group shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-headline-md text-headline-md text-[#151c27] font-semibold flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[#10b981]">spa</span>
+                    Diet Meals Page Hero Background Image
+                  </h3>
+                  <p className="font-body-sm text-body-sm text-[#555f6f] mt-1">
+                    Upload or update the custom banner cover image displayed on the Diet Meals landing page in the Customer App.
+                  </p>
+                </div>
+                <button
+                  onClick={handleSave}
+                  className="inner-shine bg-[#10b981] hover:bg-[#059669] text-white font-label-md text-label-md px-5 py-2 rounded-lg shadow-xs flex items-center gap-2"
+                >
+                  <span className="material-symbols-outlined text-[16px]">save</span>
+                  Save Diet Hero Image
+                </button>
+              </div>
+
+              {/* Live Preview of Diet Hero Banner */}
+              <div className="mb-6 relative rounded-2xl overflow-hidden h-48 border border-slate-200 bg-slate-900 shadow-md">
+                <img
+                  src={dietHeroBackgroundImageUrl || "https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=1200&q=80"}
+                  alt="Diet Hero Background Preview"
+                  className="w-full h-full object-cover opacity-90"
+                />
+                <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/30 to-[#0F172A] flex flex-col justify-between p-6">
+                  <div className="flex items-center justify-between">
+                    <span className="text-emerald-400 font-extrabold text-[11px] tracking-wider uppercase bg-emerald-950/80 border border-emerald-500/30 px-3 py-1 rounded-full backdrop-blur-md">
+                      DIET PAGE HERO PREVIEW
+                    </span>
+                    <span className="bg-[#10b981] text-white text-[10px] font-bold px-2.5 py-1 rounded-full shadow-xs">
+                      LIVE DIET HERO
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-white font-black text-2xl tracking-tight">KETO &amp; HIGH PROTEIN MEALS</span>
+                    <p className="text-emerald-300 font-semibold text-xs mt-1">100% Curated Clinical Nutrition &amp; Macro Tracker</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Image Uploader Component */}
+              <ImageUploader
+                value={dietHeroBackgroundImageUrl}
+                onChange={(url) => setDietHeroBackgroundImageUrl(url)}
+                folder="settings/diet_hero"
+                label="Upload / Change Diet Page Hero Background Cover Image"
+              />
+            </section>
           </div>
         )}
       </div>

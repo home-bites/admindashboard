@@ -34,7 +34,9 @@ import NutritionDashboard from "./pages/NutritionDashboard";
 import DietCategories from "./pages/DietCategories";
 import Subscriptions from "./pages/Subscriptions";
 import LiveCommandCenter from "./pages/LiveCommandCenter";
+import DietOffersBanners from "./pages/DietOffersBanners";
 import { MediaLibrary } from "./pages/MediaLibrary";
+import { useAuthStore } from "./store/authStore";
 
 import { isFirebaseConfigured, auth } from "./firebase/firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";

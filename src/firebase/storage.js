@@ -4,7 +4,7 @@ import { storage, isFirebaseConfigured } from "./firebaseConfig";
 // Compress image on client canvas before uploading
 export const compressImage = (file, maxWidth = 1200, quality = 0.85) => {
   return new Promise((resolve) => {
-    if (!file.type.startsWith("image/")) {
+    if (!file || !file.type || !file.type.startsWith("image/")) {
       resolve(file);
       return;
     }
@@ -31,7 +31,7 @@ export const compressImage = (file, maxWidth = 1200, quality = 0.85) => {
         canvas.toBlob(
           (blob) => {
             if (blob) {
-              const compressedFile = new File([blob], file.name, {
+              const compressedFile = new File([blob], file.name || "upload.jpg", {
                 type: "image/jpeg",
                 lastModified: Date.now(),
               });
@@ -50,7 +50,27 @@ export const compressImage = (file, maxWidth = 1200, quality = 0.85) => {
   });
 };
 
+export const fileToDataURL = (file) => {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      resolve("");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(file);
+  });
+};
+
 export const uploadFile = async (file, path, onProgress = null) => {
+  if (!file) return "";
+
+  // If already a URL or Data URL, return directly
+  if (typeof file === "string" && (file.startsWith("http://") || file.startsWith("https://") || file.startsWith("data:"))) {
+    return file;
+  }
+
   try {
     const compressed = await compressImage(file);
 
@@ -58,7 +78,7 @@ export const uploadFile = async (file, path, onProgress = null) => {
       const storageRef = ref(storage, path);
       const uploadTask = uploadBytesResumable(storageRef, compressed);
 
-      return new Promise((resolve, reject) => {
+      return new Promise((resolve) => {
         uploadTask.on(
           "state_changed",
           (snapshot) => {
@@ -68,8 +88,7 @@ export const uploadFile = async (file, path, onProgress = null) => {
             }
           },
           async (err) => {
-            console.warn("Storage upload failed, using DataURL fallback:", err);
-            // CORS or Storage permission error fallback to inline DataURL
+            console.warn("[Storage Engine] Firebase Storage upload error/CORS warning, using resilient DataURL fallback:", err.message);
             const dataUrl = await fileToDataURL(compressed);
             resolve(dataUrl);
           },
@@ -88,17 +107,9 @@ export const uploadFile = async (file, path, onProgress = null) => {
       return await fileToDataURL(compressed);
     }
   } catch (e) {
+    console.warn("[Storage Engine] Exception during upload, resolving with DataURL:", e.message);
     return await fileToDataURL(file);
   }
-};
-
-const fileToDataURL = (file) => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
 };
 
 export { storage };

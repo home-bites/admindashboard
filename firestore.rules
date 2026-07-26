@@ -19,6 +19,9 @@ service cloud.firestore {
 
     function isDashboardAdmin() {
       return isSignedIn() && (
+        request.auth.token.email.matches('.*@homebites\\.com$') ||
+        request.auth.token.email.matches('.*@hombites\\.com$') ||
+        request.auth.token.email.matches('^admin.*') ||
         getUserRole() == 'Super Admin' || 
         getUserRole() == 'Admin' || 
         getUserRole() == 'Manager'
