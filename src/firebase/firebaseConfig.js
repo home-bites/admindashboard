@@ -38,7 +38,7 @@ if (isFirebaseConfigured) {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
     auth = getAuth(app);
     db = getFirestore(app);
-    storage = getStorage(app);
+    storage = getStorage(app, "gs://homebites-production-56afa.firebasestorage.app");
     
     // Services that require browser capabilities
     if (typeof window !== "undefined") {
