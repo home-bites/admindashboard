@@ -205,11 +205,15 @@ export const CustomerSupport = () => {
       createdAt: new Date().toISOString()
     };
 
-    const currentReplies = selectedTicket.replies || [];
-    const updatedReplies = [...currentReplies, newReply];
-    const newStatus = selectedTicket.status === "Open" ? "In Progress" : selectedTicket.status;
-
     try {
+      const freshTickets = await fetchTicketsList();
+      const updatedSelected = freshTickets.find(t => t.id === selectedTicket.id);
+      if (!updatedSelected) throw new Error("Ticket not found");
+
+      const currentReplies = updatedSelected.replies || [];
+      const updatedReplies = [...currentReplies, newReply];
+      const newStatus = updatedSelected.status === "Open" ? "In Progress" : updatedSelected.status;
+
       await SupportTicketService.updateSupportTicket(selectedTicket.id, {
         replies: updatedReplies,
         status: newStatus,
@@ -228,9 +232,9 @@ export const CustomerSupport = () => {
         });
       }
 
-      const freshTickets = await fetchTicketsList();
-      const updatedSelected = freshTickets.find(t => t.id === selectedTicket.id);
-      setSelectedTicket(updatedSelected || null);
+      const finalTickets = await fetchTicketsList();
+      const finalSelected = finalTickets.find(t => t.id === selectedTicket.id);
+      setSelectedTicket(finalSelected || null);
       
       setReplyText("");
       addToast("Reply sent successfully", "success");
@@ -261,10 +265,14 @@ export const CustomerSupport = () => {
       createdAt: new Date().toISOString()
     };
 
-    const currentReplies = selectedTicket.replies || [];
-    const updatedReplies = [...currentReplies, newReply];
-
     try {
+      const freshTickets = await fetchTicketsList();
+      const updatedSelected = freshTickets.find(t => t.id === selectedTicket.id);
+      if (!updatedSelected) throw new Error("Ticket not found");
+
+      const currentReplies = updatedSelected.replies || [];
+      const updatedReplies = [...currentReplies, newReply];
+
       await SupportTicketService.updateSupportTicket(selectedTicket.id, {
         status: "Resolved",
         resolution: resolutionText,
@@ -284,9 +292,9 @@ export const CustomerSupport = () => {
         });
       }
 
-      const freshTickets = await fetchTicketsList();
-      const updatedSelected = freshTickets.find(t => t.id === selectedTicket.id);
-      setSelectedTicket(updatedSelected || null);
+      const finalTickets = await fetchTicketsList();
+      const finalSelected = finalTickets.find(t => t.id === selectedTicket.id);
+      setSelectedTicket(finalSelected || null);
 
       addToast(`Ticket #${selectedTicket.id} marked as Resolved`, "info");
     } catch (err) {
