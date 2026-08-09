@@ -72,6 +72,9 @@ export const DeliveryPartners = () => {
   // Documents Upload Fields (Mock uploads URLs)
   const [docAadhaar, setDocAadhaar] = useState("");
   const [docLicense, setDocLicense] = useState("");
+  // Per-document verdicts, mirrored locally so a decision shows immediately
+  // rather than waiting for the Firestore listener to round-trip.
+  const [docReviewStatuses, setDocReviewStatuses] = useState({});
   const [docPAN, setDocPAN] = useState("");
   const [docRC, setDocRC] = useState("");
   const [docInsurance, setDocInsurance] = useState("");
@@ -358,15 +361,71 @@ export const DeliveryPartners = () => {
     setIfscCode(partner.ifscCode || "");
     setUpiId(partner.upiId || "");
     
-    // documents loading
+    // Documents.
+    //
+    // The delivery app writes the keys 'license' and 'rc'; this page previously
+    // read only 'drivingLicense' and wrote it back the same way. The two sides
+    // were therefore blind to each other: a licence uploaded by a partner never
+    // appeared here, and one uploaded here never appeared in the app. The
+    // partner's key is the canonical one — it is what the app, the partner
+    // model and storage.rules all use — and the legacy name is kept as a read
+    // fallback so records created under the old spelling still display.
     const docs = partner.documents || {};
     setDocAadhaar(docs.aadhaar || "");
-    setDocLicense(docs.drivingLicense || "");
+    setDocLicense(docs.license || docs.drivingLicense || "");
     setDocPAN(docs.pan || docs.panCard || "");
     setDocRC(docs.rc || docs.vehicleRC || "");
     setDocInsurance(docs.insurance || "");
 
     setIsModalOpen(true);
+  };
+
+  /// Approves or rejects a single document.
+  ///
+  /// Verification was previously all-or-nothing at the partner level: an admin
+  /// approved or rejected the whole application, so a partner with four good
+  /// documents and one blurry Aadhaar had to be rejected outright and re-upload
+  /// everything. Per-document status lets the partner replace just the one that
+  /// failed — the app resets that document to 'Pending' on re-upload.
+  const handleDocumentReview = async (keyName, title, decision) => {
+    if (!activePartner) return;
+
+    let reason = "";
+    if (decision === "Rejected") {
+      const entered = window.prompt(
+        `Why is the ${title} being rejected? The partner sees this message.`
+      );
+      if (entered === null) return; // cancelled
+      if (!entered.trim()) {
+        addToast("A rejection reason is required", "error");
+        return;
+      }
+      reason = entered.trim();
+    }
+
+    try {
+      await updateDeliveryPartner(
+        activePartner.id,
+        {
+          [`documentStatuses.${keyName}`]: decision,
+          [`documentReview.${keyName}`]: {
+            decision,
+            reason,
+            reviewedAt: new Date().toISOString(),
+            reviewedBy: user?.email || user?.uid || "admin",
+          },
+        },
+        user
+      );
+
+      setDocReviewStatuses((prev) => ({ ...prev, [keyName]: decision }));
+      addToast(
+        `${title} ${decision === "Approved" ? "approved" : "rejected"}`,
+        decision === "Approved" ? "success" : "warning"
+      );
+    } catch (err) {
+      addToast(`Could not update ${title}: ${err.message}`, "error");
+    }
   };
 
   const handleAvatarChange = async (e) => {
@@ -468,7 +527,9 @@ export const DeliveryPartners = () => {
       // nested documents object
       documents: {
         aadhaar: docAadhaar,
-        drivingLicense: docLicense,
+        // Canonical key, matching what the delivery app reads. Writing
+        // 'drivingLicense' here meant the partner never saw the file.
+        license: docLicense,
         pan: docPAN,
         rc: docRC,
         insurance: docInsurance,
@@ -1236,7 +1297,10 @@ export const DeliveryPartners = () => {
               {/* View Documents & Edit Action Trays */}
               <div className="grid grid-cols-2 gap-3 mt-2 border-t border-slate-100 pt-4">
                 <button
-                  onClick={() => setIsDocsModalOpen(true)}
+                  onClick={() => {
+                    setDocReviewStatuses(activePartner?.documentStatuses || {});
+                    setIsDocsModalOpen(true);
+                  }}
                   className="py-2.5 border border-slate-200 rounded-xl bg-white text-slate-700 hover:bg-slate-50 transition-colors flex justify-center items-center gap-1.5 shadow-3xs text-xs font-bold"
                 >
                   <span className="material-symbols-outlined text-[16px] text-slate-400">folder_open</span> View Documents
@@ -1313,51 +1377,94 @@ export const DeliveryPartners = () => {
 
             <div className="p-6 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-4">
               {[
+                { title: "Profile Photo", fileUrl: activePartner.avatar || (activePartner.documents || {}).profilePhoto, keyName: "profilePhoto" },
                 { title: "Aadhaar Card", fileUrl: docAadhaar, keyName: "aadhaar" },
-                { title: "Driving License", fileUrl: docLicense, keyName: "drivingLicense" },
+                { title: "Driving License", fileUrl: docLicense, keyName: "license" },
                 { title: "PAN Card", fileUrl: docPAN, keyName: "pan" },
                 { title: "Vehicle RC Document", fileUrl: docRC, keyName: "rc" },
                 { title: "Insurance Document", fileUrl: docInsurance, keyName: "insurance" },
               ].map((doc) => {
                 const hasDoc = doc.fileUrl && doc.fileUrl.startsWith("http");
+
+                // A PDF rendered into <img> shows a broken-image icon, so the
+                // reviewer sees "uploaded" with nothing to look at. The
+                // extension is read from the path, before the query string,
+                // because Firebase download URLs carry ?alt=media&token=...
+                const pathPart = hasDoc ? doc.fileUrl.split("?")[0].toLowerCase() : "";
+                const isPdf = pathPart.endsWith(".pdf");
+
+                const status = docReviewStatuses[doc.keyName] || (hasDoc ? "Pending" : "");
+                const badge =
+                  !hasDoc
+                    ? "bg-slate-100 text-slate-500 border-slate-200"
+                    : status === "Approved"
+                    ? "bg-green-50 text-green-700 border-green-200"
+                    : status === "Rejected"
+                    ? "bg-red-50 text-red-700 border-red-200"
+                    : "bg-amber-50 text-amber-700 border-amber-200";
+
                 return (
                   <div key={doc.title} className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 flex flex-col gap-3">
                     <div className="flex justify-between items-center">
                       <h4 className="text-xs font-bold text-slate-700 uppercase tracking-tight">{doc.title}</h4>
-                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border uppercase tracking-wider ${
-                        hasDoc ? "bg-green-50 text-green-700 border-green-200" : "bg-slate-100 text-slate-500 border-slate-200"
-                      }`}>
-                        {hasDoc ? "Uploaded" : "Not Provided"}
+                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border uppercase tracking-wider ${badge}`}>
+                        {hasDoc ? status : "Not Provided"}
                       </span>
                     </div>
 
                     <div className="h-32 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden">
-                      {hasDoc ? (
-                        <img src={doc.fileUrl} alt={doc.title} className="w-full h-full object-cover hover:scale-105 transition-transform" />
-                      ) : (
+                      {!hasDoc ? (
                         <span className="material-symbols-outlined text-slate-350 text-3xl">image</span>
+                      ) : isPdf ? (
+                        <div className="flex flex-col items-center gap-1 text-slate-500">
+                          <span className="material-symbols-outlined text-3xl">picture_as_pdf</span>
+                          <span className="text-[10px] font-bold">PDF — open to review</span>
+                        </div>
+                      ) : (
+                        <img src={doc.fileUrl} alt={doc.title} className="w-full h-full object-cover hover:scale-105 transition-transform" />
                       )}
                     </div>
 
                     {hasDoc ? (
-                      <div className="flex gap-2">
-                        <a
-                          href={doc.fileUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex-1 py-1.5 border border-slate-200 rounded-lg bg-white text-slate-600 hover:bg-slate-50 text-[11px] font-bold flex items-center justify-center gap-1 shadow-3xs"
-                        >
-                          <span className="material-symbols-outlined text-[14px]">open_in_new</span> View Doc
-                        </a>
-                        <a
-                          href={doc.fileUrl}
-                          download
-                          className="px-3 py-1.5 border border-slate-200 rounded-lg bg-white text-slate-600 hover:bg-slate-50 text-[11px] font-bold flex items-center justify-center shadow-3xs"
-                          title="Download File"
-                        >
-                          <span className="material-symbols-outlined text-[14px]">download</span>
-                        </a>
-                      </div>
+                      <>
+                        <div className="flex gap-2">
+                          <a
+                            href={doc.fileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex-1 py-1.5 border border-slate-200 rounded-lg bg-white text-slate-600 hover:bg-slate-50 text-[11px] font-bold flex items-center justify-center gap-1 shadow-3xs"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">open_in_new</span> View Doc
+                          </a>
+                          <a
+                            href={doc.fileUrl}
+                            download
+                            className="px-3 py-1.5 border border-slate-200 rounded-lg bg-white text-slate-600 hover:bg-slate-50 text-[11px] font-bold flex items-center justify-center shadow-3xs"
+                            title="Download File"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">download</span>
+                          </a>
+                        </div>
+
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleDocumentReview(doc.keyName, doc.title, "Approved")}
+                            disabled={status === "Approved"}
+                            className="flex-1 py-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-colors bg-[#0D6B46] text-white hover:bg-[#095235] disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">check</span> Approve
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDocumentReview(doc.keyName, doc.title, "Rejected")}
+                            disabled={status === "Rejected"}
+                            className="flex-1 py-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-colors border border-red-200 bg-white text-red-600 hover:bg-red-50 disabled:border-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">close</span> Reject
+                          </button>
+                        </div>
+                      </>
                     ) : (
                       <p className="text-[10px] text-slate-400 font-semibold italic text-center py-2">
                          Reroute partner to upload document credentials.
