@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import React, { useState, useEffect, useCallback } from "react";
+import { collection, onSnapshot, doc, updateDoc, query, orderBy, limit } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
 import { useUiStore } from "../store/uiStore";
 import EmptyState from "../components/EmptyState";
@@ -58,7 +58,7 @@ export const Customers = () => {
       return;
     }
 
-    const unsubUsers = onSnapshot(collection(db, "users"), (snapshot) => {
+    const unsubUsers = onSnapshot(query(collection(db, "users"), limit(200)), (snapshot) => {
       const list = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
@@ -73,7 +73,7 @@ export const Customers = () => {
       setLoading(false);
     });
 
-    const unsubOrders = onSnapshot(collection(db, "orders"), (snapshot) => {
+    const unsubOrders = onSnapshot(query(collection(db, "orders"), orderBy("createdAt", "desc"), limit(200)), (snapshot) => {
       const list = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
@@ -87,7 +87,7 @@ export const Customers = () => {
       setOrders(list);
     });
 
-    const unsubAddresses = onSnapshot(collection(db, "addresses"), (snapshot) => {
+    const unsubAddresses = onSnapshot(query(collection(db, "addresses"), limit(200)), (snapshot) => {
       const list = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
@@ -99,7 +99,7 @@ export const Customers = () => {
       setAddresses(list);
     });
 
-    const unsubReviews = onSnapshot(collection(db, "reviews"), (snapshot) => {
+    const unsubReviews = onSnapshot(query(collection(db, "reviews"), limit(200)), (snapshot) => {
       const list = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
@@ -111,7 +111,7 @@ export const Customers = () => {
       setReviews(list);
     });
 
-    const unsubLogs = onSnapshot(collection(db, "auditLogs"), (snapshot) => {
+    const unsubLogs = onSnapshot(query(collection(db, "auditLogs"), limit(200)), (snapshot) => {
       const list = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();

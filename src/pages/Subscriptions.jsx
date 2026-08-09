@@ -1,177 +1,220 @@
-import React, { useState, useEffect } from "react";
-import { SubscriptionService } from "../services";
-import { useUiStore } from "../store/uiStore";
+import React, { useState } from 'react';
+import { 
+  Box, Typography, Tabs, Tab, Paper, Table, TableBody, TableCell, 
+  TableContainer, TableHead, TableRow, Chip, Button, Grid, Card, CardContent 
+} from '@mui/material';
+import { 
+  Assessment, People, LocalShipping, Receipt, History, Update, 
+  CalendarMonth, RestaurantMenu 
+} from '@mui/icons-material';
 
-export const Subscriptions = () => {
-  const { addToast } = useUiStore();
-  const [subscriptions, setSubscriptions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [filterStatus, setFilterStatus] = useState("ALL");
-  const [search, setSearch] = useState("");
+const Subscriptions = () => {
+  const [tabValue, setTabValue] = useState(0);
 
-  const loadSubscriptions = async () => {
-    setLoading(true);
-    try {
-      const list = await SubscriptionService.getAll();
-      setSubscriptions(list || []);
-    } catch (e) {
-      addToast("Failed to load subscriptions", "error");
-    } finally {
-      setLoading(false);
-    }
+  const handleTabChange = (event, newValue) => {
+    setTabValue(newValue);
   };
 
-  useEffect(() => {
-    loadSubscriptions();
-  }, []);
+  const renderDashboardCards = () => (
+    <Grid container spacing={3} sx={{ mb: 3 }}>
+      <Grid item xs={12} sm={6} md={3}>
+        <Card sx={{ bgcolor: '#e3f2fd' }}>
+          <CardContent>
+            <Typography color="textSecondary" gutterBottom>Active Plans</Typography>
+            <Typography variant="h4">124</Typography>
+          </CardContent>
+        </Card>
+      </Grid>
+      <Grid item xs={12} sm={6} md={3}>
+        <Card sx={{ bgcolor: '#e8f5e9' }}>
+          <CardContent>
+            <Typography color="textSecondary" gutterBottom>Today's Deliveries</Typography>
+            <Typography variant="h4">48</Typography>
+          </CardContent>
+        </Card>
+      </Grid>
+      <Grid item xs={12} sm={6} md={3}>
+        <Card sx={{ bgcolor: '#fff3e0' }}>
+          <CardContent>
+            <Typography color="textSecondary" gutterBottom>Pending Renewals</Typography>
+            <Typography variant="h4">12</Typography>
+          </CardContent>
+        </Card>
+      </Grid>
+      <Grid item xs={12} sm={6} md={3}>
+        <Card sx={{ bgcolor: '#fce4ec' }}>
+          <CardContent>
+            <Typography color="textSecondary" gutterBottom>Monthly Revenue</Typography>
+            <Typography variant="h4">₹45K</Typography>
+          </CardContent>
+        </Card>
+      </Grid>
+    </Grid>
+  );
 
-  const handleStatusChange = async (id, newStatus) => {
-    try {
-      await SubscriptionService.updateStatus(id, newStatus, null, "Admin override");
-      addToast(`Subscription status updated to ${newStatus}`, "success");
-      loadSubscriptions();
-    } catch (e) {
-      addToast(`Error updating subscription: ${e.message}`, "error");
-    }
+  const renderTablePlaceholder = (title, columns) => (
+    <Box>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+        <Typography variant="h6">{title}</Typography>
+        <Button variant="contained" color="primary">Add New</Button>
+      </Box>
+      <TableContainer component={Paper}>
+        <Table>
+          <TableHead>
+            <TableRow>
+              {columns.map((col, idx) => <TableCell key={idx}><b>{col}</b></TableCell>)}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            <TableRow>
+              <TableCell colSpan={columns.length} align="center">
+                <Typography variant="body2" color="textSecondary" sx={{ py: 3 }}>
+                  No data available yet.
+                </Typography>
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </Box>
+  );
+
+  const [plans, setPlans] = useState([
+    { id: 'PLN-1', name: 'Monthly Basic', type: 'Regular', duration: '30 Days', price: 3000, available: true },
+    { id: 'PLN-2', name: 'Keto Diet Weekly', type: 'Diet', duration: '7 Days', price: 1500, available: true }
+  ]);
+  const [newPlan, setNewPlan] = useState({ name: '', type: 'Regular', duration: '', price: '', available: true });
+  const [showAddPlan, setShowAddPlan] = useState(false);
+
+  const handleAddPlan = () => {
+    const id = `PLN-${plans.length + 1}`;
+    setPlans([...plans, { ...newPlan, id, price: Number(newPlan.price) }]);
+    setShowAddPlan(false);
+    setNewPlan({ name: '', type: 'Regular', duration: '', price: '', available: true });
   };
 
-  const filtered = subscriptions.filter(s => {
-    const matchesSearch = (s.userName || s.userEmail || s.planTitle || s.id || "").toLowerCase().includes(search.toLowerCase());
-    const matchesStatus = filterStatus === "ALL" || s.status === filterStatus;
-    return matchesSearch && matchesStatus;
-  });
+  const renderPlansTab = () => (
+    <Box>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+        <Typography variant="h6">Subscription Plans</Typography>
+        <Button variant="contained" color="primary" onClick={() => setShowAddPlan(!showAddPlan)}>
+          {showAddPlan ? 'Cancel' : 'Add New Plan'}
+        </Button>
+      </Box>
+
+      {showAddPlan && (
+        <Card sx={{ mb: 3, p: 2 }}>
+          <Typography variant="h6" sx={{ mb: 2 }}>Create New Plan</Typography>
+          <Grid container spacing={2}>
+            <Grid item xs={12} sm={3}>
+              <Box component="input" placeholder="Plan Name" value={newPlan.name} onChange={e => setNewPlan({...newPlan, name: e.target.value})} className="w-full p-2 border rounded" />
+            </Grid>
+            <Grid item xs={12} sm={2}>
+              <select value={newPlan.type} onChange={e => setNewPlan({...newPlan, type: e.target.value})} className="w-full p-2 border rounded">
+                <option value="Regular">Regular</option>
+                <option value="Diet">Diet</option>
+              </select>
+            </Grid>
+            <Grid item xs={12} sm={3}>
+              <Box component="input" placeholder="Duration (e.g. 30 Days)" value={newPlan.duration} onChange={e => setNewPlan({...newPlan, duration: e.target.value})} className="w-full p-2 border rounded" />
+            </Grid>
+            <Grid item xs={12} sm={2}>
+              <Box component="input" type="number" placeholder="Price (₹)" value={newPlan.price} onChange={e => setNewPlan({...newPlan, price: e.target.value})} className="w-full p-2 border rounded" />
+            </Grid>
+            <Grid item xs={12} sm={2} sx={{ display: 'flex', alignItems: 'center' }}>
+              <Button variant="contained" color="success" fullWidth onClick={handleAddPlan}>Save</Button>
+            </Grid>
+          </Grid>
+        </Card>
+      )}
+
+      <TableContainer component={Paper}>
+        <Table>
+          <TableHead>
+            <TableRow>
+              <TableCell><b>Plan ID</b></TableCell>
+              <TableCell><b>Name</b></TableCell>
+              <TableCell><b>Type</b></TableCell>
+              <TableCell><b>Duration</b></TableCell>
+              <TableCell><b>Price</b></TableCell>
+              <TableCell><b>Availability</b></TableCell>
+              <TableCell><b>Actions</b></TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {plans.map(plan => (
+              <TableRow key={plan.id}>
+                <TableCell>{plan.id}</TableCell>
+                <TableCell>{plan.name}</TableCell>
+                <TableCell>
+                  <Chip label={plan.type} color={plan.type === 'Diet' ? 'secondary' : 'default'} size="small" />
+                </TableCell>
+                <TableCell>{plan.duration}</TableCell>
+                <TableCell>₹{plan.price}</TableCell>
+                <TableCell>
+                  <Chip label={plan.available ? 'Active' : 'Inactive'} color={plan.available ? 'success' : 'error'} size="small" />
+                </TableCell>
+                <TableCell>
+                  <Button size="small" color="primary">Edit</Button>
+                  <Button size="small" color="error" sx={{ ml: 1 }}>Delete</Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </Box>
+  );
 
   return (
-    <div className="space-y-6">
+    <Box sx={{ p: 3 }}>
+      <Typography variant="h4" sx={{ mb: 3, fontWeight: 'bold' }}>
+        Subscriptions Management
+      </Typography>
       
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">Active Customer Subscriptions</h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Live recurring delivery schedules, plan renewals, and pause/resume control.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="px-3.5 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-600 dark:text-emerald-400 font-bold text-xs">
-            {subscriptions.filter(s => s.status === 'ACTIVE').length} Active Subscriptions
-          </div>
-        </div>
-      </div>
+      {renderDashboardCards()}
+      
+      <Paper sx={{ width: '100%', mb: 2 }}>
+        <Tabs 
+          value={tabValue} 
+          onChange={handleTabChange} 
+          indicatorColor="primary" 
+          textColor="primary" 
+          variant="scrollable"
+          scrollButtons="auto"
+        >
+          <Tab icon={<RestaurantMenu />} label="Plans (Regular/Diet)" iconPosition="start" />
+          <Tab icon={<People />} label="Customers" iconPosition="start" />
+          <Tab icon={<CalendarMonth />} label="Orders" iconPosition="start" />
+          <Tab icon={<LocalShipping />} label="Deliveries" iconPosition="start" />
+          <Tab icon={<Update />} label="Renewals" iconPosition="start" />
+          <Tab icon={<Receipt />} label="Invoices" iconPosition="start" />
+          <Tab icon={<History />} label="History" iconPosition="start" />
+          <Tab icon={<Assessment />} label="Analytics" iconPosition="start" />
+        </Tabs>
+      </Paper>
 
-      {/* Filter Bar */}
-      <div className="flex flex-col md:flex-row items-center justify-between gap-4 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs">
-        <div className="relative w-full md:w-80">
-          <span className="material-symbols-outlined absolute left-3 top-2.5 text-slate-400 text-sm">search</span>
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by customer, email, plan..."
-            className="w-full pl-9 pr-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-800 dark:text-slate-100 focus:outline-none"
-          />
-        </div>
-
-        <div className="flex items-center gap-1.5 overflow-x-auto w-full md:w-auto">
-          {["ALL", "ACTIVE", "PAUSED", "CANCELLED", "EXPIRED"].map(st => (
-            <button
-              key={st}
-              onClick={() => setFilterStatus(st)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                filterStatus === st
-                  ? "bg-slate-900 dark:bg-emerald-500 text-white"
-                  : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
-              }`}
-            >
-              {st}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Interactive Subscriptions Table */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 overflow-hidden shadow-xs">
-        {loading ? (
-          <div className="flex justify-center py-20 text-slate-400 gap-2">
-            <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-            <span>Loading subscriptions ledger...</span>
-          </div>
-        ) : filtered.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
-                <tr>
-                  <th className="p-4">Subscriber</th>
-                  <th className="p-4">Meal Plan Package</th>
-                  <th className="p-4">Duration &amp; Price</th>
-                  <th className="p-4">Delivery Window</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filtered.map(sub => (
-                  <tr key={sub.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
-                    <td className="p-4">
-                      <div className="font-bold text-slate-800 dark:text-slate-100">{sub.userName || "Customer"}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">{sub.userEmail || sub.userId}</div>
-                    </td>
-                    <td className="p-4">
-                      <div className="font-semibold text-slate-800 dark:text-slate-200">{sub.planTitle || "Weekly Meal Plan"}</div>
-                      <div className="text-[10px] text-emerald-600 font-bold">{sub.caloriesPerDay || 1800} kcal / day</div>
-                    </td>
-                    <td className="p-4 font-mono">
-                      <div className="font-bold text-slate-800 dark:text-slate-100">₹{sub.price || 0}</div>
-                      <div className="text-[10px] text-slate-400">{sub.durationDays || 7} Days Package</div>
-                    </td>
-                    <td className="p-4">
-                      <div className="text-slate-700 dark:text-slate-300 font-medium">{sub.deliverySlot || "08:00 AM - 09:00 AM"}</div>
-                      <div className="text-[10px] text-slate-400">Next: {sub.nextDeliveryDate || "Tomorrow"}</div>
-                    </td>
-                    <td className="p-4">
-                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                        sub.status === 'ACTIVE' ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20' :
-                        sub.status === 'PAUSED' ? 'bg-amber-500/10 text-amber-600 border border-amber-500/20' :
-                        'bg-rose-500/10 text-rose-600 border border-rose-500/20'
-                      }`}>
-                        {sub.status || 'ACTIVE'}
-                      </span>
-                    </td>
-                    <td className="p-4 text-right space-x-2">
-                      {sub.status === 'ACTIVE' ? (
-                        <button
-                          onClick={() => handleStatusChange(sub.id, "PAUSED")}
-                          className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 font-bold text-[10px] rounded-lg transition-colors"
-                        >
-                          Pause
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleStatusChange(sub.id, "ACTIVE")}
-                          className="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 font-bold text-[10px] rounded-lg transition-colors"
-                        >
-                          Activate
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleStatusChange(sub.id, "CANCELLED")}
-                        className="px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 font-bold text-[10px] rounded-lg transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="py-20 text-center text-slate-400 space-y-2">
-            <span className="material-symbols-outlined text-4xl text-slate-300">autorenew</span>
-            <p className="font-semibold text-sm">No subscription records match filters</p>
-          </div>
+      <Box sx={{ p: 1 }}>
+        {tabValue === 0 && renderPlansTab()}
+        {tabValue === 1 && renderTablePlaceholder("Active Customers", ["Customer ID", "Name", "Phone", "Active Plan", "Start Date", "End Date", "Actions"])}
+        {tabValue === 2 && renderTablePlaceholder("Orders / Meal Schedule", ["Order ID", "Customer", "Date", "Meal Type", "Status", "Actions"])}
+        {tabValue === 3 && renderTablePlaceholder("Deliveries", ["Delivery ID", "Date", "Customer", "Address", "Status", "Driver", "Actions"])}
+        {tabValue === 4 && renderTablePlaceholder("Renewals", ["Renewal ID", "Customer", "Plan", "Due Date", "Payment Status", "Actions"])}
+        {tabValue === 5 && renderTablePlaceholder("Invoices", ["Invoice No.", "Date", "Customer", "Amount", "Status", "Actions"])}
+        {tabValue === 6 && renderTablePlaceholder("Subscription History", ["Record ID", "Customer", "Plan", "Start Date", "End Date", "Status"])}
+        {tabValue === 7 && (
+          <Box>
+            <Typography variant="h6" sx={{ mb: 2 }}>Analytics Overview</Typography>
+            <Paper sx={{ p: 4, textAlign: 'center' }}>
+              <Typography variant="body1" color="textSecondary">
+                Charts and graphs for subscription trends, churn rate, and revenue will be displayed here.
+              </Typography>
+            </Paper>
+          </Box>
         )}
-      </div>
-
-    </div>
+      </Box>
+    </Box>
   );
 };
+
 export default Subscriptions;

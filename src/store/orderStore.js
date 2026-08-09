@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { OrderService } from "../services";
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, onSnapshot, query, orderBy, limit } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
 
 export const useOrderStore = create((set, get) => ({
@@ -47,7 +47,7 @@ export const useOrderStore = create((set, get) => ({
     };
 
     const unsubscribe = onSnapshot(
-      collection(db, "orders"),
+      query(collection(db, "orders"), orderBy("createdAt", "desc"), limit(200)),
       (snapshot) => {
         const orders = [];
         snapshot.forEach((doc) => {

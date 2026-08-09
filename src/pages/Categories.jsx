@@ -71,6 +71,8 @@ export const Categories = () => {
       return;
     }
 
+    if (Number(displayOrder) < 0) return addToast("Display order cannot be negative", "error");
+
     const payload = {
       name: catName,
       image: catImage,

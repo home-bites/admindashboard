@@ -12,16 +12,35 @@ export const Coupons = () => {
   const { coupons, loading, subscribeCoupons, disconnectCoupons, addCoupon, updateCoupon, deleteCoupon } = useCouponStore();
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [filterStatus, setFilterStatus] = useState("ALL");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editCouponId, setEditCouponId] = useState(null);
 
   // Form Fields
+  const [couponName, setCouponName] = useState("");
   const [code, setCode] = useState("");
+  const [description, setDescription] = useState("");
   const [discountType, setDiscountType] = useState("Percentage");
   const [discountValue, setDiscountValue] = useState("");
+  const [maxDiscount, setMaxDiscount] = useState("");
   const [minOrder, setMinOrder] = useState("");
+  const [validFrom, setValidFrom] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
-  const [status, setStatus] = useState("Active");
+  const [totalLimit, setTotalLimit] = useState("1000");
+  const [userLimit, setUserLimit] = useState("1");
+  const [userEligibility, setUserEligibility] = useState("All"); // All | New Customers Only | Existing Customers Only
+  
+  // Applicable Types
+  const [appliesRegular, setAppliesRegular] = useState(true);
+  const [appliesSubscription, setAppliesSubscription] = useState(true);
+  const [subWeekly, setSubWeekly] = useState(true);
+  const [subMonthly, setSubMonthly] = useState(true);
+  const [subQuarterly, setSubQuarterly] = useState(true);
+  
+  // Control States
+  const [status, setStatus] = useState("Active"); // Active | Inactive | Expired
+  const [showToCustomer, setShowToCustomer] = useState(true); // Customer Visibility: ON/OFF
+  const [autoApply, setAutoApply] = useState(false);
 
   useEffect(() => {
     subscribeCoupons();
@@ -30,36 +49,76 @@ export const Coupons = () => {
 
   const handleOpenAddModal = () => {
     setEditCouponId(null);
+    setCouponName("");
     setCode("");
+    setDescription("");
     setDiscountType("Percentage");
     setDiscountValue("");
-    setMinOrder("");
+    setMaxDiscount("");
+    setMinOrder("0");
+    setValidFrom(new Date().toISOString().split('T')[0]);
     setExpiryDate("");
+    setTotalLimit("1000");
+    setUserLimit("1");
+    setUserEligibility("All");
+    setAppliesRegular(true);
+    setAppliesSubscription(true);
+    setSubWeekly(true);
+    setSubMonthly(true);
+    setSubQuarterly(true);
     setStatus("Active");
+    setShowToCustomer(true);
+    setAutoApply(false);
     setIsModalOpen(true);
   };
 
   const handleOpenEditModal = (coupon) => {
     setEditCouponId(coupon.id);
-    setCode(coupon.code);
+    setCouponName(coupon.name || coupon.couponName || "");
+    setCode(coupon.code || "");
+    setDescription(coupon.description || "");
+    
     const dbType = coupon.discountType || "Percentage";
     setDiscountType(dbType === "percentage" ? "Percentage" : dbType === "flat" ? "Flat Discount" : dbType);
     setDiscountValue(coupon.discountValue?.toString() || "");
+    setMaxDiscount(coupon.maxDiscount?.toString() || coupon.maxDiscountAmount?.toString() || "");
     setMinOrder((coupon.minimumOrderValue !== undefined ? coupon.minimumOrderValue : coupon.minOrder || 0).toString());
-    setExpiryDate(coupon.expiryDate || coupon.expiry || "");
-    setStatus(coupon.status || (coupon.isActive !== false ? "Active" : "Expired"));
+    setValidFrom(coupon.validFrom || coupon.startDate || new Date().toISOString().split('T')[0]);
+    const exp = coupon.expiryDate || coupon.expiresAt || coupon.expiry || "";
+    setExpiryDate(exp === "No Expiry" ? "" : exp);
+    setTotalLimit((coupon.totalLimit || 1000).toString());
+    setUserLimit((coupon.userLimit || coupon.perCustomerLimit || 1).toString());
+    setUserEligibility(coupon.userEligibility || "All");
+    
+    setAppliesRegular(coupon.appliesRegular !== false);
+    setAppliesSubscription(coupon.appliesSubscription !== false);
+    setSubWeekly(coupon.subWeekly !== false);
+    setSubMonthly(coupon.subMonthly !== false);
+    setSubQuarterly(coupon.subQuarterly !== false);
+    
+    setStatus(coupon.status || (coupon.isActive !== false ? "Active" : "Inactive"));
+    setShowToCustomer(coupon.showToCustomer !== undefined ? coupon.showToCustomer : !coupon.isHidden);
+    setAutoApply(coupon.autoApply || false);
+    
     setIsModalOpen(true);
   };
 
   const handleSaveCoupon = async (e) => {
     e.preventDefault();
     if (!code.trim() || !minOrder) {
-      addToast("Please fill in required fields", "error");
+      addToast("Please fill in required code & minimum order", "error");
       return;
     }
 
-    const minOrderVal = parseFloat(minOrder);
+    const minOrderVal = parseFloat(minOrder) || 0;
     const discountValNum = parseFloat(discountValue) || 0;
+    const maxDiscountNum = parseFloat(maxDiscount) || (discountType === "Percentage" ? discountValNum * 2 : discountValNum);
+
+    if (minOrderVal < 0) return addToast("Minimum order cannot be negative", "error");
+    if (discountValNum < 0 || maxDiscountNum < 0) return addToast("Discount cannot be negative", "error");
+    if (discountType === "Percentage" && discountValNum > 100) return addToast("Percentage cannot exceed 100", "error");
+    if (parseInt(totalLimit) <= 0 || parseInt(userLimit) <= 0) return addToast("Limits must be greater than 0", "error");
+
     let displayType = "";
     if (discountType === "Percentage") {
       displayType = `${discountValNum}% Off`;
@@ -69,21 +128,41 @@ export const Coupons = () => {
       displayType = "Free Delivery";
     }
 
+    const descText = description.trim() || `Get ${displayType} on orders above ₹${minOrderVal}`;
+
     const couponPayload = {
+      name: couponName.trim() || code.toUpperCase(),
       code: code.toUpperCase(),
-      description: `Get ${displayType} on orders above ₹${minOrderVal}`,
-      discountType: discountType === "Percentage" ? "percentage" : "flat",
+      description: descText,
+      discountType: discountType === "Percentage" ? "percentage" : discountType === "Flat Discount" ? "flat" : "free_delivery",
       discountValue: discountValNum,
       minOrderValue: minOrderVal,
       minOrder: minOrderVal,
-      maxDiscount: discountType === "Percentage" ? discountValNum * 2 : discountValNum,
+      maxDiscount: maxDiscountNum,
+      maxDiscountAmount: maxDiscountNum,
+      validFrom: validFrom,
       expiresAt: expiryDate || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      isActive: status === "Active" || status === "Hidden",
-      isHidden: status === "Hidden",
+      totalLimit: parseInt(totalLimit) || 1000,
+      userLimit: parseInt(userLimit) || 1,
+      userEligibility: userEligibility,
+      
+      appliesRegular: appliesRegular,
+      appliesSubscription: appliesSubscription,
+      subWeekly: subWeekly,
+      subMonthly: subMonthly,
+      subQuarterly: subQuarterly,
+      
       status: status,
-      usage: "0 / ∞",
+      isActive: status === "Active",
+      showToCustomer: showToCustomer,
+      isHidden: !showToCustomer,
+      isVisible: showToCustomer,
+      autoApply: autoApply,
+      
       type: displayType,
-      expiry: expiryDate || "No Expiry"
+      expiry: expiryDate || null,
+      hasExpiry: !!expiryDate,
+      updatedAt: new Date().toISOString()
     };
 
     try {
@@ -93,14 +172,16 @@ export const Coupons = () => {
       } else {
         await addCoupon(couponPayload, user);
 
-        // Send a marketing notification to all customers
-        await notificationRepository.create({
-          userId: "all",
-          type: "marketing",
-          title: "New Coupon Available!",
-          message: `Use code ${code.toUpperCase()} to get ${displayType} on orders above ₹${minOrderVal}.`,
-          isRead: false
-        });
+        // Only send marketing push notification if coupon is public (showToCustomer = true)
+        if (showToCustomer) {
+          await notificationRepository.create({
+            userId: "all",
+            type: "marketing",
+            title: "New Offer Available!",
+            message: `Use code ${code.toUpperCase()} to get ${displayType} on your orders!`,
+            isRead: false
+          });
+        }
 
         addToast("New coupon created successfully", "success");
       }
@@ -127,188 +208,192 @@ export const Coupons = () => {
     return <LoadingComponents.LoadingPage />;
   }
 
-  const filteredCoupons = coupons.filter((c) =>
-    c.code?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (c.type || c.description)?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Analytics Metrics Calculation
+  const totalCoupons = coupons.length;
+  const activeCoupons = coupons.filter(c => (c.status === "Active" || c.isActive) && (c.showToCustomer !== false && !c.isHidden)).length;
+  const hiddenCoupons = coupons.filter(c => c.showToCustomer === false || c.isHidden || c.status === "Hidden").length;
+  const expiredCoupons = coupons.filter(c => c.status === "Expired" || (c.expiresAt && new Date(c.expiresAt) < new Date())).length;
+  const totalRedemptions = coupons.reduce((acc, c) => acc + (c.redemptionCount || c.usageCount || 0), 0);
+
+  const filteredCoupons = coupons.filter((c) => {
+    const matchesSearch = c.code?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (c.name || c.description || c.type)?.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    if (filterStatus === "ALL") return matchesSearch;
+    if (filterStatus === "ACTIVE") return matchesSearch && (c.status === "Active" || c.isActive);
+    if (filterStatus === "PUBLIC") return matchesSearch && (c.showToCustomer !== false && !c.isHidden);
+    if (filterStatus === "HIDDEN") return matchesSearch && (c.showToCustomer === false || c.isHidden);
+    if (filterStatus === "EXPIRED") return matchesSearch && (c.status === "Expired" || (c.expiresAt && new Date(c.expiresAt) < new Date()));
+    return matchesSearch;
+  });
 
   return (
-    <div className="p-8">
+    <div className="p-8 space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center mb-8">
+      <div className="flex justify-between items-center">
         <div>
-          <h2 className="font-headline-lg text-headline-lg text-[#151c27]">Coupons</h2>
-          <p className="font-body-md text-body-md text-[#555f6f] mt-1">
-            Manage promotional campaigns and track discount performance.
+          <h2 className="text-2xl font-black text-slate-900 tracking-tight" style={{ fontFamily: "Outfit, sans-serif" }}>
+            Promotional Coupons &amp; Discount Engine
+          </h2>
+          <p className="text-xs text-slate-500 font-semibold mt-1">
+            Configure public offers, private influencer codes, and subscription plan discounts.
           </p>
         </div>
         <button
           onClick={handleOpenAddModal}
-          className="bg-[#10b981] text-white font-label-md text-label-md px-5 py-2.5 rounded-lg border-t border-white/20 hover:bg-[#059669] transition-colors flex items-center gap-2 shadow-sm inner-shine"
+          className="bg-[#10b981] hover:bg-[#059669] text-white font-bold text-xs px-5 py-2.5 rounded-xl border-t border-white/20 transition-all flex items-center gap-2 shadow-xs"
         >
           <span className="material-symbols-outlined text-[18px]">add</span>
           Create Coupon
         </button>
       </div>
 
-      {/* KPI Row (Total Value Saved is monetary, so it must show ₹--) */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        {/* KPI 1: Value Saved */}
-        <div className="bg-white border border-[#dce2f3] rounded-xl p-6 shadow-sm relative overflow-hidden group">
-          <div className="absolute -right-6 -top-6 w-24 h-24 bg-[#00af79]/10 rounded-full blur-2xl group-hover:bg-[#00af79]/20 transition-colors"></div>
-          <div className="flex justify-between items-start mb-4 relative z-10">
-            <span className="font-label-md text-label-md text-[#555f6f]">Total Value Saved</span>
-            <span className="material-symbols-outlined text-[#006c49] p-2 bg-[#00af79]/20 rounded-lg">savings</span>
-          </div>
-          <div className="relative z-10">
-            <span className="font-headline-display text-headline-display text-[#151c27] font-bold">₹--</span>
-            <div className="flex items-center gap-1 mt-2 text-[#006c49]">
-              <span className="material-symbols-outlined text-[16px]">trending_up</span>
-              <span className="font-label-sm text-label-sm">+12.5% vs last month</span>
-            </div>
-          </div>
+      {/* Analytics KPI Row */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-3xs">
+          <div className="text-[10px] font-bold uppercase text-slate-400">Total Coupons</div>
+          <div className="text-2xl font-black text-slate-900 mt-1">{totalCoupons}</div>
+        </div>
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-3xs">
+          <div className="text-[10px] font-bold uppercase text-slate-400">Public (App Visible)</div>
+          <div className="text-2xl font-black text-emerald-600 mt-1">{activeCoupons}</div>
+        </div>
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-3xs">
+          <div className="text-[10px] font-bold uppercase text-slate-400">Hidden (Private/VIP)</div>
+          <div className="text-2xl font-black text-amber-600 mt-1">{hiddenCoupons}</div>
+        </div>
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-3xs">
+          <div className="text-[10px] font-bold uppercase text-slate-400">Expired</div>
+          <div className="text-2xl font-black text-rose-500 mt-1">{expiredCoupons}</div>
+        </div>
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-3xs">
+          <div className="text-[10px] font-bold uppercase text-slate-400">Total Redemptions</div>
+          <div className="text-2xl font-black text-blue-600 mt-1">{totalRedemptions}</div>
+        </div>
+      </div>
+
+      {/* Filter Toolbar */}
+      <div className="flex flex-col md:flex-row items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-3xs">
+        <div className="relative w-full md:w-80">
+          <span className="material-symbols-outlined absolute left-3 top-2.5 text-slate-400 text-sm">search</span>
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-[#10b981]"
+            placeholder="Search coupon codes, names..."
+            type="text"
+          />
         </div>
 
-        {/* KPI 2: Coupon Usage Rate */}
-        <div className="bg-white border border-[#dce2f3] rounded-xl p-6 shadow-sm relative overflow-hidden group">
-          <div className="absolute -right-6 -top-6 w-24 h-24 bg-[#10b981]/10 rounded-full blur-2xl group-hover:bg-[#10b981]/20 transition-colors"></div>
-          <div className="flex justify-between items-start mb-4 relative z-10">
-            <span className="font-label-md text-label-md text-[#555f6f]">Avg. Coupon Usage Rate</span>
-            <span className="material-symbols-outlined text-[#10b981] p-2 bg-[#10b981]/20 rounded-lg">percent</span>
-          </div>
-          <div className="relative z-10">
-            <span className="font-headline-display text-headline-display text-[#151c27] font-bold">28.4%</span>
-            <div className="flex items-center gap-1 mt-2 text-[#555f6f]">
-              <span className="material-symbols-outlined text-[16px]">horizontal_rule</span>
-              <span className="font-label-sm text-label-sm">Steady performance</span>
-            </div>
-          </div>
-        </div>
-
-        {/* KPI 3: Active Campaigns */}
-        <div className="bg-white border border-[#dce2f3] rounded-xl p-6 shadow-sm relative overflow-hidden group">
-          <div className="absolute -right-6 -top-6 w-24 h-24 bg-[#d6e0f3]/40 rounded-full blur-2xl group-hover:bg-[#d6e0f3]/60 transition-colors"></div>
-          <div className="flex justify-between items-start mb-4 relative z-10">
-            <span className="font-label-md text-label-md text-[#555f6f]">Active Campaigns</span>
-            <span className="material-symbols-outlined text-[#596373] p-2 bg-[#d6e0f3] rounded-lg">campaign</span>
-          </div>
-          <div className="relative z-10">
-            <span className="font-headline-display text-headline-display text-[#151c27] font-bold">12</span>
-            <div className="flex items-center gap-1 mt-2 text-[#555f6f]">
-              <span className="font-label-sm text-label-sm">3 expiring this week</span>
-            </div>
-          </div>
+        <div className="flex items-center gap-1.5 overflow-x-auto w-full md:w-auto">
+          {["ALL", "ACTIVE", "PUBLIC", "HIDDEN", "EXPIRED"].map(st => (
+            <button
+              key={st}
+              onClick={() => setFilterStatus(st)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                filterStatus === st
+                  ? "bg-slate-900 text-white"
+                  : "bg-slate-100 text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              {st}
+            </button>
+          ))}
         </div>
       </div>
 
       {/* Coupons Table List */}
-      <div className="bg-white border border-[#dce2f3] rounded-xl shadow-sm flex flex-col">
-        <div className="p-5 border-b border-[#dce2f3]/60 flex justify-between items-center bg-[#f9f9ff] rounded-t-xl">
-          <h3 className="font-headline-md text-headline-md text-[#151c27] font-semibold">Active Coupons</h3>
-          <div className="flex gap-3">
-            <div className="relative">
-              <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[#555f6f]/60 text-sm">search</span>
-              <input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 pr-3 py-1.5 border border-[#d3daea] rounded-lg text-xs font-body-sm w-48 focus:outline-none focus:border-[#10b981]"
-                placeholder="Search coupons..."
-                type="text"
-              />
-            </div>
-          </div>
-        </div>
-        
+      <div className="bg-white border border-slate-200/80 rounded-2xl shadow-3xs overflow-hidden">
         {filteredCoupons.length === 0 ? (
           <div className="p-8">
             <EmptyState
               icon="confirmation_number"
-              title="No Coupons Available"
-              description="No active promotional coupons found matching your search."
+              title="No Coupons Found"
+              description="No promotional coupons match your current filter settings."
               actionText="Create Coupon"
               onActionClick={handleOpenAddModal}
             />
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead className="bg-[#f0f3ff]/40 border-b border-[#dce2f3]">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead className="bg-slate-50 border-b border-slate-200/80 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
                 <tr>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Coupon Code</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Discount Type</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Min. Order</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Usage</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Expiry Date</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Status</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold text-right">Actions</th>
+                  <th className="px-6 py-4">Code &amp; Name</th>
+                  <th className="px-6 py-4">Discount</th>
+                  <th className="px-6 py-4">Min. Order</th>
+                  <th className="px-6 py-4">Applicability</th>
+                  <th className="px-6 py-4">App Visibility</th>
+                  <th className="px-6 py-4">Status</th>
+                  <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#dce2f3]/30 text-[#151c27] font-body-sm text-body-sm">
-                {filteredCoupons.map((coupon) => (
-                  <tr key={coupon.id} className="hover:bg-[#f0f3ff]/30 transition-colors group">
-                    <td className="px-6 py-4">
-                      <div className="font-label-md text-label-md text-[#10b981] font-bold">{coupon.code}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="font-semibold">{coupon.type}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="text-[#555f6f]">₹{(coupon.minimumOrderValue !== undefined ? coupon.minimumOrderValue : (coupon.minOrder || 0)).toFixed(2)}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span>{coupon.usage}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="text-[#555f6f]">{coupon.expiry}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      {(() => {
-                        let displayStatus = coupon.status || (coupon.isActive !== false ? "Active" : "Disabled");
-                        if (coupon.expiryDate) {
-                          const expiry = new Date(coupon.expiryDate);
-                          if (expiry < new Date()) {
-                            displayStatus = "Expired";
-                          }
-                        }
-                        
-                        let badgeClass = "bg-[#ffdad6] text-[#93000a] border-[#ba1a1a]"; // default Disabled
-                        if (displayStatus === "Active") {
-                          badgeClass = "bg-[#ecfdf5] text-[#006c49] border-[#10b981]";
-                        } else if (displayStatus === "Hidden") {
-                          badgeClass = "bg-[#fef3c7] text-[#92400e] border-[#f59e0b]";
-                        } else if (displayStatus === "Expired") {
-                          badgeClass = "bg-[#f3f4f6] text-[#374151] border-[#d1d5db]";
-                        } else if (displayStatus === "Scheduled") {
-                          badgeClass = "bg-[#e0f2fe] text-[#0369a1] border-[#38bdf8]";
-                        } else if (displayStatus === "Draft") {
-                          badgeClass = "bg-[#f5f5f5] text-[#737373] border-[#d4d4d4]";
-                        }
-                        
-                        return (
-                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full font-label-sm text-[10px] uppercase tracking-wide border ${badgeClass}`}>
-                            {displayStatus}
+              <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                {filteredCoupons.map((coupon) => {
+                  const isHidden = coupon.showToCustomer === false || coupon.isHidden;
+                  return (
+                    <tr key={coupon.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="font-black text-[#10b981] font-mono text-sm">{coupon.code}</div>
+                        <div className="text-[10px] text-slate-400 font-semibold">{coupon.name || coupon.description}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="font-bold text-slate-800">{coupon.type || `${coupon.discountValue}% Off`}</span>
+                      </td>
+                      <td className="px-6 py-4 font-mono">
+                        ₹{(coupon.minimumOrderValue !== undefined ? coupon.minimumOrderValue : (coupon.minOrder || 0)).toFixed(0)}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex gap-1 flex-wrap">
+                          {coupon.appliesRegular !== false && (
+                            <span className="bg-blue-50 text-blue-700 text-[9px] font-bold px-2 py-0.5 rounded">Regular</span>
+                          )}
+                          {coupon.appliesSubscription !== false && (
+                            <span className="bg-purple-50 text-purple-700 text-[9px] font-bold px-2 py-0.5 rounded">Subscription</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        {isHidden ? (
+                          <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-700 font-bold text-[10px] px-2.5 py-1 rounded-full border border-amber-200">
+                            <span className="material-symbols-outlined text-[12px]">visibility_off</span>
+                            HIDDEN (Code Only)
                           </span>
-                        );
-                      })()}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => handleOpenEditModal(coupon)}
-                        className="p-1.5 text-[#555f6f] hover:text-[#10b981] transition-colors"
-                        title="Edit"
-                      >
-                        <span className="material-symbols-outlined text-[20px]">edit</span>
-                      </button>
-                      <button
-                        onClick={() => handleDeleteCoupon(coupon.id, coupon.code)}
-                        className="p-1.5 text-[#555f6f] hover:text-[#ba1a1a] transition-colors"
-                        title="Delete"
-                      >
-                        <span className="material-symbols-outlined text-[20px]">delete</span>
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                        ) : (
+                          <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 font-bold text-[10px] px-2.5 py-1 rounded-full border border-emerald-200">
+                            <span className="material-symbols-outlined text-[12px]">visibility</span>
+                            SHOW IN APP
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide border ${
+                          coupon.status === "Active" || coupon.isActive
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : "bg-rose-50 text-rose-700 border-rose-200"
+                        }`}>
+                          {coupon.status || (coupon.isActive ? "Active" : "Inactive")}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-right space-x-2">
+                        <button
+                          onClick={() => handleOpenEditModal(coupon)}
+                          className="p-1.5 text-slate-400 hover:text-[#10b981] transition-colors"
+                          title="Edit"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">edit</span>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCoupon(coupon.id, coupon.code)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 transition-colors"
+                          title="Delete"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">delete</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -318,123 +403,233 @@ export const Coupons = () => {
       {/* Add / Edit Coupon Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-[#151c27]/40 backdrop-blur-sm" onClick={() => setIsModalOpen(false)}></div>
-          <div className="bg-white rounded-xl shadow-[0_10px_24px_rgba(0,0,0,0.08)] border border-[#dce2f3] w-full max-w-md relative z-10 flex flex-col overflow-hidden">
-            <div className="px-6 py-4 border-b border-[#dce2f3] bg-[#f9f9ff] flex justify-between items-center">
-              <h3 className="font-headline-md text-headline-md font-semibold text-[#151c27]">
-                {editCouponId ? "Edit Coupon" : "Create New Coupon"}
-              </h3>
+          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-xs" onClick={() => setIsModalOpen(false)}></div>
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-2xl relative z-10 flex flex-col overflow-hidden max-h-[90vh]">
+            <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">
+                  {editCouponId ? "Edit Coupon" : "Configure New Coupon"}
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">Set discount parameters, visibility, and eligibility rules.</p>
+              </div>
               <button
-                className="text-[#555f6f] hover:text-[#151c27] p-1 rounded-full hover:bg-[#f0f3ff] transition-colors"
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-full hover:bg-slate-200 transition-colors"
                 onClick={() => setIsModalOpen(false)}
               >
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
             
-            <form onSubmit={handleSaveCoupon}>
-              <div className="p-6 space-y-4">
+            <form onSubmit={handleSaveCoupon} className="overflow-y-auto p-6 space-y-5 text-xs">
+              {/* Row 1: Code & Name */}
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                    Coupon Code <span className="text-[#ba1a1a]">*</span>
+                  <label className="block font-bold text-slate-800 mb-1">
+                    Coupon Code <span className="text-rose-500">*</span>
                   </label>
                   <input
                     value={code}
                     onChange={(e) => setCode(e.target.value.toUpperCase())}
-                    className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] focus:ring-2 focus:ring-[#10b981]/10 font-body-sm text-body-sm text-[#151c27]"
-                    placeholder="e.g. EXTRA50"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#10b981] font-mono font-bold uppercase text-slate-900"
+                    placeholder="e.g. VIP50 / DIET20"
                     required
                     type="text"
                   />
                 </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                      Discount Type
-                    </label>
-                    <select
-                      value={discountType}
-                      onChange={(e) => setDiscountType(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm font-body-sm"
-                    >
-                      <option value="Percentage">Percentage (%)</option>
-                      <option value="Flat Discount">Flat (₹)</option>
-                      <option value="Free Delivery">Free Delivery</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                      Value
-                    </label>
-                    <input
-                      value={discountValue}
-                      onChange={(e) => setDiscountValue(e.target.value)}
-                      disabled={discountType === "Free Delivery"}
-                      className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm disabled:opacity-50"
-                      placeholder={discountType === "Percentage" ? "20" : "50"}
-                      type="number"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                      Min. Order (₹) <span className="text-[#ba1a1a]">*</span>
-                    </label>
-                    <input
-                      value={minOrder}
-                      onChange={(e) => setMinOrder(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm"
-                      placeholder="0.00"
-                      required
-                      type="number"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                      Expiry Date
-                    </label>
-                    <input
-                      value={expiryDate}
-                      onChange={(e) => setExpiryDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-[#555f6f] text-body-sm"
-                      type="date"
-                    />
-                  </div>
-                </div>
-
                 <div>
-                  <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                    Status
+                  <label className="block font-bold text-slate-800 mb-1">
+                    Coupon Campaign Name
                   </label>
-                  <select
-                    value={status}
-                    onChange={(e) => setStatus(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm font-body-sm"
-                  >
-                    <option value="Active">Active</option>
-                    <option value="Hidden">Hidden (Private Campaign)</option>
-                    <option value="Expired">Expired</option>
-                    <option value="Disabled">Disabled</option>
-                    <option value="Scheduled">Scheduled</option>
-                    <option value="Draft">Draft</option>
-                  </select>
+                  <input
+                    value={couponName}
+                    onChange={(e) => setCouponName(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#10b981] font-medium text-slate-900"
+                    placeholder="e.g. Influencer Special / New Customer Offer"
+                    type="text"
+                  />
                 </div>
               </div>
 
-              <div className="px-6 py-4 border-t border-[#dce2f3] bg-[#f9f9ff] flex justify-end gap-3 rounded-b-xl">
+              {/* Row 2: Customer Visibility Control */}
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="font-bold text-slate-900 block">Customer App Visibility</span>
+                    <span className="text-[11px] text-slate-500">Controls whether coupon appears in customer banners &amp; offers list.</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowToCustomer(true)}
+                      className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
+                        showToCustomer
+                          ? "bg-emerald-500 text-white shadow-3xs"
+                          : "bg-white text-slate-600 border border-slate-200"
+                      }`}
+                    >
+                      SHOW TO CUSTOMERS
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowToCustomer(false)}
+                      className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
+                        !showToCustomer
+                          ? "bg-amber-600 text-white shadow-3xs"
+                          : "bg-white text-slate-600 border border-slate-200"
+                      }`}
+                    >
+                      HIDE (CODE ONLY)
+                    </button>
+                  </div>
+                </div>
+                {!showToCustomer && (
+                  <div className="p-2.5 bg-amber-50 rounded-lg text-amber-800 text-[11px] font-medium border border-amber-200 flex items-center gap-2">
+                    <span className="material-symbols-outlined text-amber-600 text-base">info</span>
+                    This coupon will NOT be listed on app banners or offers screens. Customers can only redeem it by typing the exact code at checkout!
+                  </div>
+                )}
+              </div>
+
+              {/* Row 3: Discount Type & Values */}
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-800 mb-1">Discount Type</label>
+                  <select
+                    value={discountType}
+                    onChange={(e) => setDiscountType(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#10b981] font-semibold"
+                  >
+                    <option value="Percentage">Percentage (%)</option>
+                    <option value="Flat Discount">Flat Amount (₹)</option>
+                    <option value="Free Delivery">Free Delivery</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-800 mb-1">Discount Value</label>
+                  <input
+                    value={discountValue}
+                    onChange={(e) => setDiscountValue(e.target.value)}
+                    disabled={discountType === "Free Delivery"}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#10b981] font-bold text-slate-900 disabled:opacity-50"
+                    placeholder="e.g. 20"
+                    type="number"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-800 mb-1">Max Discount (₹)</label>
+                  <input
+                    value={maxDiscount}
+                    onChange={(e) => setMaxDiscount(e.target.value)}
+                    disabled={discountType === "Free Delivery"}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#10b981] font-bold text-slate-900 disabled:opacity-50"
+                    placeholder="e.g. 100"
+                    type="number"
+                  />
+                </div>
+              </div>
+
+              {/* Row 4: Min Order & Limits */}
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-800 mb-1">Min. Order Value (₹) *</label>
+                  <input
+                    value={minOrder}
+                    onChange={(e) => setMinOrder(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#10b981] font-bold text-slate-900"
+                    placeholder="0"
+                    required
+                    type="number"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-800 mb-1">Per Customer Limit</label>
+                  <input
+                    value={userLimit}
+                    onChange={(e) => setUserLimit(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#10b981] font-semibold text-slate-900"
+                    placeholder="1"
+                    type="number"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-800 mb-1">Expiry Date</label>
+                  <input
+                    value={expiryDate}
+                    onChange={(e) => setExpiryDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#10b981] font-medium text-slate-700"
+                    type="date"
+                  />
+                </div>
+              </div>
+
+              {/* Row 5: Applicability & Subscription Support */}
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <span className="font-bold text-slate-900 block">Applicable Order Types</span>
+                <div className="flex gap-6">
+                  <label className="flex items-center gap-2 cursor-pointer font-semibold text-slate-800">
+                    <input
+                      type="checkbox"
+                      checked={appliesRegular}
+                      onChange={(e) => setAppliesRegular(e.target.checked)}
+                      className="rounded accent-[#10b981]"
+                    />
+                    Regular Food Orders
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer font-semibold text-slate-800">
+                    <input
+                      type="checkbox"
+                      checked={appliesSubscription}
+                      onChange={(e) => setAppliesSubscription(e.target.checked)}
+                      className="rounded accent-[#10b981]"
+                    />
+                    Diet Subscription Plans
+                  </label>
+                </div>
+
+                {appliesSubscription && (
+                  <div className="pt-2 border-t border-slate-200 flex gap-4 text-[11px] font-semibold">
+                    <span className="text-slate-500">Subscription Plans:</span>
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input type="checkbox" checked={subWeekly} onChange={(e) => setSubWeekly(e.target.checked)} className="accent-[#10b981]" />
+                      Weekly
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input type="checkbox" checked={subMonthly} onChange={(e) => setSubMonthly(e.target.checked)} className="accent-[#10b981]" />
+                      Monthly
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input type="checkbox" checked={subQuarterly} onChange={(e) => setSubQuarterly(e.target.checked)} className="accent-[#10b981]" />
+                      Quarterly
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              {/* Row 6: Status */}
+              <div>
+                <label className="block font-bold text-slate-800 mb-1">Coupon Status</label>
+                <select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#10b981] font-bold text-slate-900"
+                >
+                  <option value="Active">Active (Valid for Redemption)</option>
+                  <option value="Inactive">Inactive (Disabled)</option>
+                  <option value="Expired">Expired</option>
+                </select>
+              </div>
+
+              <div className="pt-4 border-t border-slate-200 flex justify-end gap-3">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 font-label-md text-label-md text-[#555f6f] hover:bg-[#f0f3ff] rounded transition-colors bg-white border border-[#d3daea]"
+                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-xl font-bold bg-white border border-slate-200"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 font-label-md text-label-md text-white bg-[#10b981] hover:bg-[#059669] rounded shadow-sm border-t border-white/20 transition-colors inner-shine"
+                  className="px-5 py-2 text-white bg-[#10b981] hover:bg-[#059669] rounded-xl font-bold shadow-xs border-t border-white/20"
                 >
                   Save Coupon
                 </button>

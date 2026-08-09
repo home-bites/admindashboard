@@ -14,54 +14,84 @@ export const SideNavBar = () => {
     navigate("/login");
   };
 
+  // Every `to` here must correspond to a real <Route> in App.jsx.
+  //
+  // Eighteen of these previously pointed at routes that did not exist. Because
+  // App.jsx ends with a catch-all `<Route path="*" element={<Navigate to="/dashboard" />} />`,
+  // clicking them did not 404 — it silently bounced back to the Dashboard,
+  // which is why the pages appeared to be "not coming" with nothing in the
+  // console. Ten built-and-routed pages were meanwhile unreachable because
+  // nothing linked to them.
+  //
+  // The nine /settings/* entries are gone: Settings.jsx already holds every
+  // section, so they were nine dead links to one page.
   const navSections = [
     {
-      title: "Core Operations",
+      title: "Dashboard",
       items: [
         { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
+        { to: "/analytics", label: "Analytics", icon: "analytics" },
+        { to: "/reports", label: "Reports", icon: "summarize" },
+      ]
+    },
+    {
+      title: "Kitchen",
+      items: [
         { to: "/live-command", label: "Live Radar", icon: "radar" },
-        { to: "/orders", label: "Live Orders", icon: "receipt_long" },
+        { to: "/kitchen", label: "Kitchen Queue", icon: "kitchen" },
+        { to: "/delivery-tracking", label: "Delivery Tracking", icon: "share_location" },
+      ]
+    },
+    {
+      title: "Operations",
+      items: [
+        { to: "/orders", label: "Orders", icon: "receipt_long" },
         { to: "/customers", label: "Customers", icon: "group" },
-        { to: "/delivery-partners", label: "Rider Fleet", icon: "local_shipping" },
+        { to: "/delivery-partners", label: "Delivery Partners", icon: "local_shipping" },
+        { to: "/wallet", label: "Wallet", icon: "account_balance_wallet" },
       ]
     },
     {
-      title: "Diet & Health Suite",
+      title: "Subscriptions",
       items: [
+        { to: "/subscriptions", label: "Subscriptions", icon: "event_repeat" },
+        { to: "/meal-plans", label: "Meal Plans", icon: "restaurant" },
+        { to: "/daily-menu", label: "Daily Menu", icon: "menu_book" },
+        { to: "/nutrition", label: "Nutrition", icon: "monitor_heart" },
+      ]
+    },
+    {
+      title: "Menu",
+      items: [
+        { to: "/categories", label: "Regular Categories", icon: "category" },
+        { to: "/menu", label: "Regular Foods", icon: "restaurant_menu" },
+        { to: "/diet-categories", label: "Diet Categories", icon: "energy_savings_leaf" },
         { to: "/diet-foods", label: "Diet Foods", icon: "nutrition" },
-        { to: "/meal-plans", label: "Meal Plans", icon: "calendar_month" },
-        { to: "/nutrition", label: "Nutrition Analytics", icon: "monitoring" },
-        { to: "/diet-categories", label: "Diet Categories", icon: "spa" },
-        { to: "/subscriptions", label: "Subscriptions", icon: "autorenew" },
-        { to: "/diet-offers-banners", label: "Diet Offers & Banners", icon: "campaign" },
       ]
     },
     {
-      title: "Food & Catalog",
+      title: "Marketing",
       items: [
-        { to: "/menu", label: "Regular Menu", icon: "restaurant_menu" },
-        { to: "/categories", label: "Categories", icon: "category" },
-        { to: "/banners", label: "Hero Banners", icon: "ads_click" },
-        { to: "/media-library", label: "Media Library", icon: "photo_library" },
         { to: "/coupons", label: "Coupons", icon: "confirmation_number" },
-        { to: "/deals", label: "Deals & Promos", icon: "local_offer" },
+        { to: "/deals", label: "Deals", icon: "sell" },
+        { to: "/diet-offers-banners", label: "Diet Offers", icon: "local_offer" },
+        { to: "/banners", label: "Banners", icon: "view_carousel" },
+        { to: "/media-library", label: "Media Library", icon: "perm_media" },
       ]
     },
     {
-      title: "Finance & Growth",
+      title: "Users",
       items: [
-        { to: "/wallet", label: "Wallet & Ledger", icon: "account_balance_wallet" },
-        { to: "/reports", label: "Reports & Exports", icon: "bar_chart" },
-        { to: "/analytics", label: "Financial Analytics", icon: "analytics" },
+        { to: "/reviews", label: "Reviews", icon: "rate_review" },
+        { to: "/support", label: "Support Tickets", icon: "support_agent" },
       ]
     },
     {
-      title: "System & Security",
+      title: "Settings",
       items: [
-        { to: "/support", label: "Customer Support", icon: "contact_support" },
-        { to: "/reviews", label: "Reviews & Ratings", icon: "rate_review" },
-        { to: "/security", label: "Security & Audit", icon: "shield" },
-        { to: "/settings", label: "App Settings", icon: "settings" },
+        { to: "/settings", label: "Settings", icon: "settings" },
+        { to: "/security", label: "Security", icon: "security" },
+        { to: "/security-settings", label: "Security Settings", icon: "admin_panel_settings" },
       ]
     }
   ];

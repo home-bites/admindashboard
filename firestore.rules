@@ -40,7 +40,12 @@ service cloud.firestore {
 
     // 1. Users Collection
     match /users/{userId} {
-      allow read: if isOwner(userId) || isDashboardAdmin();
+      // Single-document reads: the owner, or a dashboard admin.
+      allow get: if isOwner(userId) || isDashboardAdmin();
+      // Collection queries are admin-only — prevents account enumeration by
+      // phone number from a customer client. Kept in sync with the root
+      // firestore.rules, which is the deployed source of truth.
+      allow list: if isDashboardAdmin();
       allow create: if isSignedIn();
       allow update, delete: if isOwner(userId) || isDashboardAdmin();
     }

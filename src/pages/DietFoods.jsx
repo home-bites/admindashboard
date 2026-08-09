@@ -82,6 +82,16 @@ export const DietFoods = () => {
       isAvailable: true,
       stockQuantity: 40
     });
+    
+    setMealThumbnail(meal.thumbnail || '');
+    setMealGallery(meal.gallery || []);
+    setMealIngredients(meal.ingredients ? meal.ingredients.join(', ') : '');
+    setMealAllergens(meal.allergens ? meal.allergens.join(', ') : '');
+    setMealCookingTime(meal.cookingTime || '');
+    setMealSpiceLevel(meal.spiceLevel || 'Mild');
+    setMealBadges(meal.badges ? meal.badges.join(', ') : '');
+    setMealIsHidden(meal.isHidden || false);
+
     setIsModalOpen(true);
   };
 

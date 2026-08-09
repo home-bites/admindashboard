@@ -36,6 +36,10 @@ import Subscriptions from "./pages/Subscriptions";
 import LiveCommandCenter from "./pages/LiveCommandCenter";
 import DietOffersBanners from "./pages/DietOffersBanners";
 import { MediaLibrary } from "./pages/MediaLibrary";
+// Built but never imported, so never routed and unreachable from anywhere.
+import KitchenDashboard from "./pages/KitchenDashboard";
+import DeliveryDashboard from "./pages/DeliveryDashboard";
+import DailyMenu from "./pages/DailyMenu";
 import { useAuthStore } from "./store/authStore";
 
 import { isFirebaseConfigured, auth } from "./firebase/firebaseConfig";
@@ -160,6 +164,24 @@ export const App = () => {
               element={
                 <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
                   <DietOffersBanners />
+                </RBACGuard>
+              }
+            />
+
+            {/* Kitchen & dispatch. KitchenDashboard and DeliveryDashboard
+                existed as components but were never imported or routed — the
+                sidebar linked to /subscriptions/kitchen-queue and
+                /delivery-tracking, neither of which was declared. */}
+            <Route path="kitchen" element={<KitchenDashboard />} />
+            <Route path="delivery-tracking" element={<DeliveryDashboard />} />
+
+            {/* Daily subscription menu editor. Pairs with the publishDailyMenus
+                Cloud Function that seeds each day at 05:00 IST. */}
+            <Route
+              path="daily-menu"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin", "Manager"]}>
+                  <DailyMenu />
                 </RBACGuard>
               }
             />
@@ -308,8 +330,34 @@ export const App = () => {
             />
           </Route>
 
-          {/* Catch-all route -> redirect to dashboard */}
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          {/*
+            A silent redirect here is what hid eighteen broken sidebar links:
+            every one of them bounced to the Dashboard with no error, in the
+            console or on screen, so the pages simply appeared not to load.
+            An explicit 404 makes the next mistyped route obvious immediately.
+          */}
+          <Route
+            path="*"
+            element={
+              <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-slate-50 p-8 text-center">
+                <p className="text-5xl font-semibold text-slate-300">404</p>
+                <h1 className="text-lg font-semibold text-slate-800">Page not found</h1>
+                <p className="text-sm text-slate-500 max-w-md">
+                  <code className="px-1.5 py-0.5 bg-slate-200 rounded text-slate-700">
+                    {window.location.pathname}
+                  </code>{" "}
+                  has no route. If you reached this from the sidebar, the link and
+                  the router disagree.
+                </p>
+                <a
+                  href="/dashboard"
+                  className="mt-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium"
+                >
+                  Back to Dashboard
+                </a>
+              </div>
+            }
+          />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>

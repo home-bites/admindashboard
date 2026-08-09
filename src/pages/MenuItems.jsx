@@ -34,6 +34,17 @@ export const MenuItems = () => {
   const [itemTags, setItemTags] = useState(""); // parses to array of strings
   const [itemAddons, setItemAddons] = useState([{ name: "", price: "", isVeg: true }]); // array of objects
 
+  
+  const [itemThumbnail, setItemThumbnail] = useState('');
+  const [itemGallery, setItemGallery] = useState([]);
+  const [itemIngredients, setItemIngredients] = useState('');
+  const [itemNutritionCalories, setItemNutritionCalories] = useState('');
+  const [itemAllergens, setItemAllergens] = useState('');
+  const [itemCookingTime, setItemCookingTime] = useState('');
+  const [itemSpiceLevel, setItemSpiceLevel] = useState('Mild');
+  const [itemBadges, setItemBadges] = useState('');
+  const [itemIsHidden, setItemIsHidden] = useState(false);
+
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
@@ -66,6 +77,27 @@ export const MenuItems = () => {
     setItemImage("");
     setItemTags("");
     setItemAddons([{ name: "", price: "", isVeg: true }]);
+
+    setItemThumbnail('');
+    setItemGallery([]);
+    setItemIngredients('');
+    setItemNutritionCalories('');
+    setItemAllergens('');
+    setItemCookingTime('');
+    setItemSpiceLevel('Mild');
+    setItemBadges('');
+    setItemIsHidden(false);
+    
+    setItemThumbnail(item.thumbnail || '');
+    setItemGallery(item.gallery || []);
+    setItemIngredients(item.ingredients ? item.ingredients.join(', ') : '');
+    setItemNutritionCalories(item.nutrition?.calories || '');
+    setItemAllergens(item.allergens ? item.allergens.join(', ') : '');
+    setItemCookingTime(item.cookingTime || '');
+    setItemSpiceLevel(item.spiceLevel || 'Mild');
+    setItemBadges(item.badges ? item.badges.join(', ') : '');
+    setItemIsHidden(item.isHidden || false);
+
     setIsModalOpen(true);
   };
 
@@ -152,6 +184,9 @@ export const MenuItems = () => {
       return;
     }
 
+    if (Number(itemPrice) < 0) return addToast("Price cannot be negative", "error");
+    if (itemOfferPrice && Number(itemOfferPrice) >= Number(itemPrice)) return addToast("Offer price must be less than regular price", "error");
+
     // Process tags
     const tagsArray = itemTags
       ? itemTags.split(",").map((t) => t.trim()).filter((t) => t !== "")
@@ -180,7 +215,20 @@ export const MenuItems = () => {
       displayOrder: Number(itemDisplayOrder),
       image: itemImage,
       tags: tagsArray,
-      addons: addonsArray
+      addons: addonsArray,
+
+      thumbnail: itemThumbnail,
+      gallery: itemGallery,
+      ingredients: itemIngredients ? itemIngredients.split(',').map(i => i.trim()).filter(Boolean) : [],
+      nutrition: {
+        calories: Number(itemNutritionCalories || 0)
+      },
+      allergens: itemAllergens ? itemAllergens.split(',').map(a => a.trim()).filter(Boolean) : [],
+      cookingTime: itemCookingTime,
+      spiceLevel: itemSpiceLevel,
+      badges: itemBadges ? itemBadges.split(',').map(b => b.trim()).filter(Boolean) : [],
+      isHidden: itemIsHidden,
+
     };
 
     try {
@@ -588,6 +636,50 @@ export const MenuItems = () => {
                       />
                     </label>
                   </div>
+                </div>
+
+                
+                {/* Additional UI fields for Thumbnail, Gallery, Nutrition, etc. */}
+                <div>
+                  <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Thumbnail URL</label>
+                  <input value={itemThumbnail} onChange={(e) => setItemThumbnail(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="Optional override for thumbnail image URL" type="text" />
+                </div>
+                <div>
+                  <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Gallery URLs (comma-separated)</label>
+                  <input value={itemGallery.join(', ')} onChange={(e) => setItemGallery(e.target.value.split(',').map(s => s.trim()).filter(Boolean))} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. url1, url2" type="text" />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Ingredients (comma-separated)</label>
+                    <input value={itemIngredients} onChange={(e) => setItemIngredients(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. Chicken, Salt, Pepper" type="text" />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Allergens (comma-separated)</label>
+                    <input value={itemAllergens} onChange={(e) => setItemAllergens(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. Peanuts, Dairy" type="text" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Nutrition (Calories)</label>
+                    <input value={itemNutritionCalories} onChange={(e) => setItemNutritionCalories(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. 250" type="number" />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Cooking Time</label>
+                    <input value={itemCookingTime} onChange={(e) => setItemCookingTime(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. 20 mins" type="text" />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Spice Level</label>
+                    <select value={itemSpiceLevel} onChange={(e) => setItemSpiceLevel(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700">
+                      <option value="Mild">Mild</option>
+                      <option value="Medium">Medium</option>
+                      <option value="Hot">Hot</option>
+                      <option value="Extra Hot">Extra Hot</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Badges (comma-separated)</label>
+                  <input value={itemBadges} onChange={(e) => setItemBadges(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. New, Organic" type="text" />
                 </div>
 
                 <div>
