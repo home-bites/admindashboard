@@ -24,6 +24,7 @@ import Reports from "./pages/Reports";
 import CustomerSupport from "./pages/CustomerSupport";
 import Wallet from "./pages/Wallet";
 import Settings from "./pages/Settings";
+import ServiceAreas from "./pages/ServiceAreas";
 import Reviews from "./pages/Reviews";
 import Customers from "./pages/Customers";
 import SecurityDashboard from "./pages/SecurityDashboard";
@@ -307,6 +308,19 @@ export const App = () => {
               element={
                 <RBACGuard allowedRoles={["Super Admin"]}>
                   <Settings />
+                </RBACGuard>
+              }
+            />
+
+            {/* Delivery coverage zones (Super Admin & Admin roles).
+                Drives the customer app's "isn't available here yet" gate and is
+                re-checked in onOrderCreatedValidateArea, so it needs a real
+                editor rather than hand-edits in the Firebase console. */}
+            <Route
+              path="service-areas"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <ServiceAreas />
                 </RBACGuard>
               }
             />

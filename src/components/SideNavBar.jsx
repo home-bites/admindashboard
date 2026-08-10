@@ -90,6 +90,7 @@ export const SideNavBar = () => {
       title: "Settings",
       items: [
         { to: "/settings", label: "Settings", icon: "settings" },
+        { to: "/service-areas", label: "Service Areas", icon: "pin_drop" },
         { to: "/security", label: "Security", icon: "security" },
         { to: "/security-settings", label: "Security Settings", icon: "admin_panel_settings" },
       ]
