@@ -40,7 +40,6 @@ import { MediaLibrary } from "./pages/MediaLibrary";
 // Built but never imported, so never routed and unreachable from anywhere.
 import KitchenDashboard from "./pages/KitchenDashboard";
 import DeliveryDashboard from "./pages/DeliveryDashboard";
-import DailyMenu from "./pages/DailyMenu";
 import { useAuthStore } from "./store/authStore";
 
 import { isFirebaseConfigured, auth } from "./firebase/firebaseConfig";
@@ -176,16 +175,10 @@ export const App = () => {
             <Route path="kitchen" element={<KitchenDashboard />} />
             <Route path="delivery-tracking" element={<DeliveryDashboard />} />
 
-            {/* Daily subscription menu editor. Pairs with the publishDailyMenus
-                Cloud Function that seeds each day at 05:00 IST. */}
-            <Route
-              path="daily-menu"
-              element={
-                <RBACGuard allowedRoles={["Super Admin", "Admin", "Manager"]}>
-                  <DailyMenu />
-                </RBACGuard>
-              }
-            />
+            {/* The Daily Menu route is gone. Subscription dishes are edited on
+                the meal plan itself (Meal Plans page), so there is no per-date
+                menu to publish and no daily step that, if skipped, left every
+                subscriber with nothing to choose. */}
 
             {/* Orders management (All roles) */}
             <Route path="orders" element={<Orders />} />

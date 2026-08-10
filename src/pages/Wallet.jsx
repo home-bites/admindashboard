@@ -10,19 +10,32 @@ import * as LoadingComponents from "../components/LoadingComponents";
 export const Wallet = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
-  const { transactions, loading, fetchTransactions, addTransaction } = useWalletStore();
+  const { transactions, loading, subscribeTransactions, disconnectTransactions, addTransaction } = useWalletStore();
   const { orders, subscribeOrders, disconnectOrders } = useOrderStore();
-  const { deliveryPartners, fetchDeliveryPartners } = useDeliveryPartnerStore();
+  const {
+    deliveryPartners, subscribeDeliveryPartners, disconnectDeliveryPartners,
+  } = useDeliveryPartnerStore();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTab, setSelectedTab] = useState("All");
 
+  // All three sources are live. Wallet rows in particular are written by
+  // Cloud Functions on refunds and cashback, so the page has to reflect
+  // writes the admin never made.
   useEffect(() => {
-    fetchTransactions();
+    subscribeTransactions();
     subscribeOrders();
-    fetchDeliveryPartners();
-    return () => disconnectOrders();
-  }, [fetchTransactions, subscribeOrders, disconnectOrders, fetchDeliveryPartners]);
+    subscribeDeliveryPartners();
+    return () => {
+      disconnectTransactions();
+      disconnectOrders();
+      disconnectDeliveryPartners();
+    };
+  }, [
+    subscribeTransactions, disconnectTransactions,
+    subscribeOrders, disconnectOrders,
+    subscribeDeliveryPartners, disconnectDeliveryPartners,
+  ]);
 
   // --- Real-time Financial Calculations ---
   const totalRevenue = transactions

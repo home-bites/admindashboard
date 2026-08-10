@@ -3,6 +3,49 @@ import { arrayUnion, serverTimestamp, Timestamp } from "firebase/firestore";
 import { auth, isFirebaseConfigured } from "../firebase/firebaseConfig";
 import * as repos from "../repositories";
 
+/**
+ * Turn a failed write into something an operator can act on.
+ *
+ * Every mutating service here was wrapped in a catch that logged
+ * "Offline fallback for X" and then returned a plausible success value —
+ * `createMenuItem` returned the string "mock-menu-id", `updateMenuItem`
+ * returned the id it was given. Callers could not distinguish that from a
+ * real write, so the dashboard showed a success toast, closed the modal, and
+ * moved on while nothing had been saved. The name is the giveaway: this was
+ * built as a demo affordance for running without a backend, and it stayed in
+ * once there was a real one.
+ *
+ * That is the worst possible failure mode for an admin tool. A write that
+ * didn't happen must never look like one that did.
+ *
+ * `reportWriteFailure` re-throws so the caller's own error path runs, and
+ * enriches permission errors with the auth state at the moment of the
+ * failure — which is the thing you actually need to know and the thing the
+ * raw Firestore message never tells you.
+ */
+function reportWriteFailure(operation, error) {
+  const code = error?.code || "";
+
+  if (code === "permission-denied" || /insufficient permissions/i.test(error?.message || "")) {
+    const u = auth?.currentUser;
+    console.error(
+      `[${operation}] DENIED by Firestore rules.\n` +
+      `  signed in as : ${u ? `${u.email || "(no email)"} (uid ${u.uid})` : "NOBODY — auth.currentUser is null"}\n` +
+      `  email verified: ${u ? u.emailVerified : "n/a"}\n` +
+      "  If 'signed in as' says NOBODY, the Firebase session has expired even though\n" +
+      "  the dashboard still looks logged in — sign out and back in.\n" +
+      "  Otherwise the deployed ruleset is rejecting this account: check\n" +
+      "  Firebase Console > Firestore > Rules and compare it with firestore.rules,\n" +
+      "  then run: firebase deploy --only firestore:rules",
+      error
+    );
+  } else {
+    console.error(`[${operation}] failed:`, error);
+  }
+
+  throw error;
+}
+
 // 1. Authentication Service
 export const AuthService = {
   async login(email, password) {
@@ -295,8 +338,7 @@ export const OrderService = {
       
       return result;
     } catch (e) {
-      console.warn("Offline fallback for updateOrderStatus:", e.message);
-      return orderId;
+      reportWriteFailure("updateOrderStatus", e);
     }
   },
   async assignDeliveryPartner(orderId, partnerId, partnerName, actor) {
@@ -361,8 +403,7 @@ export const OrderService = {
       
       return result;
     } catch (e) {
-      console.warn("Offline fallback for assignDeliveryPartner:", e.message);
-      return orderId;
+      reportWriteFailure("assignDeliveryPartner", e);
     }
   },
   async unassignDeliveryPartner(orderId, actor) {
@@ -379,8 +420,7 @@ export const OrderService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "orders", "DELIVERY_UNASSIGNMENT", { orderId });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for unassignDeliveryPartner:", e.message);
-      return orderId;
+      reportWriteFailure("unassignDeliveryPartner", e);
     }
   },
   async createOrder(orderData, actor) {
@@ -441,17 +481,21 @@ export const OrderService = {
         deliveryAddress: orderData.address || "Counter Pickup",
         city: orderData.city || "Bengaluru",
         note: orderData.note || "",
-        verificationCode: Math.floor(1000 + Math.random() * 9000).toString(),
+        // Left empty on purpose. `onOrderCreatedIssueCode` issues the code
+        // server-side for every order, whatever created it, so all three
+        // clients behave identically and the value is never chosen somewhere
+        // a customer could observe it. Math.random() here also produced a
+        // weaker code than the crypto.randomInt the function uses.
+        verificationCode: "",
         verificationStatus: "Pending",
-        verificationGeneratedAt: new Date().toISOString()
+        verificationAttempts: 0
       };
 
       await repos.orderRepository.set(orderId, payload);
       await repos.auditLogRepository.logAction(actor?.uid || "system", "orders", "ORDER_CREATE", { orderId, orderData: payload });
       return orderId;
     } catch (e) {
-      console.warn("Offline fallback for createOrder:", e.message);
-      return "mock-order-id";
+      reportWriteFailure("createOrder", e);
     }
   }
 };
@@ -472,8 +516,7 @@ export const CategoryService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "categories", "CATEGORY_CREATE", { categoryData });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for createCategory:", e.message);
-      return "mock-category-id";
+      reportWriteFailure("createCategory", e);
     }
   },
   async updateCategory(categoryId, categoryData, actor) {
@@ -482,8 +525,7 @@ export const CategoryService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "categories", "CATEGORY_UPDATE", { categoryId, categoryData });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for updateCategory:", e.message);
-      return categoryId;
+      reportWriteFailure("updateCategory", e);
     }
   },
   async deleteCategory(categoryId, actor) {
@@ -492,8 +534,7 @@ export const CategoryService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "categories", "CATEGORY_DELETE", { categoryId });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for deleteCategory:", e.message);
-      return categoryId;
+      reportWriteFailure("deleteCategory", e);
     }
   }
 };
@@ -514,8 +555,7 @@ export const MenuItemService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "menuItems", "MENU_ITEM_CREATE", { menuData });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for createMenuItem:", e.message);
-      return "mock-menu-id";
+      reportWriteFailure("createMenuItem", e);
     }
   },
   async updateMenuItem(itemId, menuData, actor) {
@@ -524,8 +564,7 @@ export const MenuItemService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "menuItems", "MENU_ITEM_UPDATE", { itemId, menuData });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for updateMenuItem:", e.message);
-      return itemId;
+      reportWriteFailure("updateMenuItem", e);
     }
   },
   async deleteMenuItem(itemId, actor) {
@@ -534,8 +573,7 @@ export const MenuItemService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "menuItems", "MENU_ITEM_DELETE", { itemId });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for deleteMenuItem:", e.message);
-      return itemId;
+      reportWriteFailure("deleteMenuItem", e);
     }
   }
 };
@@ -556,8 +594,7 @@ export const BannerService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "banners", "BANNER_CREATE", { bannerData });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for createBanner:", e.message);
-      return "mock-banner-id";
+      reportWriteFailure("createBanner", e);
     }
   },
   async updateBanner(bannerId, bannerData, actor) {
@@ -566,8 +603,7 @@ export const BannerService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "banners", "BANNER_UPDATE", { bannerId, bannerData });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for updateBanner:", e.message);
-      return bannerId;
+      reportWriteFailure("updateBanner", e);
     }
   },
   async deleteBanner(bannerId, actor) {
@@ -576,8 +612,7 @@ export const BannerService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "banners", "BANNER_DELETE", { bannerId });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for deleteBanner:", e.message);
-      return bannerId;
+      reportWriteFailure("deleteBanner", e);
     }
   }
 };
@@ -608,18 +643,34 @@ export const CouponService = {
         minimumOrderValue: couponData.minOrder !== undefined ? Number(couponData.minOrder) : 0,
         expiryDate: couponData.expiryDate || couponData.expiry || "",
         isActive: couponData.status === "Active" || couponData.status === "Hidden" || couponData.isActive !== false,
-        isHidden: couponData.status === "Hidden" || !!couponData.isHidden,
+        isHidden: couponData.status === "Hidden" || !!couponData.isHidden
+          || couponData.showToCustomer === false,
         status: couponData.status || "Active",
         type: couponData.type || "",
-        usageLimit: couponData.usageLimit || 1000,
-        usedCount: couponData.usedCount || 0
+        usageLimit: couponData.totalLimit || couponData.usageLimit || 1000,
+        usedCount: couponData.usedCount || 0,
+
+        // Same omission as updateCoupon had: the create form collects all of
+        // these and none of them were being stored.
+        showToCustomer: couponData.showToCustomer !== false,
+        isVisible: couponData.showToCustomer !== false,
+        description: couponData.description || "",
+        maxDiscountAmount: Number(couponData.maxDiscountAmount || 0),
+        userLimit: Number(couponData.userLimit || 1),
+        userEligibility: couponData.userEligibility || "all",
+        appliesRegular: couponData.appliesRegular !== false,
+        appliesSubscription: !!couponData.appliesSubscription,
+        subWeekly: !!couponData.subWeekly,
+        subMonthly: !!couponData.subMonthly,
+        subQuarterly: !!couponData.subQuarterly,
+        autoApply: !!couponData.autoApply,
+        isDeleted: false,
       };
       const result = await repos.couponRepository.create(payload);
       await repos.auditLogRepository.logAction(actor?.uid || "system", "coupons", "COUPON_CREATE", { couponId: result, couponData: payload });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for createCoupon:", e.message);
-      return "mock-coupon-id";
+      reportWriteFailure("createCoupon", e);
     }
   },
   async updateCoupon(couponId, couponData, actor) {
@@ -630,14 +681,50 @@ export const CouponService = {
         discountValue: couponData.discountValue !== undefined ? Number(couponData.discountValue) : undefined,
         minimumOrderValue: couponData.minOrder !== undefined ? Number(couponData.minOrder) : undefined,
         expiryDate: couponData.expiryDate || couponData.expiry,
-        isActive: couponData.status !== undefined 
-          ? (couponData.status === "Active" || couponData.status === "Hidden") 
+        isActive: couponData.status !== undefined
+          ? (couponData.status === "Active" || couponData.status === "Hidden")
           : couponData.isActive,
-        isHidden: couponData.status !== undefined 
-          ? (couponData.status === "Hidden") 
-          : couponData.isHidden,
+
+        // Visibility is its own control, not a consequence of status.
+        //
+        // This used to read `status !== undefined ? status === "Hidden" : ...`,
+        // which meant an explicit isHidden was discarded whenever a status was
+        // also sent — and the form always sends one. Hiding an Active coupon
+        // computed "Active" === "Hidden" -> false and wrote the coupon back as
+        // visible, while the toast still said "Coupon updated successfully".
+        //
+        // Active-and-hidden is the whole point of a code-only promo, so the
+        // explicit flag wins and status is only a fallback for callers that
+        // don't set one.
+        isHidden: couponData.isHidden !== undefined
+          ? !!couponData.isHidden
+          : (couponData.showToCustomer !== undefined
+              ? !couponData.showToCustomer
+              : couponData.status === "Hidden"),
+
         status: couponData.status,
-        type: couponData.type
+        type: couponData.type,
+
+        // Fields below were silently dropped by the old whitelist: the admin
+        // filled them in, the save reported success, and they never reached
+        // Firestore. Applicability in particular is what the customer app
+        // uses to decide whether a coupon may be applied to a subscription.
+        showToCustomer: couponData.showToCustomer,
+        isVisible: couponData.isVisible,
+        description: couponData.description,
+        maxDiscountAmount: couponData.maxDiscountAmount !== undefined
+          ? Number(couponData.maxDiscountAmount) : undefined,
+        userLimit: couponData.userLimit !== undefined
+          ? Number(couponData.userLimit) : undefined,
+        userEligibility: couponData.userEligibility,
+        appliesRegular: couponData.appliesRegular,
+        appliesSubscription: couponData.appliesSubscription,
+        subWeekly: couponData.subWeekly,
+        subMonthly: couponData.subMonthly,
+        subQuarterly: couponData.subQuarterly,
+        autoApply: couponData.autoApply,
+        usageLimit: couponData.totalLimit !== undefined
+          ? Number(couponData.totalLimit) : couponData.usageLimit,
       };
       Object.keys(payload).forEach(key => payload[key] === undefined && delete payload[key]);
       
@@ -645,8 +732,7 @@ export const CouponService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "coupons", "COUPON_UPDATE", { couponId, couponData: payload });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for updateCoupon:", e.message);
-      return couponId;
+      reportWriteFailure("updateCoupon", e);
     }
   },
   async deleteCoupon(couponId, actor) {
@@ -655,8 +741,7 @@ export const CouponService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "coupons", "COUPON_DELETE", { couponId });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for deleteCoupon:", e.message);
-      return couponId;
+      reportWriteFailure("deleteCoupon", e);
     }
   }
 };
@@ -694,8 +779,7 @@ export const DealService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "deals", "DEAL_CREATE", { dealId: result, dealData: payload });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for createDeal:", e.message);
-      return "mock-deal-id";
+      reportWriteFailure("createDeal", e);
     }
   },
   async updateDeal(dealId, dealData, actor) {
@@ -716,8 +800,7 @@ export const DealService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "deals", "DEAL_UPDATE", { dealId, dealData: payload });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for updateDeal:", e.message);
-      return dealId;
+      reportWriteFailure("updateDeal", e);
     }
   },
   async deleteDeal(dealId, actor) {
@@ -726,8 +809,7 @@ export const DealService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "deals", "DEAL_DELETE", { dealId });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for deleteDeal:", e.message);
-      return dealId;
+      reportWriteFailure("deleteDeal", e);
     }
   }
 };
@@ -748,8 +830,7 @@ export const DeliveryPartnerService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "deliveryPartners", "PARTNER_CREATE", { partnerData });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for createDeliveryPartner:", e.message);
-      return "mock-partner-id";
+      reportWriteFailure("createDeliveryPartner", e);
     }
   },
   async updateDeliveryPartner(partnerId, partnerData, actor) {
@@ -758,8 +839,7 @@ export const DeliveryPartnerService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "deliveryPartners", "PARTNER_UPDATE", { partnerId, partnerData });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for updateDeliveryPartner:", e.message);
-      return partnerId;
+      reportWriteFailure("updateDeliveryPartner", e);
     }
   },
   async deleteDeliveryPartner(partnerId, actor) {
@@ -768,8 +848,7 @@ export const DeliveryPartnerService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "deliveryPartners", "PARTNER_DELETE", { partnerId });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for deleteDeliveryPartner:", e.message);
-      return partnerId;
+      reportWriteFailure("deleteDeliveryPartner", e);
     }
   }
 };
@@ -799,8 +878,7 @@ export const WalletService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "walletTransactions", "WALLET_TRANSACTION_CREATE", { txnData: payload });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for createWalletTransaction:", e.message);
-      return "mock-txn-id";
+      reportWriteFailure("createWalletTransaction", e);
     }
   }
 };
@@ -821,8 +899,7 @@ export const SupportTicketService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "supportTickets", "TICKET_UPDATE", { ticketId, ticketData });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for updateSupportTicket:", e.message);
-      return ticketId;
+      reportWriteFailure("updateSupportTicket", e);
     }
   }
 };
@@ -848,19 +925,7 @@ export const SettingsService = {
       }
       return data;
     } catch (e) {
-      console.warn("Offline fallback for getSettings:", e.message);
-      return {
-        id: "general",
-        rainCharge: 0,
-        deliveryCharge: 30,
-        supportPhone: "+91 98765 43210",
-        storeOpen: true,
-        maintenanceMode: false,
-        minimumOrderValue: 150,
-        walletEnabled: true,
-        couponEnabled: true,
-        deliveryTrackingEnabled: true
-      };
+      reportWriteFailure("getSettings", e);
     }
   },
   async updateSettings(settingsData, actor) {
@@ -869,8 +934,7 @@ export const SettingsService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "appSettings", "SETTINGS_UPDATE", { settingsData });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for updateSettings:", e.message);
-      return "general";
+      reportWriteFailure("updateSettings", e);
     }
   }
 };
@@ -891,8 +955,7 @@ export const ReviewService = {
       await repos.auditLogRepository.logAction(actor?.uid || "system", "reviews", "REVIEW_DELETE", { reviewId });
       return result;
     } catch (e) {
-      console.warn("Offline fallback for deleteReview:", e.message);
-      return reviewId;
+      reportWriteFailure("deleteReview", e);
     }
   }
 };

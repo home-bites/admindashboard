@@ -574,7 +574,9 @@ export const Orders = () => {
              </tr>
              <tr>
                <td class="meta-label">OTP PIN:</td>
-               <td style="font-weight: bold; font-size: 12px; color: #000;">${order.verificationCode || "1234"}</td>
+               <!-- Never print a placeholder here: a docket showing 1234 is a
+                    docket a rider will try to use. -->
+               <td style="font-weight: bold; font-size: 12px; color: #000;">${order.verificationCode || "— not issued —"}</td>
              </tr>
            </table>
          </div>
@@ -1964,9 +1966,20 @@ export const Orders = () => {
                 </div>
                 <div className="pb-2 flex justify-between items-center text-xs">
                   <span className="text-slate-400 font-bold">Verification Code (OTP)</span>
-                  <span className="font-bold text-green-700 bg-green-50 px-2.5 py-0.5 rounded border border-green-200">
-                    {activeMenuOrder.verificationCode || "1234"}
-                  </span>
+                  {/* No fallback. This used to read `|| "1234"`, so any order
+                      without an issued code displayed 1234 — which was every
+                      website and app order. A rider who spotted the pattern
+                      could close them out without speaking to the customer.
+                      An issuing delay should look like an issuing delay. */}
+                  {activeMenuOrder.verificationCode ? (
+                    <span className="font-bold text-green-700 bg-green-50 px-2.5 py-0.5 rounded border border-green-200">
+                      {activeMenuOrder.verificationCode}
+                    </span>
+                  ) : (
+                    <span className="font-bold text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded border border-amber-200">
+                      Not issued yet
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

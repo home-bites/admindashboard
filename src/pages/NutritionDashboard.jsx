@@ -1,69 +1,52 @@
-import React, { useState, useEffect } from "react";
-import { DietFoodService, MealPlanService } from "../services";
+import React, { useMemo } from "react";
+import { useLiveCollection } from "../hooks/useLiveCollection";
+
+const EMPTY_STATS = {
+  totalDietItems: 0,
+  totalActivePlans: 0,
+  avgCalories: 0,
+  avgProtein: 0,
+  avgCarbs: 0,
+  avgFats: 0,
+  healthTagCounts: {},
+  topIngredients: []
+};
 
 export const NutritionDashboard = () => {
-  const [stats, setStats] = useState({
-    totalDietItems: 0,
-    totalActivePlans: 0,
-    avgCalories: 0,
-    avgProtein: 0,
-    avgCarbs: 0,
-    avgFats: 0,
-    healthTagCounts: {},
-    topIngredients: []
-  });
-  const [loading, setLoading] = useState(true);
+  // Derived from live collections rather than a one-shot read, so adding or
+  // editing a diet food updates these averages without a page refresh.
+  const { data: foods, loading: foodsLoading } = useLiveCollection("dietFoodRepository");
+  const { data: plans, loading: plansLoading } = useLiveCollection("mealPlanRepository");
+  const loading = foodsLoading || plansLoading;
 
-  useEffect(() => {
-    const loadNutritionData = async () => {
-      setLoading(true);
-      try {
-        const [foods, plans] = await Promise.all([
-          DietFoodService.getAll(),
-          MealPlanService.getAll()
-        ]);
+  const stats = useMemo(() => {
+    // Previously the stats object was only written when there was at least one
+    // food, so deleting the last one left the old averages frozen on screen.
+    // Recomputing from scratch means an empty collection reads as zeroes.
+    if (!foods.length) {
+      return { ...EMPTY_STATS, totalActivePlans: plans.length };
+    }
 
-        if (foods && foods.length > 0) {
-          const totalCals = foods.reduce((acc, f) => acc + (f.calories || 0), 0);
-          const totalProtein = foods.reduce((acc, f) => acc + (f.proteinGrams || 0), 0);
-          const totalCarbs = foods.reduce((acc, f) => acc + (f.carbsGrams || 0), 0);
-          const totalFats = foods.reduce((acc, f) => acc + (f.fatsGrams || 0), 0);
+    const sum = (key) => foods.reduce((acc, f) => acc + (f[key] || 0), 0);
 
-          const tagCounts = {};
-          const ingCounts = {};
+    const tagCounts = {};
+    const ingCounts = {};
+    foods.forEach((f) => {
+      (f.healthTags || []).forEach((t) => { tagCounts[t] = (tagCounts[t] || 0) + 1; });
+      (f.ingredients || []).forEach((i) => { ingCounts[i] = (ingCounts[i] || 0) + 1; });
+    });
 
-          foods.forEach(f => {
-            (f.healthTags || []).forEach(t => {
-              tagCounts[t] = (tagCounts[t] || 0) + 1;
-            });
-            (f.ingredients || []).forEach(ing => {
-              ingCounts[ing] = (ingCounts[ing] || 0) + 1;
-            });
-          });
-
-          const sortedIngs = Object.entries(ingCounts)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 8);
-
-          setStats({
-            totalDietItems: foods.length,
-            totalActivePlans: plans?.length || 0,
-            avgCalories: Math.round(totalCals / foods.length),
-            avgProtein: Math.round(totalProtein / foods.length),
-            avgCarbs: Math.round(totalCarbs / foods.length),
-            avgFats: Math.round(totalFats / foods.length),
-            healthTagCounts: tagCounts,
-            topIngredients: sortedIngs
-          });
-        }
-      } catch (e) {
-        console.error("Error loading nutrition analytics:", e);
-      } finally {
-        setLoading(false);
-      }
+    return {
+      totalDietItems: foods.length,
+      totalActivePlans: plans.length,
+      avgCalories: Math.round(sum("calories") / foods.length),
+      avgProtein: Math.round(sum("proteinGrams") / foods.length),
+      avgCarbs: Math.round(sum("carbsGrams") / foods.length),
+      avgFats: Math.round(sum("fatsGrams") / foods.length),
+      healthTagCounts: tagCounts,
+      topIngredients: Object.entries(ingCounts).sort((a, b) => b[1] - a[1]).slice(0, 8)
     };
-    loadNutritionData();
-  }, []);
+  }, [foods, plans]);
 
   return (
     <div className="space-y-6">

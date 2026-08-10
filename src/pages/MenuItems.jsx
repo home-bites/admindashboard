@@ -87,16 +87,12 @@ export const MenuItems = () => {
     setItemSpiceLevel('Mild');
     setItemBadges('');
     setItemIsHidden(false);
-    
-    setItemThumbnail(item.thumbnail || '');
-    setItemGallery(item.gallery || []);
-    setItemIngredients(item.ingredients ? item.ingredients.join(', ') : '');
-    setItemNutritionCalories(item.nutrition?.calories || '');
-    setItemAllergens(item.allergens ? item.allergens.join(', ') : '');
-    setItemCookingTime(item.cookingTime || '');
-    setItemSpiceLevel(item.spiceLevel || 'Mild');
-    setItemBadges(item.badges ? item.badges.join(', ') : '');
-    setItemIsHidden(item.isHidden || false);
+
+    // NOTE: a block copy-pasted from handleOpenEditModal used to sit here,
+    // re-reading `item.thumbnail`, `item.gallery` and friends. There is no
+    // `item` in this scope — it's the *add* handler — so the whole function
+    // threw a ReferenceError before ever reaching setIsModalOpen(true),
+    // and the "Add Menu Item" button silently did nothing.
 
     setIsModalOpen(true);
   };

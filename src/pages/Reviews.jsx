@@ -9,7 +9,7 @@ import * as LoadingComponents from "../components/LoadingComponents";
 export const Reviews = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
-  const { reviews, loading, error, fetchReviews, deleteReview } = useReviewStore();
+  const { reviews, loading, error, subscribeReviews, disconnectReviews, deleteReview } = useReviewStore();
 
   const [users, setUsers] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
@@ -18,7 +18,9 @@ export const Reviews = () => {
   const [isDeletingId, setIsDeletingId] = useState(null);
 
   useEffect(() => {
-    fetchReviews();
+    // Reviews stream in live; the user and menu-item lookups stay one-shot
+    // because they only exist to resolve IDs into names for display.
+    subscribeReviews();
 
     const fetchUsersAndItems = async () => {
       try {
@@ -34,7 +36,8 @@ export const Reviews = () => {
     };
 
     fetchUsersAndItems();
-  }, [fetchReviews]);
+    return () => disconnectReviews();
+  }, [subscribeReviews, disconnectReviews]);
 
   // Create lookups
   const userMap = users.reduce((acc, curr) => {

@@ -55,8 +55,8 @@ export const SideNavBar = () => {
       title: "Subscriptions",
       items: [
         { to: "/subscriptions", label: "Subscriptions", icon: "event_repeat" },
+        // Daily Menu removed: dishes are edited on the plan itself.
         { to: "/meal-plans", label: "Meal Plans", icon: "restaurant" },
-        { to: "/daily-menu", label: "Daily Menu", icon: "menu_book" },
         { to: "/nutrition", label: "Nutrition", icon: "monitor_heart" },
       ]
     },

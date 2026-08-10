@@ -2,9 +2,8 @@ import {
   collection, 
   doc, 
   getDoc, 
-  getDocs, 
-  addDoc, 
-  setDoc, 
+  getDocs,
+  setDoc,
   updateDoc, 
   query, 
   where,
@@ -98,7 +97,24 @@ export class BaseRepository {
     return items;
   }
 
-  listenAll(callback) {
+  /**
+   * Live subscription to the whole collection.
+   *
+   * @param {(items: object[]) => void} callback   fires on every change
+   * @param {(error: Error) => void}   [onError]   fires if the listener breaks
+   *
+   * On error this used to call `callback([])`, which was worse than useless:
+   * a permission-denied rule, a missing index or a dropped connection would
+   * silently blank the admin's list and log nothing but a console warning.
+   * The page then looked like an empty collection rather than a broken
+   * listener — indistinguishable from "the data is gone", which is the most
+   * alarming thing a dashboard can show an operator.
+   *
+   * Now the last known-good data is left on screen and the error is handed
+   * to the caller so the UI can say what actually went wrong. Callers that
+   * pass no `onError` get a console error instead of a swallowed warning.
+   */
+  listenAll(callback, onError) {
     this.verifyConfiguration();
     if (this.isMockMode()) {
       const items = mockDatabases[this.collectionName]
@@ -119,15 +135,15 @@ export class BaseRepository {
       });
       callback(items);
     }, (error) => {
-      console.warn(`Error listening to ${this.collectionName}:`, error.message);
-      callback([]);
+      console.error(`[${this.collectionName}] live listener failed:`, error);
+      if (typeof onError === "function") onError(error);
     });
 
     return unsubscribe;
   }
 
-  subscribeToAll(callback) {
-    return this.listenAll(callback);
+  subscribeToAll(callback, onError) {
+    return this.listenAll(callback, onError);
   }
 
   async create(data) {
@@ -151,9 +167,34 @@ export class BaseRepository {
       return newId;
     }
 
+    /*
+     * One write, not two.
+     *
+     * This used to be:
+     *
+     *     const docRef = await addDoc(colRef, auditData);
+     *     await updateDoc(docRef, { id: docRef.id });
+     *
+     * — create the document, then update it to stamp its own id into a field.
+     * That second call is an UPDATE, and it broke every audit log write,
+     * because auditLogs is deliberately append-only:
+     *
+     *     allow create: if isSignedIn();
+     *     allow update, delete: if false;   // Logs should be immutable
+     *
+     * So the entry was created successfully and the follow-up update was
+     * refused, surfacing as "Missing or insufficient permissions" on an
+     * operation that had in fact already succeeded. Every immutable
+     * collection would have hit the same wall.
+     *
+     * Firestore can generate an id client-side without a round trip, so the
+     * id is known before the write and goes in with everything else. Also
+     * halves the write cost and removes the window where a document exists
+     * without its own id.
+     */
     const colRef = this.getCollection();
-    const docRef = await addDoc(colRef, auditData);
-    await updateDoc(docRef, { id: docRef.id });
+    const docRef = doc(colRef);
+    await setDoc(docRef, { ...auditData, id: docRef.id });
     return docRef.id;
   }
 

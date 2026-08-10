@@ -95,14 +95,43 @@ export class AuditLogRepository extends BaseRepository {
     super("auditLogs");
   }
 
+  /**
+   * Record an action. Never throws.
+   *
+   * Callers write the audit entry inside the same `try` as the operation it
+   * describes:
+   *
+   *     await repos.mealPlanRepository.delete(id);
+   *     await repos.auditLogRepository.logAction(...);   // <- same try
+   *
+   * so a rejected log entry surfaced as "Error deleting meal plan: Missing or
+   * insufficient permissions" even when the delete itself had already
+   * succeeded. The operator sees a failure, retries, and the second attempt
+   * fails differently — all because of a side-effect that has no bearing on
+   * whether the business operation worked.
+   *
+   * Audit logging is observability. It must not be able to fail the thing it
+   * is observing. Failures are reported to the console so a silently broken
+   * audit trail is still noticeable, which matters because the trail is a
+   * compliance artefact in its own right.
+   */
   async logAction(userId, module, action, metadata) {
-    return this.create({
-      userId,
-      module,
-      action,
-      metadata,
-      timestamp: new Date().toISOString()
-    });
+    try {
+      return await this.create({
+        userId,
+        module,
+        action,
+        metadata,
+        timestamp: new Date().toISOString()
+      });
+    } catch (e) {
+      console.error(
+        `[auditLog] could not record ${module}/${action} — the operation itself ` +
+        "was NOT affected, but the audit trail now has a gap:",
+        e
+      );
+      return null;
+    }
   }
 }
 
@@ -139,6 +168,31 @@ export class DietBannerRepository extends BaseRepository {
 export class SubscriptionRepository extends BaseRepository {
   constructor() {
     super("subscriptions");
+  }
+}
+
+/**
+ * The dish a customer chose for one subscription-day-slot.
+ *
+ * Document ids are deterministic — `{subscriptionId}_{YYYY-MM-DD}_{slot}` —
+ * and firestore.rules enforces that shape, so a row can always be located
+ * without a query when the subscription, date and slot are known.
+ *
+ * Read on demand rather than streamed. Over a month-long plan with a few
+ * hundred subscribers this collection reaches tens of thousands of documents,
+ * and a live listener across all of them to populate a table nobody has
+ * opened would be both slow and expensive.
+ */
+export class SubscriptionMealSelectionRepository extends BaseRepository {
+  constructor() {
+    super("subscriptionMealSelections");
+  }
+}
+
+/** The admin's published menu for a plan on a given date and slot. */
+export class SubscriptionMealAvailabilityRepository extends BaseRepository {
+  constructor() {
+    super("subscriptionMealAvailability");
   }
 }
 
@@ -195,6 +249,8 @@ export const dietCategoryRepository = new DietCategoryRepository();
 export const dietOfferRepository = new DietOfferRepository();
 export const dietBannerRepository = new DietBannerRepository();
 export const subscriptionRepository = new SubscriptionRepository();
+export const subscriptionMealSelectionRepository = new SubscriptionMealSelectionRepository();
+export const subscriptionMealAvailabilityRepository = new SubscriptionMealAvailabilityRepository();
 export const paymentRepository = new PaymentRepository();
 export const favoriteRepository = new FavoriteRepository();
 export const cartRepository = new CartRepository();

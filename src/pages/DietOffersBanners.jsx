@@ -1,13 +1,25 @@
 import React, { useState, useEffect } from "react";
-import { DietOfferService, DietBannerService } from "../services";
+// Offers are now read through the live hook, so only the banner writes need
+// the service layer.
+import { DietBannerService } from "../services";
 import { useUiStore } from "../store/uiStore";
+import { useLiveCollection } from "../hooks/useLiveCollection";
 import { ImageUploader } from "../components/ImageUploader";
 
 export const DietOffersBanners = () => {
   const { addToast } = useUiStore();
-  const [offers, setOffers] = useState([]);
-  const [banners, setBanners] = useState([]);
-  const [loading, setLoading] = useState(true);
+
+  // Live, not a one-shot read. Previously this page loaded once at mount, so
+  // a banner deleted here stayed on screen — and, more confusingly, the
+  // customer app's diet page kept rendering it too, making it look like the
+  // delete had failed when it had actually succeeded.
+  const { data: offers, loading: offersLoading, error: offersError } =
+    useLiveCollection("dietOfferRepository");
+  const { data: banners, loading: bannersLoading, error: bannersError } =
+    useLiveCollection("dietBannerRepository");
+
+  const loading = offersLoading || bannersLoading;
+  const liveError = offersError || bannersError;
 
   const [activeTab, setActiveTab] = useState("BANNERS"); // BANNERS or OFFERS
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -21,33 +33,19 @@ export const DietOffersBanners = () => {
     displayOrder: 1
   });
 
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const [oList, bList] = await Promise.all([
-        DietOfferService.getAll(),
-        DietBannerService.getAll()
-      ]);
-      setOffers(oList || []);
-      setBanners(bList || []);
-    } catch (e) {
-      addToast("Failed to load diet promos", "error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Surface a broken listener once rather than silently showing stale rows.
   useEffect(() => {
-    loadData();
-  }, []);
+    if (liveError) addToast(`Live updates stopped: ${liveError}`, "error");
+  }, [liveError, addToast]);
 
+  // No reload after writes — the subscription delivers them, and does so from
+  // the local cache before the server round-trip completes.
   const handleSaveBanner = async (e) => {
     e.preventDefault();
     try {
       await DietBannerService.create(bannerForm);
       addToast("Diet hero banner created successfully!", "success");
       setIsModalOpen(false);
-      loadData();
     } catch (e) {
       addToast(`Error creating banner: ${e.message}`, "error");
     }
@@ -58,7 +56,6 @@ export const DietOffersBanners = () => {
     try {
       await DietBannerService.delete(id);
       addToast("Diet banner removed", "info");
-      loadData();
     } catch (e) {
       addToast(`Error deleting banner: ${e.message}`, "error");
     }

@@ -1,20 +1,33 @@
 import React, { useState, useEffect } from "react";
-import { DietFoodService, DietCategoryService } from "../services";
+// Reads come from the live hook; the service layer is only used for writes.
+import { DietFoodService } from "../services";
 import { useUiStore } from "../store/uiStore";
+import { useLiveCollection } from "../hooks/useLiveCollection";
 import { ImageUploader } from "../components/ImageUploader";
 
 export const DietFoods = () => {
   const { addToast } = useUiStore();
-  const [foods, setFoods] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { data: foods, loading: foodsLoading, error: foodsError } =
+    useLiveCollection("dietFoodRepository");
+  const { data: categories, loading: catsLoading, error: catsError } =
+    useLiveCollection("dietCategoryRepository");
+  const loading = foodsLoading || catsLoading;
+  const liveError = foodsError || catsError;
   const [search, setSearch] = useState("");
   const [selectedTag, setSelectedTag] = useState("ALL");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingFood, setEditingFood] = useState(null);
 
-  // Form State
-  const [formData, setFormData] = useState({
+  /**
+   * Blank by default.
+   *
+   * Nutrition figures in particular must never be guessed. This form used to
+   * open with 350 kcal, 28g protein and an allergen list containing "Nuts" —
+   * numbers a customer may make dietary decisions on, and an allergen claim
+   * that is a safety matter either way round. A dish saved without the admin
+   * touching those fields would have published invented nutrition data.
+   */
+  const EMPTY_FOOD = {
     name: "",
     description: "",
     price: "",
@@ -23,74 +36,48 @@ export const DietFoods = () => {
     categoryName: "",
     imageUrl: "",
     mealTime: "Morning",
-    calories: 350,
-    proteinGrams: 28,
-    carbsGrams: 30,
-    fatsGrams: 12,
-    fiberGrams: 8,
-    glycemicIndex: 45,
-    healthTags: ["High Protein", "Low Carb"],
-    allergens: ["Nuts"],
-    ingredients: ["Grilled Chicken Breast", "Quinoa", "Avocado", "Steamed Broccoli"],
+    calories: "",
+    proteinGrams: "",
+    carbsGrams: "",
+    fatsGrams: "",
+    fiberGrams: "",
+    glycemicIndex: "",
+    healthTags: [],
+    allergens: [],
+    ingredients: [],
     isAvailable: true,
-    stockQuantity: 50
-  });
+    stockQuantity: ""
+  };
+
+  const [formData, setFormData] = useState(EMPTY_FOOD);
 
   const availableTags = ["Keto", "High Protein", "Low Carb", "Vegan", "Vegetarian", "Gluten-Free", "Diabetic Friendly", "Heart Healthy", "Weight Loss"];
 
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const [foodList, catList] = await Promise.all([
-        DietFoodService.getAll(),
-        DietCategoryService.getAll()
-      ]);
-      setFoods(foodList || []);
-      setCategories(catList || []);
-    } catch (e) {
-      console.error("Error loading diet foods:", e);
-      addToast("Failed to load diet foods", "error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    loadData();
-  }, []);
+    if (liveError) addToast(`Live updates stopped: ${liveError}`, "error");
+  }, [liveError, addToast]);
 
   const openCreateModal = () => {
     setEditingFood(null);
+
+    // Blank form, apart from defaulting the category to the first one so the
+    // select isn't empty. Everything factual is left for the admin to enter.
     setFormData({
-      name: "",
-      description: "",
-      price: "",
-      discountedPrice: "",
+      ...EMPTY_FOOD,
       categoryId: categories[0]?.id || "",
-      categoryName: categories[0]?.name || "Weight Loss",
-      imageUrl: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80",
-      mealTime: "Morning",
-      calories: 420,
-      proteinGrams: 35,
-      carbsGrams: 25,
-      fatsGrams: 14,
-      fiberGrams: 7,
-      glycemicIndex: 40,
-      healthTags: ["High Protein", "Keto"],
-      allergens: [],
-      ingredients: ["Salmon", "Asparagus", "Olive Oil", "Lemon"],
-      isAvailable: true,
-      stockQuantity: 40
+      categoryName: categories[0]?.name || "",
     });
-    
-    setMealThumbnail(meal.thumbnail || '');
-    setMealGallery(meal.gallery || []);
-    setMealIngredients(meal.ingredients ? meal.ingredients.join(', ') : '');
-    setMealAllergens(meal.allergens ? meal.allergens.join(', ') : '');
-    setMealCookingTime(meal.cookingTime || '');
-    setMealSpiceLevel(meal.spiceLevel || 'Mild');
-    setMealBadges(meal.badges ? meal.badges.join(', ') : '');
-    setMealIsHidden(meal.isHidden || false);
+
+    // Eight lines were removed from here. They were pasted in from the edit
+    // handler and referenced a variable named `meal` that does not exist in
+    // this function, so opening the create modal threw
+    //
+    //   ReferenceError: meal is not defined
+    //
+    // before it ever reached setIsModalOpen(true). The button appeared
+    // completely dead — no modal, no error visible to the operator, nothing
+    // in the UI to suggest why. This is the same fault that had disabled the
+    // Add Menu Item button.
 
     setIsModalOpen(true);
   };
@@ -124,15 +111,38 @@ export const DietFoods = () => {
   const handleSave = async (e) => {
     e.preventDefault();
     try {
+      // formData came straight from text inputs, so every numeric field is a
+      // string: price arrived in Firestore as "150", not 150. The customer
+      // app's DietMeal parser called .toDouble() on it, which throws — and
+      // because that happened inside a map() over the whole snapshot, one
+      // string-priced dish blanked the entire diet menu in the app.
+      //
+      // Coerced here so the stored type matches the field's meaning, rather
+      // than only patching the reader.
+      const numeric = [
+        "price", "discountedPrice", "calories", "proteinGrams",
+        "carbsGrams", "fatsGrams", "fiberGrams", "glycemicIndex",
+        "stockQuantity",
+      ];
+      const payload = { ...formData };
+      for (const key of numeric) {
+        if (payload[key] === "" || payload[key] == null) {
+          payload[key] = 0;
+        } else {
+          const n = Number(payload[key]);
+          payload[key] = Number.isFinite(n) ? n : 0;
+        }
+      }
+
       if (editingFood) {
-        await DietFoodService.update(editingFood.id, formData);
+        await DietFoodService.update(editingFood.id, payload);
         addToast("Diet Food updated successfully!", "success");
       } else {
-        await DietFoodService.create(formData);
+        await DietFoodService.create(payload);
         addToast("New Diet Food created successfully!", "success");
       }
       setIsModalOpen(false);
-      loadData();
+      // Live subscription delivers the change.
     } catch (e) {
       addToast(`Error saving food item: ${e.message}`, "error");
     }
@@ -143,7 +153,7 @@ export const DietFoods = () => {
     try {
       await DietFoodService.delete(id);
       addToast("Diet Food item deleted", "info");
-      loadData();
+      // Live subscription delivers the change.
     } catch (e) {
       addToast(`Error deleting item: ${e.message}`, "error");
     }

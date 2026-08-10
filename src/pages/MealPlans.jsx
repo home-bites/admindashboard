@@ -1,71 +1,214 @@
 import React, { useState, useEffect } from "react";
 import { MealPlanService } from "../services";
 import { useUiStore } from "../store/uiStore";
+import { useLiveCollection } from "../hooks/useLiveCollection";
 import { ImageUploader } from "../components/ImageUploader";
+
+/** The four services. Must stay in step with the slot set in firestore.rules. */
+const SLOTS = [
+  { id: "breakfast", label: "Morning", window: "7:00 – 9:30 AM", icon: "🍳" },
+  { id: "lunch", label: "Afternoon", window: "12:00 – 2:30 PM", icon: "🥗" },
+  { id: "snacks", label: "Evening Snacks", window: "4:30 – 6:30 PM", icon: "🍇" },
+  { id: "dinner", label: "Night", window: "7:30 – 9:30 PM", icon: "🍗" },
+];
+
+const EMPTY_SLOTS = { breakfast: [], lunch: [], snacks: [], dinner: [] };
+
+/**
+ * Per-dish nutrition, collected for diet plans only.
+ *
+ * A regular subscription is sold on what the food is; a diet subscription is
+ * sold on its macros, and a customer may be managing diabetes or a training
+ * plan around these numbers. They are entered per dish rather than per plan
+ * because a plan's daily total is meaningless when the customer picks one
+ * dish out of four each service.
+ */
+const NUTRIENTS = [
+  { id: "calories", label: "kcal", width: "w-16" },
+  { id: "protein", label: "P (g)", width: "w-14" },
+  { id: "carbs", label: "C (g)", width: "w-14" },
+  { id: "fats", label: "F (g)", width: "w-14" },
+  { id: "fiber", label: "Fib (g)", width: "w-14" },
+];
 
 export const MealPlans = () => {
   const { addToast } = useUiStore();
-  const [plans, setPlans] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { data: plans, loading, error: liveError } =
+    useLiveCollection("mealPlanRepository");
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPlan, setEditingPlan] = useState(null);
 
+  /**
+   * A new plan starts empty.
+   *
+   * This form used to open pre-filled with a complete fictional plan — "7-Day
+   * Lean Protein & Weight Loss Plan", ₹2499, a full week of invented dishes.
+   * Convenient to demo, dangerous in production: every field looked already
+   * answered, so anything the admin didn't consciously overwrite was saved as
+   * real customer-facing content. A price of ₹2499 and a Monday menu of "Oats
+   * Upma" would ship to subscribers because nobody noticed they were defaults.
+   *
+   * Empty strings render as placeholders in the inputs instead, which asks
+   * the question rather than answering it wrongly. Only genuinely structural
+   * choices keep a default: plan type, and the active flag.
+   */
   const initialFormState = {
-    title: "7-Day Lean Protein & Weight Loss Plan",
-    subtitle: "High Protein • Controlled Carbs • Calorie Deficit",
-    description: "Complete 7-day chef curated diet program delivered fresh every morning with precise calorie & macro calculation.",
+    title: "",
+    subtitle: "",
+    description: "",
     planType: "WEEKLY",
+    // Read by the customer app's DietPlan model and the
+    // subscription detail screen — all of which fell back to "diet" because
+    // this form never wrote the field, making a Regular plan impossible to
+    // create through the dashboard.
+    subscriptionType: "diet",
+    slotMeals: EMPTY_SLOTS,
     durationDays: 7,
-    price: 2499,
-    discountedPrice: 1999,
-    caloriesPerDay: 1600,
-    calories: 1600,
-    protein: 120,
-    carbs: 160,
-    fats: 40,
-    fiber: 28,
+    price: "",
+    discountedPrice: "",
+    caloriesPerDay: "",
+    calories: "",
+    protein: "",
+    carbs: "",
+    fats: "",
+    fiber: "",
     mealsPerDay: 3,
-    breakfastMenu: "Oats Vegetable Upma / Multigrain Moong Dal Cheela with Mint Chutney",
-    lunchMenu: "Grilled Paneer / Chicken Protein Bowl with Quinoa & Steamed Veggies",
-    dinnerMenu: "Millet & Lentil Khichdi / Pan Seared Tofu with Cucumber Salad",
-    snackMenu: "Sprouts & Pomegranate Chaat + Cold Pressed Green Detox Juice",
+    breakfastMenu: "",
+    lunchMenu: "",
+    dinnerMenu: "",
+    snackMenu: "",
     foodType: "Veg",
-    deliveryTiming: "07:30 AM - 08:30 AM",
-    availableDays: "Monday to Sunday",
-    maxSubscribers: 50,
-    activeSubscribers: 18,
-    imageUrl: "https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=800&q=80",
-    tags: ["Weight Loss", "High Protein"],
-    isPopular: true,
+    deliveryTiming: "",
+    availableDays: "",
+    maxSubscribers: "",
+    // Never seeded. This is a live count of real subscribers; presetting it
+    // to 18 made an empty plan advertise subscribers it did not have.
+    activeSubscribers: 0,
+    imageUrl: "",
+    tags: [],
+    isPopular: false,
     isActive: true,
     weeklySchedule: {
-      Monday: "Breakfast: Oats Upma | Lunch: Paneer Quinoa Bowl | Dinner: Millet Khichdi",
-      Tuesday: "Breakfast: Moong Dal Cheela | Lunch: Grilled Chicken Bowl | Dinner: Tofu Salad",
-      Wednesday: "Breakfast: Sprouted Chaat | Lunch: Rajma Brown Rice | Dinner: Vegetable Soup",
-      Thursday: "Breakfast: Multigrain Paratha | Lunch: Paneer Salad | Dinner: Dal Khichdi",
-      Friday: "Breakfast: Vegetable Upma | Lunch: Tikka Protein Bowl | Dinner: Roasted Veggies",
-      Saturday: "Breakfast: Protein Pancake | Lunch: Egg/Paneer Macro Box | Dinner: Light Soup",
-      Sunday: "Breakfast: Chef Special Bowl | Lunch: Biryani Macro Box | Dinner: Detox Juice",
+      Monday: "", Tuesday: "", Wednesday: "", Thursday: "",
+      Friday: "", Saturday: "", Sunday: "",
     }
   };
 
   const [formData, setFormData] = useState(initialFormState);
 
-  const loadPlans = async () => {
-    setLoading(true);
-    try {
-      const data = await MealPlanService.getAll();
-      setPlans(data || []);
-    } catch (e) {
-      addToast("Failed to load meal plans", "error");
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    if (liveError) addToast(`Live updates stopped: ${liveError}`, "error");
+  }, [liveError, addToast]);
+
+  const isDietPlan = String(formData.subscriptionType || "diet").toLowerCase() === "diet";
+
+  /* ── slot dish editing ─────────────────────────────────────────────────
+   *
+   * Dishes are typed here, not chosen from the Menu Items catalogue.
+   *
+   * A picker tied the plan to whatever already existed in `menuItems` or
+   * `dietFoods`, which meant inventing a catalogue entry before a plan could
+   * mention a dish, and editing that entry to reword a plan. Subscription
+   * menus change week to week and are written by the person planning them, so
+   * typing is the faster and more honest tool — the plan holds its own text.
+   *
+   * Shape: slotMeals[slot] is an array of `{ name, calories, protein, carbs,
+   * fats, fiber }`. Nutrition fields are only collected for diet plans, where
+   * macros are the product; a regular plan stores name only.
+   */
+
+  /** Older plans stored an array of catalogue ids. Read them as names. */
+  const normaliseSlotRows = (rows) =>
+    (Array.isArray(rows) ? rows : []).map((r) =>
+      typeof r === "string" ? { name: r } : { ...r }
+    );
+
+  const addSlotRow = (slotId) => {
+    setFormData((prev) => {
+      const slots = { ...EMPTY_SLOTS, ...(prev.slotMeals || {}) };
+      slots[slotId] = [...normaliseSlotRows(slots[slotId]), { name: "" }];
+      return { ...prev, slotMeals: slots };
+    });
   };
 
-  useEffect(() => {
-    loadPlans();
-  }, []);
+  const removeSlotRow = (slotId, index) => {
+    setFormData((prev) => {
+      const slots = { ...EMPTY_SLOTS, ...(prev.slotMeals || {}) };
+      slots[slotId] = normaliseSlotRows(slots[slotId]).filter((_, i) => i !== index);
+      return { ...prev, slotMeals: slots };
+    });
+  };
+
+  const setSlotField = (slotId, index, field, value) => {
+    setFormData((prev) => {
+      const slots = { ...EMPTY_SLOTS, ...(prev.slotMeals || {}) };
+      const rows = normaliseSlotRows(slots[slotId]);
+      rows[index] = { ...rows[index], [field]: value };
+      slots[slotId] = rows;
+      return { ...prev, slotMeals: slots };
+    });
+  };
+
+  /**
+   * Display strings regenerated from the typed rows.
+   *
+   * The plan cards and the customer app read `breakfastMenu` and its siblings.
+   * Deriving them at save time keeps one source of truth: the card text can
+   * never describe a dish the plan no longer contains.
+   */
+  const summariseSlots = (slotMeals) => {
+    const join = (rows) =>
+      normaliseSlotRows(rows).map((r) => (r.name || "").trim()).filter(Boolean).join(" / ");
+    return {
+      breakfastMenu: join(slotMeals?.breakfast),
+      lunchMenu: join(slotMeals?.lunch),
+      dinnerMenu: join(slotMeals?.dinner),
+      snackMenu: join(slotMeals?.snacks),
+    };
+  };
+
+  /**
+   * Flat list of dish names per slot, written alongside the rich `slotMeals`.
+   *
+   * This exists for firestore.rules. The rule that authorises a customer's
+   * meal selection has to answer "is this dish on the plan for that slot?",
+   * and the rules language cannot project a field out of an array of maps —
+   * there is no way to express `slotMeals.breakfast.map(m => m.name)`. A
+   * plain array of strings can be tested with `in` directly.
+   *
+   * Derived at save time from the same rows, so the two cannot disagree.
+   */
+  const slotMealNames = (cleaned) => {
+    const out = {};
+    for (const slot of SLOTS) {
+      out[slot.id] = (cleaned[slot.id] || []).map((r) => r.name);
+    }
+    return out;
+  };
+
+  /** Blank rows are dropped, and numbers stored as numbers, not strings. */
+  const cleanSlotMeals = (slotMeals) => {
+    const out = {};
+    for (const slot of SLOTS) {
+      out[slot.id] = normaliseSlotRows(slotMeals?.[slot.id])
+        .filter((r) => (r.name || "").trim())
+        .map((r) => {
+          const row = { name: r.name.trim() };
+          if (!isDietPlan) return row;
+          for (const key of NUTRIENTS) {
+            const n = Number(r[key.id]);
+            // Only recorded when actually entered. Writing 0 for a blank field
+            // would publish "0 g protein" as though it were a measurement.
+            if (r[key.id] !== "" && r[key.id] != null && Number.isFinite(n)) {
+              row[key.id] = n;
+            }
+          }
+          return row;
+        });
+    }
+    return out;
+  };
 
   const openModal = (plan = null) => {
     if (plan) {
@@ -75,6 +218,11 @@ export const MealPlans = () => {
         subtitle: plan.subtitle || "",
         description: plan.description || "",
         planType: plan.planType || plan.type || "WEEKLY",
+        subscriptionType: String(plan.subscriptionType || "diet").toLowerCase(),
+        // Merged over EMPTY_SLOTS so a plan saved before per-slot dishes
+        // existed opens with four empty lists rather than undefined, which
+        // would make `picked.includes(...)` throw on the first render.
+        slotMeals: { ...EMPTY_SLOTS, ...(plan.slotMeals || {}) },
         durationDays: plan.durationDays || 7,
         price: plan.price || 0,
         discountedPrice: plan.discountedPrice || plan.price || 0,
@@ -110,8 +258,15 @@ export const MealPlans = () => {
   const handleSave = async (e) => {
     e.preventDefault();
     try {
+      const cleanedSlots = cleanSlotMeals(formData.slotMeals);
       const payload = {
         ...formData,
+        subscriptionType: String(formData.subscriptionType || "diet").toLowerCase(),
+        slotMeals: cleanedSlots,
+        slotMealNames: slotMealNames(cleanedSlots),
+        // Display strings regenerated from the typed rows so the card text and
+        // the actual selectable dishes can never disagree.
+        ...summariseSlots(cleanedSlots),
         price: parseFloat(formData.price),
         discountedPrice: parseFloat(formData.discountedPrice || formData.price),
         caloriesPerDay: parseInt(formData.caloriesPerDay || formData.calories),
@@ -132,7 +287,7 @@ export const MealPlans = () => {
         addToast("New Meal Plan created successfully!", "success");
       }
       setIsModalOpen(false);
-      loadPlans();
+      // Live subscription delivers the change.
     } catch (e) {
       addToast(`Error saving plan: ${e.message}`, "error");
     }
@@ -143,7 +298,7 @@ export const MealPlans = () => {
     try {
       await MealPlanService.delete(id);
       addToast("Meal Plan deleted", "info");
-      loadPlans();
+      // Live subscription delivers the change.
     } catch (e) {
       addToast(`Error deleting plan: ${e.message}`, "error");
     }
@@ -446,48 +601,129 @@ export const MealPlans = () => {
                 </div>
               </div>
 
-              {/* Meal Menu Breakdown */}
+              {/* Plan type. Drives which catalogue every downstream screen
+                  reads, so it belongs with the meal selection rather than
+                  buried among the pricing fields. */}
               <div className="space-y-3 pt-2">
-                <h3 className="text-xs font-bold uppercase text-emerald-600 dark:text-emerald-400 tracking-wider">4. Daily Meals Included</h3>
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">🍳 Breakfast Options</label>
-                  <input
-                    type="text"
-                    value={formData.breakfastMenu}
-                    onChange={(e) => setFormData({ ...formData, breakfastMenu: e.target.value })}
-                    placeholder="e.g. Oats Upma / Moong Dal Cheela with Mint Chutney"
-                    className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
-                  />
+                <h3 className="text-xs font-bold uppercase text-emerald-600 dark:text-emerald-400 tracking-wider">
+                  4. Plan type
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { id: "diet", label: "Diet", hint: "Per-dish macros collected" },
+                    { id: "regular", label: "Regular", hint: "Dish names only" },
+                  ].map((t) => {
+                    const active = String(formData.subscriptionType || "diet").toLowerCase() === t.id;
+                    return (
+                      <button
+                        type="button"
+                        key={t.id}
+                        // Dishes survive the switch now that they're plain text —
+                        // only the nutrition columns appear or disappear, and
+                        // stored macros are kept in case the admin switches back.
+                        onClick={() => setFormData({ ...formData, subscriptionType: t.id })}
+                        className={`text-left px-4 py-3 rounded-xl border-2 transition ${
+                          active
+                            ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20"
+                            : "border-slate-200 dark:border-slate-700 hover:border-emerald-300"
+                        }`}
+                      >
+                        <p className={`text-sm font-bold ${active ? "text-emerald-700" : "text-slate-700 dark:text-slate-200"}`}>
+                          {t.label}
+                        </p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">{t.hint}</p>
+                      </button>
+                    );
+                  })}
                 </div>
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">🥗 Lunch Options</label>
-                  <input
-                    type="text"
-                    value={formData.lunchMenu}
-                    onChange={(e) => setFormData({ ...formData, lunchMenu: e.target.value })}
-                    placeholder="e.g. Grilled Paneer / Chicken Protein Bowl with Quinoa"
-                    className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">🍗 Dinner Options</label>
-                  <input
-                    type="text"
-                    value={formData.dinnerMenu}
-                    onChange={(e) => setFormData({ ...formData, dinnerMenu: e.target.value })}
-                    placeholder="e.g. Millet Khichdi / Pan Seared Tofu with Roasted Veggies"
-                    className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">🍇 Snack Options (Optional)</label>
-                  <input
-                    type="text"
-                    value={formData.snackMenu}
-                    onChange={(e) => setFormData({ ...formData, snackMenu: e.target.value })}
-                    placeholder="e.g. Sprouts & Pomegranate Chaat + Cold Pressed Juice"
-                    className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
-                  />
+                <p className="text-[11px] text-slate-400">
+                  Diet plans collect calories and macros for each dish, because that's
+                  what the customer is buying. Regular plans record the dish name only.
+                </p>
+              </div>
+
+              {/* Per-slot dish selection.
+                  These were four free-text boxes — "Oats Upma / Moong Dal
+                  Cheela" typed as prose. Nothing downstream could read them:
+                  the customer's meal picker and the kitchen's list both work
+                  from dish ids, so a plan's advertised menu and its actual
+                  selectable dishes were unrelated pieces of data that only
+                  looked connected. Picking real dishes here makes them the
+                  same thing. */}
+              <div className="space-y-3 pt-2">
+                <h3 className="text-xs font-bold uppercase text-emerald-600 dark:text-emerald-400 tracking-wider">
+                  5. Dishes included, by meal time
+                </h3>
+
+                <p className="text-[11px] text-slate-400">
+                  Type the dishes yourself — these aren't tied to the Menu Items list,
+                  so you can word them however you like and change them each week.
+                  {isDietPlan && " Macros are per dish and shown to the customer."}
+                </p>
+
+                <div className="space-y-3">
+                  {SLOTS.map((slot) => {
+                    const rows = normaliseSlotRows(formData.slotMeals?.[slot.id]);
+                    return (
+                      <div key={slot.id} className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+                        <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-slate-800">
+                          <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                            {slot.icon} {slot.label}
+                            <span className="ml-1.5 font-normal text-slate-400">{slot.window}</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => addSlotRow(slot.id)}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-[11px] font-bold"
+                          >
+                            + Add dish
+                          </button>
+                        </div>
+
+                        <div className="p-2 space-y-2">
+                          {rows.length === 0 && (
+                            <p className="text-[11px] text-slate-400 px-1 py-1.5">
+                              No dishes for this meal time yet.
+                            </p>
+                          )}
+
+                          {rows.map((row, i) => (
+                            <div key={i} className="flex flex-wrap items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={row.name || ""}
+                                onChange={(e) => setSlotField(slot.id, i, "name", e.target.value)}
+                                placeholder="Dish name"
+                                className="flex-1 min-w-[10rem] px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs"
+                              />
+
+                              {isDietPlan && NUTRIENTS.map((n) => (
+                                <input
+                                  key={n.id}
+                                  type="number"
+                                  min="0"
+                                  value={row[n.id] ?? ""}
+                                  onChange={(e) => setSlotField(slot.id, i, n.id, e.target.value)}
+                                  placeholder={n.label}
+                                  title={n.label}
+                                  className={`${n.width} px-2 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs text-center`}
+                                />
+                              ))}
+
+                              <button
+                                type="button"
+                                onClick={() => removeSlotRow(slot.id, i)}
+                                title="Remove this dish"
+                                className="w-7 h-7 grid place-items-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
+                              >
+                                <span className="material-symbols-outlined text-[16px]">close</span>
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 

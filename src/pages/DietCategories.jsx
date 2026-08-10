@@ -1,37 +1,26 @@
 import React, { useState, useEffect } from "react";
 import { DietCategoryService } from "../services";
 import { useUiStore } from "../store/uiStore";
+import { useLiveCollection } from "../hooks/useLiveCollection";
 
 export const DietCategories = () => {
   const { addToast } = useUiStore();
-  const [categories, setCategories] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { data: categories, loading, error: liveError } =
+    useLiveCollection("dietCategoryRepository");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
 
   const [formData, setFormData] = useState({
     name: "",
     description: "",
-    imageUrl: "https://images.unsplash.com/photo-1490645935967-10de6ba17061?auto=format&fit=crop&w=800&q=80",
+    imageUrl: "",
     displayOrder: 1,
     isActive: true
   });
 
-  const loadCategories = async () => {
-    setLoading(true);
-    try {
-      const list = await DietCategoryService.getAll();
-      setCategories(list || []);
-    } catch (e) {
-      addToast("Failed to load diet categories", "error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    loadCategories();
-  }, []);
+    if (liveError) addToast(`Live updates stopped: ${liveError}`, "error");
+  }, [liveError, addToast]);
 
   const openModal = (cat = null) => {
     if (cat) {
@@ -44,11 +33,14 @@ export const DietCategories = () => {
         isActive: cat.isActive !== false
       });
     } else {
+      // A new category starts blank. Pre-filling it with "Lean Muscle & Power"
+      // meant an admin who only changed the name shipped a description and a
+      // stock photo they never chose.
       setEditingCategory(null);
       setFormData({
-        name: "Lean Muscle & Power",
-        description: "High-protein, complex-carb meals tailored for athletic performance and recovery.",
-        imageUrl: "https://images.unsplash.com/photo-1490645935967-10de6ba17061?auto=format&fit=crop&w=800&q=80",
+        name: "",
+        description: "",
+        imageUrl: "",
         displayOrder: categories.length + 1,
         isActive: true
       });
@@ -67,7 +59,7 @@ export const DietCategories = () => {
         addToast("New diet category created successfully!", "success");
       }
       setIsModalOpen(false);
-      loadCategories();
+      // The live subscription delivers the change; no reload needed.
     } catch (e) {
       addToast(`Error saving category: ${e.message}`, "error");
     }
@@ -78,7 +70,6 @@ export const DietCategories = () => {
     try {
       await DietCategoryService.delete(id);
       addToast("Diet category deleted", "info");
-      loadCategories();
     } catch (e) {
       addToast(`Error deleting category: ${e.message}`, "error");
     }

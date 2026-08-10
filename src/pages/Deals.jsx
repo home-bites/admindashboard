@@ -9,7 +9,7 @@ import * as LoadingComponents from "../components/LoadingComponents";
 export const Deals = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
-  const { deals, loading, fetchDeals, addDeal, updateDeal, deleteDeal } = useDealStore();
+  const { deals, loading, subscribeDeals, disconnectDeals, addDeal, updateDeal, deleteDeal } = useDealStore();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -22,9 +22,12 @@ export const Deals = () => {
   const [expiryDate, setExpiryDate] = useState("");
   const [status, setStatus] = useState("Active");
 
+  // Live subscription rather than a one-shot read, and torn down on unmount
+  // so navigating away doesn't leave a Firestore listener running.
   useEffect(() => {
-    fetchDeals();
-  }, [fetchDeals]);
+    subscribeDeals();
+    return () => disconnectDeals();
+  }, [subscribeDeals, disconnectDeals]);
 
   const handleOpenAddModal = () => {
     setEditDealId(null);
