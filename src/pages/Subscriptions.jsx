@@ -100,6 +100,7 @@ export const Subscriptions = () => {
   const { data: subscriptions, loading, error } = useLiveCollection("subscriptionRepository");
   const { data: plans } = useLiveCollection("mealPlanRepository");
   const { data: customers } = useLiveCollection("userRepository");
+  const { data: appSettings } = useLiveCollection("appSettingsRepository");
 
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [paymentFilter, setPaymentFilter] = useState("ALL");
@@ -115,6 +116,34 @@ export const Subscriptions = () => {
   // what you ticked.
   const [checked, setChecked] = useState(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Daily ordering status
+  const dailyOrderingStatus = useMemo(() => {
+    return appSettings.find(s => s.id === "dailyOrderingStatus") || {};
+  }, [appSettings]);
+
+  const toggleSlotStatus = async (slot) => {
+    try {
+      const current = dailyOrderingStatus[slot] !== false; // defaults to true
+      await repos.appSettingsRepository.update("dailyOrderingStatus", {
+        [slot]: !current,
+        updatedAt: new Date().toISOString(),
+      });
+      addToast(`Updated ordering status for ${slot}`, "success");
+    } catch (e) {
+      if (e.message?.includes("No document to update")) {
+        // If it doesn't exist yet, create it using set() so we control the ID
+        await repos.appSettingsRepository.set("dailyOrderingStatus", {
+          id: "dailyOrderingStatus",
+          [slot]: false,
+          updatedAt: new Date().toISOString(),
+        });
+        addToast(`Updated ordering status for ${slot}`, "success");
+      } else {
+        addToast(`Failed to update status: ${e.message}`, "error");
+      }
+    }
+  };
 
   useEffect(() => {
     if (error) addToast(`Live updates stopped: ${error}`, "error");
@@ -384,6 +413,28 @@ export const Subscriptions = () => {
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             Every meal plan, its payment state, and the dishes each customer chose. Updates live.
           </p>
+        </div>
+      </div>
+
+      {/* Daily Ordering Status Panel */}
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5">
+        <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-3">Today's Ordering Availability</h3>
+        <p className="text-xs text-slate-500 mb-4">Toggle these off to prevent customers from selecting meals for the current day. Used to enforce cut-off times.</p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {["breakfast", "lunch", "snacks", "dinner"].map((slot) => {
+            const isOpen = dailyOrderingStatus[slot] !== false; // defaults to true
+            return (
+              <div key={slot} className="flex items-center justify-between p-3 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800/50">
+                <span className="text-sm font-semibold text-slate-700 dark:text-slate-200 capitalize">{slot}</span>
+                <button
+                  onClick={() => toggleSlotStatus(slot)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${isOpen ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'}`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isOpen ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+            );
+          })}
         </div>
       </div>
 

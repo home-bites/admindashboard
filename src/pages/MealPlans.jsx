@@ -63,6 +63,7 @@ export const MealPlans = () => {
     // this form never wrote the field, making a Regular plan impossible to
     // create through the dashboard.
     subscriptionType: "diet",
+    coveredSlots: ["breakfast", "lunch", "snacks", "dinner"],
     slotMeals: EMPTY_SLOTS,
     durationDays: 7,
     price: "",
@@ -219,6 +220,7 @@ export const MealPlans = () => {
         description: plan.description || "",
         planType: plan.planType || plan.type || "WEEKLY",
         subscriptionType: String(plan.subscriptionType || "diet").toLowerCase(),
+        coveredSlots: plan.coveredSlots || ["breakfast", "lunch", "snacks", "dinner"],
         // Merged over EMPTY_SLOTS so a plan saved before per-slot dishes
         // existed opens with four empty lists rather than undefined, which
         // would make `picked.includes(...)` throw on the first render.
@@ -262,6 +264,7 @@ export const MealPlans = () => {
       const payload = {
         ...formData,
         subscriptionType: String(formData.subscriptionType || "diet").toLowerCase(),
+        coveredSlots: formData.coveredSlots || ["breakfast", "lunch", "snacks", "dinner"],
         slotMeals: cleanedSlots,
         slotMealNames: slotMealNames(cleanedSlots),
         // Display strings regenerated from the typed rows so the card text and
@@ -639,6 +642,43 @@ export const MealPlans = () => {
                 <p className="text-[11px] text-slate-400">
                   Diet plans collect calories and macros for each dish, because that's
                   what the customer is buying. Regular plans record the dish name only.
+                </p>
+              </div>
+
+              {/* Covered Slots Selection */}
+              <div className="space-y-3 pt-2">
+                <h3 className="text-xs font-bold uppercase text-emerald-600 dark:text-emerald-400 tracking-wider">
+                  4b. Subscription Coverage
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {[
+                    { id: "all", label: "Full Day", slots: ["breakfast", "lunch", "snacks", "dinner"] },
+                    { id: "breakfast", label: "Breakfast Only", slots: ["breakfast"] },
+                    { id: "lunch", label: "Lunch Only", slots: ["lunch"] },
+                    { id: "dinner", label: "Dinner Only", slots: ["dinner"] },
+                  ].map((t) => {
+                    const active = (formData.coveredSlots || []).length === t.slots.length && 
+                                   t.slots.every(s => (formData.coveredSlots || []).includes(s));
+                    return (
+                      <button
+                        type="button"
+                        key={t.id}
+                        onClick={() => setFormData({ ...formData, coveredSlots: t.slots })}
+                        className={`text-center px-2 py-2 rounded-xl border-2 transition ${
+                          active
+                            ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20"
+                            : "border-slate-200 dark:border-slate-700 hover:border-emerald-300"
+                        }`}
+                      >
+                        <p className={`text-xs font-bold ${active ? "text-emerald-700" : "text-slate-700 dark:text-slate-200"}`}>
+                          {t.label}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Select which meals the customer will receive each day. The customer app will hide the selection tabs for slots that are not covered by this package.
                 </p>
               </div>
 

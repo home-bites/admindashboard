@@ -919,6 +919,7 @@ export const SettingsService = {
           maintenanceMode: false,
           minimumOrderValue: 150,
           walletEnabled: true,
+          loyaltyEnabled: true,
           couponEnabled: true,
           deliveryTrackingEnabled: true
         };

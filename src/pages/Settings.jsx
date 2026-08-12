@@ -36,6 +36,7 @@ export const Settings = () => {
   
   // Toggles for system
   const [walletEnabled, setWalletEnabled] = useState(true);
+  const [loyaltyEnabled, setLoyaltyEnabled] = useState(true);
   const [couponEnabled, setCouponEnabled] = useState(true);
   const [deliveryTrackingEnabled, setDeliveryTrackingEnabled] = useState(true);
   const [showPartnerEarnings, setShowPartnerEarnings] = useState(false);
@@ -75,6 +76,7 @@ export const Settings = () => {
           setRainCharge(data.rainCharge !== undefined ? data.rainCharge : 0.0);
 
           setWalletEnabled(data.walletEnabled !== undefined ? data.walletEnabled : true);
+          setLoyaltyEnabled(data.loyaltyEnabled !== undefined ? data.loyaltyEnabled : true);
           setCouponEnabled(data.couponEnabled !== undefined ? data.couponEnabled : true);
           setDeliveryTrackingEnabled(data.deliveryTrackingEnabled !== undefined ? data.deliveryTrackingEnabled : true);
           setShowPartnerEarnings(data.showPartnerEarnings !== undefined ? data.showPartnerEarnings : false);
@@ -122,6 +124,7 @@ export const Settings = () => {
       deliveryCharge: Number(deliveryCharge),
       rainCharge: Number(rainCharge),
       walletEnabled,
+      loyaltyEnabled,
       couponEnabled,
       deliveryTrackingEnabled,
       showPartnerEarnings,
@@ -559,6 +562,23 @@ export const Settings = () => {
                         type="checkbox"
                         checked={walletEnabled}
                         onChange={(e) => setWalletEnabled(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-[#d3daea] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#10b981]"></div>
+                    </label>
+                  </div>
+
+                  {/* Loyalty Enabled */}
+                  <div className="flex items-center justify-between p-3 bg-[#f9f9ff] rounded border">
+                    <div>
+                      <p className="font-label-md text-label-md text-[#151c27] font-semibold">Loyalty Points System</p>
+                      <p className="text-[10px] text-[#555f6f]">Master toggle to enable/disable loyalty points earnings</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={loyaltyEnabled}
+                        onChange={(e) => setLoyaltyEnabled(e.target.checked)}
                         className="sr-only peer"
                       />
                       <div className="w-9 h-5 bg-[#d3daea] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#10b981]"></div>

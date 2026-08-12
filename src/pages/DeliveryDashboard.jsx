@@ -26,7 +26,7 @@ const DeliveryDashboard = () => {
       </Typography>
 
       <Grid container spacing={3}>
-        <Grid item xs={12} md={4}>
+        <Grid xs={12} md={4}>
           <Typography variant="h6" sx={{ mb: 2 }}>Assigned Orders</Typography>
           {assignedOrders.map(order => (
             <Card key={order.id} sx={{ mb: 2, borderLeft: order.status === 'delivered' ? '4px solid green' : '4px solid orange' }}>
@@ -76,7 +76,7 @@ const DeliveryDashboard = () => {
           ))}
         </Grid>
 
-        <Grid item xs={12} md={8}>
+        <Grid xs={12} md={8}>
           <Typography variant="h6" sx={{ mb: 2 }}>Map Route</Typography>
           <Paper sx={{ height: '600px', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#e0e0e0', borderRadius: 2 }}>
             <Box sx={{ textAlign: 'center' }}>
