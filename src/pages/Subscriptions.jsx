@@ -93,6 +93,112 @@ function Stat({ label, value, tone = "slate" }) {
   );
 }
 
+function SubscriptionTimeline({ subscription, selections }) {
+  if (!subscription.startDate || !subscription.endDate) return null;
+
+  const start = toDate(subscription.startDate);
+  const end = toDate(subscription.endDate);
+  const skippedDates = subscription.skippedDates || [];
+  const pausedDates = subscription.pausedDates || [];
+  const pausedAt = subscription.pausedAt ? toDate(subscription.pausedAt) : null;
+  const resumedAt = subscription.resumedAt ? toDate(subscription.resumedAt) : null;
+
+  // Generate date range
+  const dates = [];
+  let current = new Date(start);
+  // Ensure we don't loop forever if dates are weird
+  let limit = 0;
+  while (current <= end && limit < 365) {
+    const dStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(current);
+    dates.push(dStr);
+    current.setDate(current.getDate() + 1);
+    limit++;
+  }
+
+  // Get active meal dates
+  const activeMeals = new Set();
+  if (selections) {
+    selections.forEach(sel => {
+      const status = String(sel.status || "").toLowerCase();
+      if (status !== "skipped" && status !== "cancelled") {
+        activeMeals.add(sel.date);
+      }
+    });
+  }
+
+  // Generate a date string for today to check if pausedAt is currently active
+  const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  let currentPausedDates = [];
+  if (pausedAt) {
+    let curr = new Date(pausedAt);
+    let endPaused = new Date();
+    while (curr <= endPaused) {
+      currentPausedDates.push(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(curr));
+      curr.setDate(curr.getDate() + 1);
+    }
+  }
+
+  return (
+    <div className="mt-6 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm">
+      <h4 className="text-sm font-extrabold text-slate-800 dark:text-slate-200 mb-5">Subscription Timeline & Calendar</h4>
+      
+      <div className="grid grid-cols-7 sm:grid-cols-10 md:grid-cols-14 gap-1.5 mb-5">
+        {dates.map((d) => {
+          const isSkipped = skippedDates.includes(d);
+          const isHistoricalPaused = pausedDates.includes(d);
+          const isCurrentlyPaused = currentPausedDates.includes(d);
+          const isPaused = isHistoricalPaused || isCurrentlyPaused;
+          const hasMeal = activeMeals.has(d);
+          
+          let bgColor = "bg-slate-100 dark:bg-slate-800 text-slate-400";
+          if (isSkipped) bgColor = "bg-amber-400 text-amber-900 opacity-60"; // Skipped is amber
+          else if (isPaused) bgColor = "bg-yellow-400 text-yellow-900"; // Paused is yellow
+          else if (hasMeal) bgColor = "bg-emerald-400 text-emerald-900"; // Booked is green
+
+          let ring = "";
+          if (resumedAt && d === new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(resumedAt)) {
+             ring = "ring-2 ring-blue-500 ring-offset-2 ring-offset-white dark:ring-offset-slate-900"; // Resume is blue ring
+          }
+
+          const dayNum = parseInt(d.split("-")[2], 10);
+
+          return (
+            <div key={d} title={d} className={`h-9 rounded-lg flex items-center justify-center text-xs font-black ${bgColor} ${ring} transition-all hover:scale-110 cursor-default`}>
+              {dayNum}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-wrap gap-x-6 gap-y-3 text-xs mb-6">
+        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded bg-emerald-400"></div><span className="font-bold text-slate-600 dark:text-slate-400">Active Meals</span></div>
+        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded bg-amber-400"></div><span className="font-bold text-slate-600 dark:text-slate-400">Skipped/Paused</span></div>
+        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded bg-slate-100 border border-slate-200 dark:bg-slate-800 dark:border-slate-700"></div><span className="font-bold text-slate-600 dark:text-slate-400">No Meals</span></div>
+        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded border-2 border-blue-500 border-dashed"></div><span className="font-bold text-slate-600 dark:text-slate-400">Paused/Resumed Event</span></div>
+      </div>
+
+      <div className="pt-4 border-t border-slate-200 dark:border-slate-700 grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Banked Days</p>
+          <p className="mt-1 text-sm font-black text-slate-800 dark:text-slate-200">{subscription.pausedDaysTotal || 0} day(s)</p>
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Skipped Days</p>
+          <p className="mt-1 text-sm font-black text-slate-800 dark:text-slate-200">{skippedDates.length} day(s)</p>
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Last Paused At</p>
+          <p className="mt-1 text-sm font-black text-slate-800 dark:text-slate-200">{pausedAt ? fmtDate(pausedAt) : "—"}</p>
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Last Resumed At</p>
+          <p className="mt-1 text-sm font-black text-slate-800 dark:text-slate-200">{resumedAt ? fmtDate(resumedAt) : "—"}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export const Subscriptions = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
@@ -227,9 +333,8 @@ export const Subscriptions = () => {
     if (selections[subId]) return;
     setSelectionsBusy(true);
     try {
-      const rows = await repos.subscriptionMealSelectionRepository.getAll();
+      const rows = await repos.subscriptionMealSelectionRepository.findByField("subscriptionId", subId);
       const mine = rows
-        .filter((r) => r.subscriptionId === subId)
         .sort((a, b) => String(b.date).localeCompare(String(a.date)));
       setSelections((prev) => ({ ...prev, [subId]: mine }));
     } catch (e) {
@@ -656,11 +761,13 @@ export const Subscriptions = () => {
                                         }`}
                                       >
                                         <span className="text-slate-400">{SLOT_LABEL[r.slot] || r.slot}:</span>{" "}
-                                        {r.mealNameSnapshot || r.mealId}
+                                        {r.mealName || r.mealNameSnapshot || r.mealId}
                                       </span>
                                     ))}
                                   </div>
                                 ))}
+                                
+                                <SubscriptionTimeline subscription={s} selections={rows} />
                               </div>
                             )}
                           </td>

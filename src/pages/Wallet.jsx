@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { app } from "../firebase/firebaseConfig";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
 import { useWalletStore } from "../store/walletStore";
@@ -18,6 +20,10 @@ export const Wallet = () => {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTab, setSelectedTab] = useState("All");
+  
+  const [showCreditModal, setShowCreditModal] = useState(false);
+  const [creditForm, setCreditForm] = useState({ phone: "", amount: "", note: "" });
+  const [isCrediting, setIsCrediting] = useState(false);
 
   // All three sources are live. Wallet rows in particular are written by
   // Cloud Functions on refunds and cashback, so the page has to reflect
@@ -89,6 +95,36 @@ export const Wallet = () => {
     }
   };
 
+  const handleCreditWallet = async () => {
+    if (!creditForm.phone || !creditForm.amount) {
+      addToast("Please fill phone number and amount.", "error");
+      return;
+    }
+    const amt = parseFloat(creditForm.amount);
+    if (isNaN(amt) || amt <= 0) {
+      addToast("Please enter a valid positive amount.", "error");
+      return;
+    }
+
+    setIsCrediting(true);
+    try {
+      const functions = getFunctions(app);
+      const creditFn = httpsCallable(functions, "adminCreditCustomerWallet");
+      const result = await creditFn({
+        phone: creditForm.phone,
+        amount: amt,
+        note: creditForm.note
+      });
+      addToast(result.data.message || "Wallet credited successfully.", "success");
+      setShowCreditModal(false);
+      setCreditForm({ phone: "", amount: "", note: "" });
+    } catch (err) {
+      addToast(`Failed to credit wallet: ${err.message}`, "error");
+    } finally {
+      setIsCrediting(false);
+    }
+  };
+
   if (loading && transactions.length === 0) {
     return <LoadingComponents.LoadingPage />;
   }
@@ -127,6 +163,13 @@ export const Wallet = () => {
             Export CSV
           </button>
           <button 
+            onClick={() => setShowCreditModal(true)}
+            className="px-4 py-2 bg-[#f59e0b] text-white font-label-md text-label-md rounded-lg flex items-center gap-2 hover:bg-[#d97706] transition-colors shadow-sm border-t border-white/20 inner-shine"
+          >
+            <span className="material-symbols-outlined text-[18px]">account_balance_wallet</span>
+            Credit Wallet
+          </button>
+          <button 
             onClick={handleNewTransfer}
             className="px-4 py-2 bg-[#10b981] text-white font-label-md text-label-md rounded-lg flex items-center gap-2 hover:bg-[#059669] transition-colors shadow-sm border-t border-white/20 inner-shine"
           >
@@ -135,6 +178,67 @@ export const Wallet = () => {
           </button>
         </div>
       </div>
+
+      {/* Credit Wallet Modal */}
+      {showCreditModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-headline-sm text-headline-sm font-semibold">Credit Customer Wallet</h3>
+              <button onClick={() => setShowCreditModal(false)} className="text-gray-500 hover:text-gray-800">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Customer Phone (+91...)</label>
+                <input 
+                  type="text" 
+                  className="w-full border rounded-lg p-2" 
+                  value={creditForm.phone} 
+                  onChange={(e) => setCreditForm({ ...creditForm, phone: e.target.value })} 
+                  placeholder="+919876543210"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (₹)</label>
+                <input 
+                  type="number" 
+                  className="w-full border rounded-lg p-2" 
+                  value={creditForm.amount} 
+                  onChange={(e) => setCreditForm({ ...creditForm, amount: e.target.value })} 
+                  placeholder="500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Note (Optional)</label>
+                <input 
+                  type="text" 
+                  className="w-full border rounded-lg p-2" 
+                  value={creditForm.note} 
+                  onChange={(e) => setCreditForm({ ...creditForm, note: e.target.value })} 
+                  placeholder="Support refund, etc."
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button 
+                onClick={() => setShowCreditModal(false)}
+                className="px-4 py-2 border rounded-lg text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleCreditWallet}
+                disabled={isCrediting}
+                className="px-4 py-2 bg-[#f59e0b] text-white rounded-lg hover:bg-[#d97706] disabled:opacity-50 flex items-center gap-2"
+              >
+                {isCrediting ? "Processing..." : "Credit Account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* KPI Bento Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">

@@ -173,7 +173,7 @@ export const Coupons = () => {
         await addCoupon(couponPayload, user);
 
         // Only send marketing push notification if coupon is public (showToCustomer = true) and active
-        if (showToCustomer && status === "Active") {
+        if (showToCustomer === true && String(status).toLowerCase() === "active") {
           await notificationRepository.create({
             userId: "all",
             type: "marketing",

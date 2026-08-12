@@ -82,7 +82,8 @@ export const useOrderStore = create((set, get) => ({
           return dateB - dateA;
         });
 
-        set({ orders, loading: false });
+        const filteredOrders = orders.filter(o => o.status !== "Payment Pending");
+        set({ orders: filteredOrders, loading: false });
       },
       (err) => {
         set({ error: err.message, loading: false });
@@ -104,7 +105,8 @@ export const useOrderStore = create((set, get) => ({
     set({ loading: true, error: null });
     try {
       const orders = await OrderService.getOrders();
-      set({ orders, loading: false });
+      const filteredOrders = orders.filter(o => o.status !== "Payment Pending");
+      set({ orders: filteredOrders, loading: false });
     } catch (err) {
       set({ error: err.message, loading: false });
     }
