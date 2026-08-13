@@ -8,6 +8,7 @@ import { useOrderStore } from "../store/orderStore";
 import { useDeliveryPartnerStore } from "../store/deliveryPartnerStore";
 import EmptyState from "../components/EmptyState";
 import * as LoadingComponents from "../components/LoadingComponents";
+import { userRepository } from "../repositories";
 
 export const Wallet = () => {
   const { addToast } = useUiStore();
@@ -24,6 +25,14 @@ export const Wallet = () => {
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [creditForm, setCreditForm] = useState({ phone: "", amount: "", note: "" });
   const [isCrediting, setIsCrediting] = useState(false);
+  const [customers, setCustomers] = useState([]);
+
+  useEffect(() => {
+    userRepository.getAll().then(users => {
+      // Filter out admins if needed, or just keep all users
+      setCustomers(users);
+    }).catch(err => console.error("Failed to load users for autocomplete", err));
+  }, []);
 
   // All three sources are live. Wallet rows in particular are written by
   // Cloud Functions on refunds and cashback, so the page has to reflect
@@ -194,11 +203,19 @@ export const Wallet = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Customer Phone (+91...)</label>
                 <input 
                   type="text" 
+                  list="customer-list"
                   className="w-full border rounded-lg p-2" 
                   value={creditForm.phone} 
                   onChange={(e) => setCreditForm({ ...creditForm, phone: e.target.value })} 
                   placeholder="+919876543210"
                 />
+                <datalist id="customer-list">
+                  {customers.map(c => (
+                    <option key={c.id} value={c.phone}>
+                      {c.firstName} {c.lastName} ({c.email})
+                    </option>
+                  ))}
+                </datalist>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Amount (₹)</label>
@@ -354,7 +371,7 @@ export const Wallet = () => {
                     </td>
                     <td className="px-6 py-4 text-[#555f6f] font-semibold">{txn.description}</td>
                     <td className="px-6 py-4 text-[#555f6f]">
-                      {txn.date || (txn.createdAt ? new Date(txn.createdAt).toLocaleString() : "Just now")}
+                      {txn.date || (txn.createdAt ? (txn.createdAt.toDate ? txn.createdAt.toDate().toLocaleString() : new Date(txn.createdAt).toLocaleString()) : "Just now")}
                     </td>
                     <td className="px-6 py-4 text-right font-label-md font-bold">
                       <span className={(txn.amount !== undefined ? txn.amount : 0) >= 0 ? "text-[#006c49]" : "text-[#ba1a1a]"}>

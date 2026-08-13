@@ -163,7 +163,7 @@ export const MenuItems = () => {
   const handleToggleAvailable = async (item) => {
     const nextVal = !item.isAvailable;
     try {
-      await updateMenuItem(item.id, { isAvailable: nextVal }, user);
+      await updateMenuItem(item.id, { isAvailable: nextVal, outOfStock: !nextVal }, user);
       addToast(
         `Item "${item.name}" is now ${nextVal ? "Available" : "Out of Stock"}`,
         nextVal ? "success" : "warning"
@@ -206,6 +206,7 @@ export const MenuItems = () => {
       isEgg: isEggVal,
       foodType: itemFoodType,
       isAvailable: itemAvailable,
+      outOfStock: !itemAvailable,
       isRecommended: itemRecommended,
       preparationTime: Number(itemPrepTime),
       displayOrder: Number(itemDisplayOrder),
