@@ -161,7 +161,7 @@ export const MenuItems = () => {
   };
 
   const handleToggleAvailable = async (item) => {
-    const nextVal = !item.isAvailable;
+    const nextVal = !(item.isAvailable !== false);
     try {
       await updateMenuItem(item.id, { isAvailable: nextVal, outOfStock: !nextVal }, user);
       addToast(
