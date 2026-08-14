@@ -24,8 +24,14 @@ export const Wallet = () => {
   
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [creditForm, setCreditForm] = useState({ phone: "", amount: "", note: "" });
+  // The customer actually chosen from the dropdown. Kept separate from the
+  // search text: matching on the typed string alone meant a half-typed name
+  // was sent to the server as a phone number, which then reported "no
+  // customer found" for a customer who plainly exists.
+  const [creditTarget, setCreditTarget] = useState(null);
   const [isCrediting, setIsCrediting] = useState(false);
   const [customers, setCustomers] = useState([]);
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
 
   useEffect(() => {
     userRepository.getAll().then(users => {
@@ -105,8 +111,19 @@ export const Wallet = () => {
   };
 
   const handleCreditWallet = async () => {
-    if (!creditForm.phone || !creditForm.amount) {
-      addToast("Please fill phone number and amount.", "error");
+    // A customer must be picked from the list, not merely typed.
+    //
+    // This previously sent whatever was in the search box as `phone`. If the
+    // admin typed a name — which the field explicitly invites — the server
+    // looked up a user whose phone equalled "Sivaji" and reported no match,
+    // or the call silently did nothing. Requiring the selection makes the
+    // failure impossible rather than merely reported.
+    if (!creditTarget) {
+      addToast("Search for the customer and pick them from the list first.", "error");
+      return;
+    }
+    if (!creditForm.amount) {
+      addToast("Please enter an amount.", "error");
       return;
     }
     const amt = parseFloat(creditForm.amount);
@@ -120,13 +137,17 @@ export const Wallet = () => {
       const functions = getFunctions(app);
       const creditFn = httpsCallable(functions, "adminCreditCustomerWallet");
       const result = await creditFn({
-        phone: creditForm.phone,
+        // uid is the reliable key. phone is still sent so an older deployed
+        // copy of the function keeps working during a rollout.
+        uid: creditTarget.id,
+        phone: creditTarget.phone || "",
         amount: amt,
-        note: creditForm.note
+        note: creditForm.note,
       });
       addToast(result.data.message || "Wallet credited successfully.", "success");
       setShowCreditModal(false);
       setCreditForm({ phone: "", amount: "", note: "" });
+      setCreditTarget(null);
     } catch (err) {
       addToast(`Failed to credit wallet: ${err.message}`, "error");
     } finally {
@@ -199,23 +220,68 @@ export const Wallet = () => {
               </button>
             </div>
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Customer Phone (+91...)</label>
+              <div className="relative">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Customer Search (Name, Email, or Phone)</label>
                 <input 
                   type="text" 
-                  list="customer-list"
-                  className="w-full border rounded-lg p-2" 
+                  className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-[#10b981] focus:border-transparent outline-none transition-all" 
                   value={creditForm.phone} 
-                  onChange={(e) => setCreditForm({ ...creditForm, phone: e.target.value })} 
-                  placeholder="+919876543210"
+                  onChange={(e) => {
+                    setCreditForm({ ...creditForm, phone: e.target.value });
+                    setCreditTarget(null);   // editing invalidates the choice
+                    setShowCustomerDropdown(true);
+                  }} 
+                  onFocus={() => setShowCustomerDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowCustomerDropdown(false), 200)}
+                  placeholder="Type to search..."
                 />
-                <datalist id="customer-list">
-                  {customers.map(c => (
-                    <option key={c.id} value={c.phone}>
-                      {c.firstName} {c.lastName} ({c.email})
-                    </option>
-                  ))}
-                </datalist>
+                {showCustomerDropdown && creditForm.phone && (
+                  <ul
+                    // Without this the item is gone before the click lands.
+                    // Pressing the mouse down blurs the input, onBlur schedules
+                    // the dropdown to close, and the click event — which only
+                    // fires on mouse *up* — arrives at an element that no longer
+                    // exists. Suppressing the default mousedown keeps focus on
+                    // the input, so no blur happens and the click registers.
+                    onMouseDown={(e) => e.preventDefault()}
+                    className="absolute z-10 w-full mt-1 max-h-60 overflow-auto bg-white border border-gray-200 rounded-md shadow-lg text-left"
+                  >
+                    {customers
+                      .filter(c => 
+                        (c.firstName + ' ' + c.lastName).toLowerCase().includes(creditForm.phone.toLowerCase()) || 
+                        (c.email || '').toLowerCase().includes(creditForm.phone.toLowerCase()) || 
+                        (c.phone || '').includes(creditForm.phone)
+                      )
+                      .slice(0, 8)
+                      .map(c => (
+                        <li 
+                          key={c.id} 
+                          className="px-4 py-2 hover:bg-gray-50 cursor-pointer text-sm border-b border-gray-100 last:border-0"
+                          onClick={() => {
+                            setCreditTarget(c);
+                            // Show something the admin can verify at a glance,
+                            // so a mis-click is visible before they credit money.
+                            setCreditForm({
+                              ...creditForm,
+                              phone: `${c.firstName || ''} ${c.lastName || ''}`.trim()
+                                ? `${c.firstName || ''} ${c.lastName || ''}`.trim() + ` · ${c.phone || c.email || ''}`
+                                : (c.phone || c.email || ''),
+                            });
+                            setShowCustomerDropdown(false);
+                          }}
+                        >
+                          <div className="font-semibold text-gray-800">{c.firstName} {c.lastName}</div>
+                          <div className="text-gray-500 text-xs flex justify-between mt-0.5">
+                            <span>{c.email}</span>
+                            <span className="text-[#10b981] font-medium">{c.phone}</span>
+                          </div>
+                        </li>
+                    ))}
+                    {customers.filter(c => (c.firstName + ' ' + c.lastName).toLowerCase().includes(creditForm.phone.toLowerCase()) || (c.email || '').toLowerCase().includes(creditForm.phone.toLowerCase()) || (c.phone || '').includes(creditForm.phone)).length === 0 && (
+                      <li className="px-4 py-3 text-sm text-gray-500 italic text-center">No customers found</li>
+                    )}
+                  </ul>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Amount (₹)</label>

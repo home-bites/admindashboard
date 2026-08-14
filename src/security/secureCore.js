@@ -39,6 +39,8 @@ class AuthGuard {
   }
 
   resetTimeout() {
+    // Timeout disabled by request: Admin dashboard now stays logged in persistently
+    /*
     if (this.timeoutId) clearTimeout(this.timeoutId);
     this.timeoutId = setTimeout(() => {
       signOut(auth).then(() => {
@@ -46,6 +48,7 @@ class AuthGuard {
         window.location.reload();
       });
     }, 15 * 60 * 1000); // 15 mins
+    */
   }
 
   stopMonitoring() {

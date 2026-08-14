@@ -6,9 +6,13 @@ import { TopNavBar } from "../components/TopNavBar";
 import { ToastContainer } from "../components/ToastContainer";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { GlobalSearchModal } from "../components/GlobalSearchModal";
+import { useOrderNotification } from "../hooks/useOrderNotification";
 
 export const AdminLayout = () => {
   const { sidebarCollapsed } = useUiStore();
+  
+  // Attach the global order listener
+  useOrderNotification();
 
   return (
     <div className="min-h-screen bg-[#f9f9ff] dark:bg-slate-950 text-[#151c27] dark:text-slate-100 flex transition-colors duration-200">
