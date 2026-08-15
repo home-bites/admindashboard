@@ -1,6 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Paper, Typography } from '@mui/material';
-import { Map as MapIcon } from '@mui/icons-material';
 import { loadGoogleMaps, MAPS_ENABLED } from '../lib/googleMaps';
 
 /**
@@ -14,8 +12,13 @@ import { loadGoogleMaps, MAPS_ENABLED } from '../lib/googleMaps';
  * rebuilt on each snapshot. Recreating them makes the map flicker on every
  * update and throws away Google's own marker animation, which is the thing
  * that makes movement legible.
+ *
+ * Styling is Tailwind rather than MUI. This component and its page were the
+ * only two of thirty-one using MUI, which is why the panel never sat right
+ * next to the rest of the dashboard: different type scale, different spacing
+ * unit, different shadow ramp.
  */
-export default function LiveDeliveryMap({ riders = [], height = 600 }) {
+export default function LiveDeliveryMap({ riders = [], className = '' }) {
   const holderRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef(new Map());   // riderId -> google.maps.Marker
@@ -126,56 +129,53 @@ export default function LiveDeliveryMap({ riders = [], height = 600 }) {
 
   if (!MAPS_ENABLED || failed) {
     return (
-      <Paper
-        sx={{
-          height, display: 'flex', alignItems: 'center',
-          justifyContent: 'center', bgcolor: 'grey.100', borderRadius: 2,
-        }}
+      <div
+        className={`flex items-center justify-center rounded-xl border border-[#dce2f3] bg-slate-50 ${className}`}
       >
-        <Box sx={{ textAlign: 'center', px: 4 }}>
-          <MapIcon sx={{ fontSize: 56, color: 'text.disabled', mb: 1 }} />
-          <Typography variant="subtitle1" color="text.secondary">
+        <div className="px-6 text-center">
+          <span className="material-symbols-outlined mb-2 text-5xl text-slate-300">
+            map
+          </span>
+          <p className="text-xs font-bold text-slate-600">
             {MAPS_ENABLED ? 'Map could not load' : 'Map not configured'}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
+          </p>
+          <p className="mt-1 text-[11px] font-semibold text-slate-400">
             {MAPS_ENABLED
               ? 'Check that this domain is allowed on the Maps API key.'
               : 'Set VITE_GOOGLE_MAPS_KEY and restart the dev server.'}
-          </Typography>
-        </Box>
-      </Paper>
+          </p>
+        </div>
+      </div>
     );
   }
 
   return (
-    <Box sx={{ position: 'relative' }}>
-      <Box
-        ref={holderRef}
-        sx={{ height, borderRadius: 2, overflow: 'hidden', bgcolor: 'grey.200' }}
-      />
-      <Paper
-        elevation={2}
-        sx={{
-          position: 'absolute', left: 12, bottom: 12,
-          px: 1.5, py: 0.75, display: 'flex', gap: 2, alignItems: 'center',
-        }}
-      >
+    <div className={`relative overflow-hidden rounded-xl border border-[#dce2f3] ${className}`}>
+      {/* The map fills its parent rather than taking a fixed pixel height.
+          A hardcoded 600px was taller than the viewport on a laptop, which
+          is what pushed the legend off the bottom of the panel. */}
+      <div ref={holderRef} className="h-full w-full bg-slate-200" />
+
+      <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-3 rounded-lg border border-[#dce2f3] bg-white/95 px-3 py-1.5 shadow-sm backdrop-blur">
         <Legend colour="#10b981" label="Online" />
         <Legend colour="#dc2626" label="Low battery" />
         <Legend colour="#94a3b8" label="Idle" />
-        <Typography variant="caption" color="text.secondary">
+        <span className="border-l border-slate-200 pl-3 text-[11px] font-bold text-slate-500">
           {plottable.length} tracked
-        </Typography>
-      </Paper>
-    </Box>
+        </span>
+      </div>
+    </div>
   );
 }
 
 function Legend({ colour, label }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-      <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: colour }} />
-      <Typography variant="caption" color="text.secondary">{label}</Typography>
-    </Box>
+    <span className="flex items-center gap-1.5">
+      <span
+        className="h-2 w-2 rounded-full"
+        style={{ backgroundColor: colour }}
+      />
+      <span className="text-[11px] font-semibold text-slate-500">{label}</span>
+    </span>
   );
 }

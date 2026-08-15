@@ -5,12 +5,24 @@ import { SettingsService } from "../services";
 import * as LoadingComponents from "../components/LoadingComponents";
 import { isFirebaseConfigured } from "../firebase/firebaseConfig";
 import { ImageUploader } from "../components/ImageUploader";
+import {
+  clearLocalCaches,
+  exportFirestoreBackup,
+  downloadJson,
+  BACKUP_COLLECTIONS,
+} from "../lib/maintenance";
 
 export const Settings = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
   const [activeTab, setActiveTab] = useState("store");
   const [loading, setLoading] = useState(true);
+
+  // Maintenance utilities. Both run for long enough to need a visible busy
+  // state — the backup reads 29 collections, which is seconds, not instant.
+  const [cacheBusy, setCacheBusy] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupProgress, setBackupProgress] = useState(null);
   
   // Store identity state
   const [storeName, setStoreName] = useState("HomeBites Central Hub");
@@ -140,15 +152,97 @@ export const Settings = () => {
     }
   };
 
-  const handleClearCache = () => {
-    addToast("Operational cache cleared", "success");
+  /**
+   * Clears the caches that actually exist, and says which.
+   *
+   * The previous version showed "Operational cache cleared" and cleared
+   * nothing — no cache API call, no storage key removed. Someone seeing a
+   * stale build after a deploy would have clicked it, been told it worked,
+   * and still had the stale build.
+   */
+  const handleClearCache = async () => {
+    if (cacheBusy) return;
+    setCacheBusy(true);
+    try {
+      const r = await clearLocalCaches();
+
+      const parts = [];
+      if (r.caches) parts.push(`${r.caches} asset cache${r.caches === 1 ? "" : "s"}`);
+      if (r.keys.length) parts.push("saved UI preferences");
+      if (r.serviceWorker) parts.push("service worker");
+
+      if (parts.length === 0) {
+        // Nothing to clear is a real, useful answer — not a failure, and not
+        // something to dress up as a successful cleanup.
+        addToast("Nothing cached to clear.", "info");
+        setCacheBusy(false);
+        return;
+      }
+
+      addToast(`Cleared ${parts.join(", ")}. Reloading…`, "success");
+      // The running page is still controlled by the worker that was just
+      // unregistered, so the clear only takes visible effect after a reload.
+      setTimeout(() => window.location.reload(), 900);
+    } catch (e) {
+      addToast(`Could not clear cache: ${e.message}`, "error");
+      setCacheBusy(false);
+    }
   };
 
-  const handleDatabaseBackup = () => {
-    addToast("Generating JSON Database backup file...", "info");
-    setTimeout(() => {
-      addToast("Backup file generated and downloaded successfully", "success");
-    }, 1200);
+  /**
+   * Reads every known collection and downloads a real JSON file.
+   *
+   * The previous version was a 1.2-second setTimeout followed by "Backup file
+   * generated and downloaded successfully". No read, no file. The risk was not
+   * the wasted click — it was someone taking a backup before a migration and
+   * proceeding on the belief they had a restore point.
+   */
+  const handleDatabaseBackup = async () => {
+    if (backupBusy) return;
+    setBackupBusy(true);
+    setBackupProgress({ done: 0, total: BACKUP_COLLECTIONS.length, name: "" });
+
+    try {
+      const { payload, failed, totalDocs } = await exportFirestoreBackup(
+        (done, total, name) => setBackupProgress({ done, total, name })
+      );
+
+      if (totalDocs === 0) {
+        // An empty file is worse than no file: it looks like a backup.
+        addToast(
+          "Backup aborted — no documents could be read. Check your admin permissions.",
+          "error"
+        );
+        return;
+      }
+
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      downloadJson(payload, `homebites-backup-${stamp}.json`);
+
+      if (failed.length) {
+        // Partial success is reported as partial. Rounding it up to "success"
+        // is how a backup with holes gets trusted.
+        addToast(
+          `Backup downloaded with ${failed.length} collection${
+            failed.length === 1 ? "" : "s"
+          } unreadable (${failed.map((f) => f.collection).join(", ")}). ` +
+            `${totalDocs} documents saved.`,
+          "warning",
+          12000 // Longer than the 4s default: this one names collections the
+                // reader has to act on, and it must not vanish while reading.
+        );
+      } else {
+        addToast(
+          `Backup downloaded — ${totalDocs} documents across ${BACKUP_COLLECTIONS.length} collections.`,
+          "success"
+        );
+      }
+    } catch (e) {
+      addToast(`Backup failed: ${e.message}`, "error");
+    } finally {
+      setBackupBusy(false);
+      setBackupProgress(null);
+    }
   };
 
   const handleResetDatabase = async () => {
@@ -675,21 +769,32 @@ export const Settings = () => {
 
               {/* System Maintenance Utilities */}
               <div className="p-4 border border-[#dce2f3] rounded-lg">
-                <h4 className="font-label-md text-label-md text-[#151c27] font-semibold mb-4">Maintenance Utilities</h4>
+                <h4 className="font-label-md text-label-md text-[#151c27] font-semibold mb-1">Maintenance Utilities</h4>
+                {/* Says plainly what the backup is, so nobody treats a
+                    convenience export as a disaster-recovery plan. */}
+                <p className="mb-4 text-xs font-semibold text-slate-500">
+                  Backup downloads a JSON export of every collection this
+                  account can read. It is not point-in-time consistent and does
+                  not replace a scheduled server-side export.
+                </p>
                 <div className="flex flex-wrap gap-4">
                   <button
                     onClick={handleClearCache}
-                    className="px-4 py-2 border border-[#dce2f3] hover:bg-[#f0f3ff] text-[#151c27] font-label-sm text-label-sm rounded transition-all shadow-sm flex items-center gap-1.5"
+                    disabled={cacheBusy}
+                    className="px-4 py-2 border border-[#dce2f3] hover:bg-[#f0f3ff] text-[#151c27] font-label-sm text-label-sm rounded transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <span className="material-symbols-outlined text-[16px]">cleaning_services</span>
-                    Clear Cache
+                    {cacheBusy ? "Clearing…" : "Clear Cache"}
                   </button>
                   <button
                     onClick={handleDatabaseBackup}
-                    className="px-4 py-2 border border-[#dce2f3] hover:bg-[#f0f3ff] text-[#151c27] font-label-sm text-label-sm rounded transition-all shadow-sm flex items-center gap-1.5"
+                    disabled={backupBusy}
+                    className="px-4 py-2 border border-[#dce2f3] hover:bg-[#f0f3ff] text-[#151c27] font-label-sm text-label-sm rounded transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <span className="material-symbols-outlined text-[16px]">download</span>
-                    Backup Database
+                    {backupBusy && backupProgress
+                      ? `Reading ${backupProgress.done}/${backupProgress.total}…`
+                      : "Backup Database"}
                   </button>
                   <button
                     onClick={handleResetDatabase}

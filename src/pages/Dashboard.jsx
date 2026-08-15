@@ -466,7 +466,7 @@ export const Dashboard = () => {
     if (o.items && Array.isArray(o.items)) {
       o.items.forEach(i => {
         const name = i.name || "Unknown Item";
-        const qty = Number(i.qty || 1);
+        const qty = Number(i.quantity ?? i.qty ?? 1);
         dishSales[name] = (dishSales[name] || 0) + qty;
       });
     } else if (o.itemsText) {

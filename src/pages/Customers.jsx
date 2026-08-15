@@ -489,7 +489,7 @@ export const Customers = () => {
                         <div>
                           <span className="text-[10px] font-extrabold text-[#10b981]">#{o.id}</span>
                           <p className="text-[11px] text-slate-700 font-bold leading-normal mt-1 max-w-[200px] truncate" title={o.itemsText || ""}>
-                            {o.itemsText || (o.items && o.items.map(i => `${i.qty || 1}x ${i.name}`).join(", "))}
+                            {o.itemsText || (o.items && o.items.map(i => `${i.quantity ?? i.qty ?? 1}x ${i.name}`).join(", "))}
                           </p>
                         </div>
                         <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide border ${

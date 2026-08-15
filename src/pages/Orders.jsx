@@ -8,6 +8,30 @@ import EmptyState from "../components/EmptyState";
 import * as LoadingComponents from "../components/LoadingComponents";
 import { doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { db } from "../firebase/firebaseConfig";
+import EditOrderItemsModal from "../components/EditOrderItemsModal";
+
+/**
+ * Items may only be changed before the kitchen commits to cooking.
+ *
+ * After that the order and the food would disagree, and the food is what
+ * actually turns up at the door. Matches the gate in adminUpdateOrderItems —
+ * this constant hides the button, the function is what actually enforces it.
+ *
+ * The statuses are Pending -> Accepted -> Preparing -> Ready ->
+ * Out for Delivery -> Delivered. "Accepted" is the stage where the order has
+ * been taken but "Start Preparing" has not been pressed, so it belongs in the
+ * editable window.
+ *
+ * There is no "Confirmed" status in this system. An earlier version of this
+ * list said ["pending", "confirmed"], which matched nothing beyond Pending and
+ * hid the button on every accepted order — the exact stage where a customer
+ * ringing to change their order is most likely to be accommodated.
+ */
+const EDITABLE_STATUSES = ["pending", "accepted"];
+const canEditItems = (order) =>
+  EDITABLE_STATUSES.includes(
+    String(order?.status || "").toLowerCase().replace(/\s+/g, "_")
+  );
 
 export const Orders = () => {
   const { addToast } = useUiStore();
@@ -57,6 +81,7 @@ export const Orders = () => {
 
   // Active views
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [editingItems, setEditingItems] = useState(null);
   const [activeMenuOrder, setActiveMenuOrder] = useState(null);
   const [activeTracking, setActiveTracking] = useState(null);
   const [selectedPartnerIdForAssign, setSelectedPartnerIdForAssign] = useState("");
@@ -267,7 +292,7 @@ export const Orders = () => {
     const newOrder = {
       customer: spotCustomerName.trim() || "Walk-in Customer",
       phone: spotCustomerPhone.trim() || "N/A",
-      itemsText: items.map(i => `${i.qty}x ${i.name}`).join(", "),
+      itemsText: items.map(i => `${i.quantity ?? i.qty ?? 1}x ${i.name}`).join(", "),
       items: items,
       subtotal: subtotal,
       tax: tax,
@@ -449,13 +474,13 @@ export const Orders = () => {
     
     const itemsHtml = order.items ? order.items.map(item => `
       <tr class="item-row">
-        <td class="qty">${item.qty || 1}x</td>
+        <td class="qty">${item.quantity ?? item.qty ?? 1}x</td>
         <td class="desc">
           <div class="name">${item.name}</div>
           ${item.notes ? `<div class="notes">* Cooking Note: ${item.notes}</div>` : ""}
           ${item.selectedAddons && item.selectedAddons.length > 0 ? `<div class="addons">+ ${item.selectedAddons.join(", ")}</div>` : ""}
         </td>
-        <td class="amt">₹${((item.price || 0) * (item.qty || 1)).toFixed(2)}</td>
+        <td class="amt">₹${((item.price || 0) * (item.quantity ?? item.qty ?? 1)).toFixed(2)}</td>
       </tr>
     `).join("") : "";
 
@@ -1115,7 +1140,7 @@ export const Orders = () => {
                       <div className="bg-slate-50 rounded-lg p-2.5 border border-slate-100 text-xs">
                         <span className="text-[10px] font-bold text-slate-400 block uppercase mb-1">Items</span>
                         <p className="text-slate-600 font-semibold line-clamp-2 leading-relaxed">
-                          {order.itemsText || (order.items && order.items.map(i => `${i.qty}x ${i.name}`).join(", "))}
+                          {order.itemsText || (order.items && order.items.map(i => `${i.quantity ?? i.qty ?? 1}x ${i.name}`).join(", "))}
                         </p>
                       </div>
 
@@ -1563,16 +1588,31 @@ export const Orders = () => {
                         <span className="material-symbols-outlined text-[16px] text-[#10b981]">shopping_bag</span>
                         Menu Items Ordered
                       </span>
-                      <span className="bg-[#10b981]/10 text-[#10b981] text-[10px] font-bold px-2 py-0.5 rounded-full">
-                        {selectedOrder.items?.reduce((sum, item) => sum + (item.qty || 1), 0)} Qty
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="bg-[#10b981]/10 text-[#10b981] text-[10px] font-bold px-2 py-0.5 rounded-full">
+                          {selectedOrder.items?.reduce((sum, item) => sum + (item.quantity ?? item.qty ?? 1), 0)} Qty
+                        </span>
+                        {/* Shown only while the order is still editable. A
+                            disabled button on every cooked order would invite
+                            the question "why not?" on screens where the answer
+                            is never going to change. */}
+                        {canEditItems(selectedOrder) && (
+                          <button
+                            onClick={() => setEditingItems(selectedOrder)}
+                            className="flex items-center gap-1 rounded-lg border border-[#d3daea] bg-white px-2.5 py-1 text-[10px] font-bold text-slate-700 transition-colors hover:border-[#10b981] hover:text-[#10b981]"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">edit</span>
+                            Edit items
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="divide-y divide-slate-100">
                       {selectedOrder.items?.map((item, idx) => (
                         <div key={idx} className="p-4 flex justify-between items-start hover:bg-slate-50/50 transition-colors">
                           <div className="flex gap-3">
                             <div className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-700 shrink-0">
-                              {item.qty}x
+                              {item.quantity ?? item.qty ?? 1}x
                             </div>
                             <div>
                               <div className="font-bold text-sm text-slate-800">{item.name}</div>
@@ -1593,7 +1633,7 @@ export const Orders = () => {
                             </div>
                           </div>
                           <div className="font-bold text-sm text-slate-800 shrink-0">
-                            ₹{((item.price || 0) * (item.qty || 1)).toFixed(2)}
+                            ₹{((item.price || 0) * (item.quantity ?? item.qty ?? 1)).toFixed(2)}
                           </div>
                         </div>
                       ))}
@@ -1864,7 +1904,7 @@ export const Orders = () => {
                         <div key={idx} className="flex justify-between items-start text-sm">
                           <div>
                             <div className="font-black text-slate-800 flex items-center gap-1.5">
-                              <span className="bg-slate-800 text-white font-bold w-5 h-5 rounded flex items-center justify-center text-xs">{item.qty}</span>
+                              <span className="bg-slate-800 text-white font-bold w-5 h-5 rounded flex items-center justify-center text-xs">{item.quantity ?? item.qty ?? 1}</span>
                               <span>{item.name}</span>
                             </div>
                             {item.selectedAddons && item.selectedAddons.length > 0 && (
@@ -2228,6 +2268,24 @@ export const Orders = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Menu comes from the store the page already subscribes to, so the
+          picker shows current prices rather than a snapshot taken when the
+          order was placed. */}
+      {editingItems && (
+        <EditOrderItemsModal
+          order={editingItems}
+          menuItems={menuItems}
+          addToast={addToast}
+          onClose={() => setEditingItems(null)}
+          onSaved={() => {
+            // The order list is a live snapshot listener, so the row updates
+            // itself. The detail panel holds its own copy, which would
+            // otherwise keep showing the pre-edit items until reopened.
+            setSelectedOrder(null);
+          }}
+        />
       )}
     </div>
   );

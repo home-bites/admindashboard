@@ -211,7 +211,7 @@ export const OrderService = {
         phone: o.customerPhone || o.phone || "N/A",
         time: o.time || "Just now",
         timestamp: o.timestamp || (o.createdAt ? parseDate(o.createdAt).toLocaleString() : ""),
-        itemsText: o.itemsText || (o.items ? o.items.map(i => `${i.qty || 1}x ${i.name}`).join(", ") : ""),
+        itemsText: o.itemsText || (o.items ? o.items.map(i => `${i.quantity ?? i.qty ?? 1}x ${i.name}`).join(", ") : ""),
         items: o.items || [],
         subtotal: Number(o.subtotal || 0),
         tax: Number(o.tax || 0),
