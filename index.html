@@ -14,8 +14,24 @@
     <!-- PWA Favicon -->
     <link rel="icon" type="image/jpeg" href="/icon.jpg" />
     <link rel="apple-touch-icon" href="/icon.jpg" />
-    <!-- Google Maps JS SDK -->
-    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAOsFG6i-3mb6O8UHPBNRQnxlGtHwBgnP0&libraries=places,geometry,drawing"></script>
+    <!--
+      Google Maps is NOT loaded here.
+
+      This tag used to sit in the <head>, synchronous and render-blocking, on
+      every page of the dashboard — orders, coupons, settings — while the only
+      surface that draws a map is the delivery dashboard. It also pulled
+      libraries=places,geometry,drawing, none of which any file imports.
+
+      src/lib/googleMaps.js loads the SDK on demand instead, with
+      loading=async and v=weekly, and dedupes concurrent callers. That is the
+      loader LiveDeliveryMap already uses, so this tag was doing nothing except
+      producing the "loaded directly without loading=async" console warning and
+      hardcoding the browser key into the built HTML.
+
+      The key lives in VITE_GOOGLE_MAPS_KEY now. Note the key is public by
+      design once shipped to a browser — what protects it is the HTTP-referrer
+      and API restrictions on the key itself, not its absence from this file.
+    -->
     <!-- PWA Manifest -->
     <link rel="manifest" href="/manifest.json" />
   </head>

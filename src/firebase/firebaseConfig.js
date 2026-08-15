@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, initializeFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getMessaging } from "firebase/messaging";
 import { getRemoteConfig } from "firebase/remote-config";
@@ -37,7 +37,30 @@ if (isFirebaseConfigured) {
   try {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
     auth = getAuth(app);
-    db = getFirestore(app);
+
+    // Firestore streams live updates over a long-lived WebChannel connection.
+    // Chrome opens that over QUIC when it can, and some networks — corporate
+    // proxies, VPNs, and antivirus products that inspect TLS — disrupt it badly
+    // enough that the connection dies with QUIC_TOO_MANY_RTOS. The SDK then
+    // retries the channel, and those retries are the 400s that show up next to
+    // the QUIC error in the console.
+    //
+    // autoDetectLongPolling probes the connection on startup and falls back to
+    // long polling only when the stream is actually failing. The forced variant
+    // (experimentalForceLongPolling) would fix it too, but it makes every user
+    // pay the extra latency to work around a network problem most of them do
+    // not have.
+    //
+    // This must run before anything else touches Firestore — initializeFirestore
+    // throws if the instance already exists, which is what the fallback covers
+    // during dev-server hot reloads.
+    try {
+      db = initializeFirestore(app, {
+        experimentalAutoDetectLongPolling: true,
+      });
+    } catch {
+      db = getFirestore(app);
+    }
     storage = getStorage(app, "gs://homebites-production-56afa.firebasestorage.app");
     
     // Services that require browser capabilities
