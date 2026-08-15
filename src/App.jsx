@@ -16,6 +16,7 @@ import Orders from "./pages/Orders";
 import MenuItems from "./pages/MenuItems";
 import Categories from "./pages/Categories";
 import Banners from "./pages/Banners";
+import PromoCards from "./pages/PromoCards";
 import Coupons from "./pages/Coupons";
 import Deals from "./pages/Deals";
 import DeliveryPartners from "./pages/DeliveryPartners";
@@ -199,6 +200,17 @@ export const App = () => {
               element={
                 <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
                   <Categories />
+                </RBACGuard>
+              }
+            />
+
+            {/* Home-screen promo tiles. Same roles as Banners — it is the
+                same job, one level down the page. */}
+            <Route
+              path="promo-cards"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <PromoCards />
                 </RBACGuard>
               }
             />

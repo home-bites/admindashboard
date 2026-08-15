@@ -2,7 +2,24 @@ import React, { useState, useEffect } from "react";
 import * as repos from "../repositories";
 import { useUiStore } from "../store/uiStore";
 
-export const LiveCommandCenter = () => {
+export /**
+ * Human-readable age of a rider's last position report.
+ *
+ * The radar previously showed only an online dot, which stays green off a
+ * stale `isOnline` flag long after the handset stopped reporting. Age is the
+ * honest signal: a rider "online" but last seen 20 minutes ago is a rider
+ * whose phone is in a pocket with no signal.
+ */
+function minsAgo(iso) {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "just now";
+  const mins = Math.floor((Date.now() - then) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  return `${Math.floor(mins / 60)}h ago`;
+}
+
+const LiveCommandCenter = () => {
   const { addToast } = useUiStore();
   const [orders, setOrders] = useState([]);
   const [riders, setRiders] = useState([]);
@@ -45,6 +62,11 @@ export const LiveCommandCenter = () => {
           <div className="px-3.5 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-xl text-blue-600 dark:text-blue-400 font-bold text-xs">
             {riders.filter(r => r.isOnline).length} Riders Online
           </div>
+          {riders.filter(r => typeof r.batteryLevel === "number" && r.batteryLevel <= 15).length > 0 && (
+            <div className="px-3.5 py-1.5 bg-red-500/10 border border-red-500/20 rounded-xl text-red-600 dark:text-red-400 font-bold text-xs">
+              {riders.filter(r => typeof r.batteryLevel === "number" && r.batteryLevel <= 15).length} Low Battery
+            </div>
+          )}
         </div>
       </div>
 
@@ -86,9 +108,38 @@ export const LiveCommandCenter = () => {
                   <span className="text-xs font-bold truncate">{rider.name || `Rider #${idx + 1}`}</span>
                   <span className={`w-2 h-2 rounded-full ${rider.isOnline ? 'bg-emerald-400' : 'bg-slate-500'}`}></span>
                 </div>
-                <div className="mt-2 flex justify-between text-[10px] text-slate-400 font-mono">
-                  <span>Speed: {rider.isOnline ? "24 km/h" : "0 km/h"}</span>
-                  <span>Battery: 92%</span>
+                {/* Real telemetry, or an honest gap.
+                    Both figures here used to be literals — every rider showed
+                    "24 km/h" and "92%" whatever their handset was doing. A
+                    dispatcher reading a full battery on a rider about to go
+                    dark is worse off than one shown nothing at all. */}
+                <div className="mt-2 flex items-center justify-between text-[10px] font-mono">
+                  <span className="text-slate-400">
+                    {rider.lastActiveAt
+                      ? `Seen ${minsAgo(rider.lastActiveAt)}`
+                      : "No fix yet"}
+                  </span>
+                  {typeof rider.batteryLevel === "number" ? (
+                    <span
+                      className={
+                        rider.batteryLevel <= 15
+                          ? "text-red-400 font-bold"
+                          : rider.batteryLevel <= 30
+                            ? "text-amber-400"
+                            : "text-slate-400"
+                      }
+                      title={
+                        rider.batteryLevel <= 15
+                          ? "This rider may go offline mid-delivery"
+                          : "Handset battery"
+                      }
+                    >
+                      {rider.batteryLevel <= 15 ? "\u26a0 " : ""}
+                      {rider.batteryLevel}%
+                    </span>
+                  ) : (
+                    <span className="text-slate-600">Battery n/a</span>
+                  )}
                 </div>
               </div>
             ))}

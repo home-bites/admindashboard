@@ -16,26 +16,76 @@ import { db } from "../firebase/firebaseConfig";
  */
 let sharedCtx = null;
 
-function audioCtx() {
+/**
+ * The AudioContext, created only from inside a user gesture.
+ *
+ * Chrome refuses to *start* one before any interaction and logs
+ * "The AudioContext was not allowed to start". The previous version created it
+ * lazily at ring time, so on a kitchen screen that had been opened and never
+ * touched the very first order produced that warning and no sound.
+ *
+ * `allowCreate` is the whole fix: only the gesture handler passes true. Ringing
+ * never constructs a context, it only uses one that a human has already
+ * authorised — which is exactly what the browser policy asks for.
+ */
+function audioCtx(allowCreate = false) {
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return null;
-  if (!sharedCtx) sharedCtx = new AC();
+  if (!sharedCtx && allowCreate) sharedCtx = new AC();
   return sharedCtx;
 }
 
+/** True once audio is genuinely usable — drives the "enable sound" prompt. */
+export function isAudioReady() {
+  return Boolean(sharedCtx) && sharedCtx.state === "running";
+}
+
+/**
+ * Asks for notification permission, from inside a user gesture.
+ *
+ * Chrome ignores — and in some versions outright blocks — requestPermission()
+ * called on page load, and a prompt the operator dismissed leaves the state
+ * stuck at "default" forever. Either way the dashboard reports nothing and
+ * simply never shows a notification again, which is how the chime ends up
+ * working while the popup does not.
+ *
+ * Tying it to the same gesture that unlocks audio means one interaction
+ * enables both, and the prompt appears at a moment the operator is actually
+ * looking at the screen.
+ */
+function requestNotifyPermission() {
+  if (!("Notification" in window)) return;
+  if (Notification.permission !== "default") return;
+  Notification.requestPermission().catch(() => {});
+}
+
 function unlockAudio() {
-  const ctx = audioCtx();
-  if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
+  requestNotifyPermission();
+
+  const ctx = audioCtx(true);
+  if (!ctx) return;
+  // Not `once`: a context can be suspended again when the tab is backgrounded,
+  // which on an always-open kitchen display happens constantly. Re-resuming on
+  // every gesture costs nothing and keeps it alive.
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
 }
 
 // Synthesizes a loud, 2-tone "ding-dong" chime using the browser's native AudioContext
 const playLoudRing = () => {
   try {
-    const ctx = audioCtx();
-    if (!ctx) return;
+    const ctx = audioCtx();          // never creates — see audioCtx()
+    if (!ctx) {
+      console.warn(
+        "[orders] New order arrived but audio is locked. Click anywhere on the " +
+        "dashboard once to enable the chime.",
+      );
+      return;
+    }
 
-    if (ctx.state === 'suspended') {
-      ctx.resume();
+    if (ctx.state === "suspended") {
+      // Fire and forget: the tones below are scheduled against currentTime,
+      // so waiting on this promise would delay them past their own start.
+      ctx.resume().catch(() => {});
     }
 
     const osc = ctx.createOscillator();
@@ -83,14 +133,22 @@ export const useOrderNotification = () => {
   const processedOrders = useRef(new Set());
 
   useEffect(() => {
-    // Request desktop notification permission on mount
-    if ("Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
+    // Not requested on mount — see requestNotifyPermission(). Only reported,
+    // so a blocked dashboard says so instead of failing quietly.
+    if (!("Notification" in window)) {
+      console.warn("[orders] This browser has no Notification API.");
+    } else if (Notification.permission === "denied") {
+      console.warn(
+        "[orders] Desktop notifications are BLOCKED for this site. Click the " +
+        "padlock in the address bar > Notifications > Allow, then reload.",
+      );
     }
 
     // Unlock audio on the first interaction of any kind, then stop listening.
-    window.addEventListener("pointerdown", unlockAudio, { once: true });
-    window.addEventListener("keydown", unlockAudio, { once: true });
+    // Any interaction counts, and the listeners stay attached — see unlockAudio.
+    window.addEventListener("pointerdown", unlockAudio);
+    window.addEventListener("keydown", unlockAudio);
+    window.addEventListener("touchstart", unlockAudio, { passive: true });
 
     // Every writer in this system creates orders with "Pending" — the
     // website, the app and six places in Cloud Functions. This listened for
@@ -132,6 +190,15 @@ export const useOrderNotification = () => {
       if (hasNewOrder) {
         playLoudRing();
 
+        if (!("Notification" in window) || Notification.permission !== "granted") {
+          console.warn(
+            `[orders] New order, but no desktop notification: permission is ` +
+            `"${window.Notification ? Notification.permission : "unavailable"}". ` +
+            `Click anywhere on the dashboard to be prompted, or allow it via ` +
+            `the padlock icon.`,
+          );
+        }
+
         if ("Notification" in window && Notification.permission === "granted") {
           try {
             // Naming the order and its value means the kitchen can triage
@@ -165,6 +232,7 @@ export const useOrderNotification = () => {
       unsubscribe();
       window.removeEventListener("pointerdown", unlockAudio);
       window.removeEventListener("keydown", unlockAudio);
+      window.removeEventListener("touchstart", unlockAudio);
     };
   }, []);
 };

@@ -3,8 +3,25 @@ import { OrderService } from "../services";
 import { collection, onSnapshot, query, orderBy, limit } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
 
+/**
+ * Whether an order's money is real, and therefore whether the kitchen may cook it.
+ *
+ * Payment method is the honest test, not a status string:
+ *   COD / CASH → nothing to collect up front
+ *   WALLET     → debited inside the same transaction that created the order
+ *   otherwise  → only once the signature-verified webhook says "Paid"
+ */
+export const isSettledOrder = (o) => {
+  const method = String(o?.paymentMethod || "").toUpperCase();
+  if (method === "COD" || method === "CASH" || method === "WALLET") return true;
+  return String(o?.paymentStatus || "").toLowerCase() === "paid";
+};
+
 export const useOrderStore = create((set, get) => ({
+  /** Settled orders — COD, wallet, or a verified online payment. */
   orders: [],
+  /** Online orders whose payment has not been confirmed. Never cooked. */
+  awaitingPayment: [],
   loading: false,
   error: null,
   unsubscribeOrders: null,
@@ -82,8 +99,22 @@ export const useOrderStore = create((set, get) => ({
           return dateB - dateA;
         });
 
-        const filteredOrders = orders.filter(o => o.status !== "Payment Pending");
-        set({ orders: filteredOrders, loading: false });
+        // An order reaches the kitchen only once the money is real.
+        //
+        // This used to filter on `status !== "Payment Pending"`. Nothing writes
+        // that status any more — every client creates orders as "Pending" — so
+        // the filter matched nothing and unpaid online orders went straight
+        // into the kitchen queue. Food was being cooked against payments that
+        // had not completed, and might never complete.
+        set({
+          orders: orders.filter(isSettledOrder),
+          // Kept, not discarded. These are real customers who tried to pay —
+          // some will have succeeded with the webhook still in flight, others
+          // abandoned the sheet. Hiding them entirely meant nobody could tell
+          // the difference, or clear the ones that died.
+          awaitingPayment: orders.filter((o) => !isSettledOrder(o)),
+          loading: false,
+        });
       },
       (err) => {
         set({ error: err.message, loading: false });
@@ -105,8 +136,11 @@ export const useOrderStore = create((set, get) => ({
     set({ loading: true, error: null });
     try {
       const orders = await OrderService.getOrders();
-      const filteredOrders = orders.filter(o => o.status !== "Payment Pending");
-      set({ orders: filteredOrders, loading: false });
+      set({
+        orders: orders.filter(isSettledOrder),
+        awaitingPayment: orders.filter((o) => !isSettledOrder(o)),
+        loading: false,
+      });
     } catch (err) {
       set({ error: err.message, loading: false });
     }

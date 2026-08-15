@@ -50,6 +50,24 @@ export const compressImage = (file, maxWidth = 1200, quality = 0.85) => {
   });
 };
 
+/**
+ * Largest base64 image we will ever put inside a Firestore document.
+ *
+ * The fallback below exists so a failed Storage upload doesn't lose the
+ * admin's work. But a data URL is stored *in the document*, and every client
+ * that reads that collection downloads it — the customer app pulls the whole
+ * menu on open, so a 400 KB image on each of 50 dishes is a 20 MB sync before
+ * a single dish appears. That is the app's "slow loading".
+ *
+ * 100 KB keeps a small logo or icon working while making it impossible to
+ * bury a photograph in the database by accident.
+ */
+const MAX_INLINE_BYTES = 100 * 1024;
+
+/** Rough decoded size of a data URL, without allocating a copy of it. */
+const dataUrlBytes = (dataUrl) =>
+  Math.floor((String(dataUrl).split(",")[1] || "").length * 0.75);
+
 export const fileToDataURL = (file) => {
   return new Promise((resolve, reject) => {
     if (!file) {
@@ -78,7 +96,7 @@ export const uploadFile = async (file, path, onProgress = null) => {
       const storageRef = ref(storage, path);
       const uploadTask = uploadBytesResumable(storageRef, compressed);
 
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
         uploadTask.on(
           "state_changed",
           (snapshot) => {
@@ -88,8 +106,19 @@ export const uploadFile = async (file, path, onProgress = null) => {
             }
           },
           async (err) => {
-            console.warn("[Storage Engine] Firebase Storage upload error/CORS warning, using resilient DataURL fallback:", err.message);
+            console.warn("[Storage Engine] Storage upload failed, trying inline fallback:", err.message);
             const dataUrl = await fileToDataURL(compressed);
+            if (dataUrlBytes(dataUrl) > MAX_INLINE_BYTES) {
+              // Failing here is the point. Silently inlining a photo made the
+              // upload look successful while quietly making every customer's
+              // app slower, with nothing to connect the two.
+              reject(new Error(
+                "Image upload failed and the file is too large to store inline. " +
+                "This usually means Firebase Storage CORS is not configured. " +
+                "Fix Storage, or use an image under 100 KB."
+              ));
+              return;
+            }
             resolve(dataUrl);
           },
           async () => {
@@ -98,6 +127,13 @@ export const uploadFile = async (file, path, onProgress = null) => {
               resolve(downloadUrl);
             } catch (e) {
               const dataUrl = await fileToDataURL(compressed);
+              if (dataUrlBytes(dataUrl) > MAX_INLINE_BYTES) {
+                reject(new Error(
+                  "Could not get a download URL and the file is too large to " +
+                  "store inline. Check Firebase Storage configuration."
+                ));
+                return;
+              }
               resolve(dataUrl);
             }
           }

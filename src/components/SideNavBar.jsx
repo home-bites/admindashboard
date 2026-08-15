@@ -76,6 +76,7 @@ export const SideNavBar = () => {
         { to: "/deals", label: "Deals", icon: "sell" },
         { to: "/diet-offers-banners", label: "Diet Offers", icon: "local_offer" },
         { to: "/banners", label: "Banners", icon: "view_carousel" },
+        { to: "/promo-cards", label: "Promo Cards", icon: "sell" },
         { to: "/media-library", label: "Media Library", icon: "perm_media" },
       ]
     },

@@ -14,7 +14,8 @@ export const Orders = () => {
   const { user } = useAuthStore();
   
   const { 
-    orders, 
+    orders,
+    awaitingPayment,
     loading, 
     error,
     subscribeOrders, 
@@ -33,7 +34,13 @@ export const Orders = () => {
 
   // Search and Advanced Filters
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedStatus, setSelectedStatus] = useState("All");
+  // Opens on Live, not All.
+  //
+  // "All" mixed 15 delivered and 10 cancelled orders in with the handful that
+  // actually needed cooking, so the one thing the kitchen opens this page to
+  // find was buried in history it can do nothing about. Live is every state
+  // that still requires someone to act.
+  const [selectedStatus, setSelectedStatus] = useState("Live");
   const [paymentFilter, setPaymentFilter] = useState("All");
   const [modeFilter, setModeFilter] = useState("All");
   const [dateFilter, setDateFilter] = useState("");
@@ -363,8 +370,18 @@ export const Orders = () => {
     }
   };
 
+  // Every state that still needs someone to do something.
+  const LIVE_STATUSES = ["pending", "accepted", "preparing", "ready", "out for delivery", "outfordelivery"];
+
   // Filter orders
-  const filteredOrders = orders.filter((o) => {
+  //
+  // "Awaiting Payment" draws from a different list, not from a status. Those
+  // orders never entered the kitchen, so they are not in `orders` at all —
+  // treating it as another status value would have shown an empty tab.
+  const sourceOrders =
+    selectedStatus === "Awaiting Payment" ? awaitingPayment : orders;
+
+  const filteredOrders = sourceOrders.filter((o) => {
     const matchesSearch = 
       o.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
       o.customer.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -372,8 +389,12 @@ export const Orders = () => {
       
     if (!matchesSearch) return false;
     
-    // Status Filter
-    if (selectedStatus !== "All") {
+    // Status Filter. Skipped for Awaiting Payment — the list is already the
+    // filter, and those orders carry an ordinary "Pending" status that would
+    // otherwise exclude every one of them.
+    if (selectedStatus === "Live") {
+      if (!LIVE_STATUSES.includes(String(o.status || "").toLowerCase())) return false;
+    } else if (selectedStatus !== "All" && selectedStatus !== "Awaiting Payment") {
       const targetStatus = selectedStatus === "New Orders" ? "Pending" : selectedStatus;
       if (o.status.toLowerCase() !== targetStatus.toLowerCase()) return false;
     }
@@ -406,6 +427,7 @@ export const Orders = () => {
   });
 
   const counts = {
+    Live: orders.filter((o) => LIVE_STATUSES.includes(String(o.status || "").toLowerCase())).length,
     All: orders.length,
     Pending: orders.filter((o) => o.status === "Pending").length,
     Preparing: orders.filter((o) => o.status === "Preparing" || o.status === "Accepted").length,
@@ -413,6 +435,8 @@ export const Orders = () => {
     "Out for Delivery": orders.filter((o) => o.status === "Out for Delivery" || o.status === "OutForDelivery").length,
     Delivered: orders.filter((o) => o.status === "Delivered").length,
     Cancelled: orders.filter((o) => o.status === "Cancelled").length,
+    // Not a status — these never entered the kitchen at all.
+    "Awaiting Payment": awaitingPayment.length,
   };
 
   const handlePrintKOT = (order) => {
@@ -970,20 +994,57 @@ export const Orders = () => {
                 />
               </div>
               
+              {/* Two groups, one row.
+                  Nine identical chips read as a wall — the eye has nothing to
+                  latch onto and every option looks equally urgent. The states
+                  that need action sit left, the archive sits right past a
+                  divider, and a zero count is dimmed so a busy kitchen can see
+                  at a glance which queues are actually empty. */}
               <div className="flex items-center gap-1.5 overflow-x-auto py-1">
-                {["All", "Pending", "Preparing", "Ready", "Out for Delivery", "Delivered", "Cancelled"].map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => setSelectedStatus(status)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                      selectedStatus === status
-                        ? "bg-[#10b981] text-white shadow-xs"
-                        : "bg-slate-50 text-slate-600 hover:bg-slate-100"
-                    }`}
-                  >
-                    {status === "Pending" ? "New Orders" : status} ({counts[status] ?? 0})
-                  </button>
-                ))}
+                {["Live", "Pending", "Preparing", "Ready", "Out for Delivery"].map((status) => {
+                  const n = counts[status] ?? 0;
+                  const active = selectedStatus === status;
+                  return (
+                    <button
+                      key={status}
+                      onClick={() => setSelectedStatus(status)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                        active
+                          ? "bg-[#10b981] text-white shadow-xs"
+                          : n === 0
+                            ? "bg-slate-50 text-slate-400 hover:bg-slate-100"
+                            : "bg-slate-50 text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      {status === "Pending" ? "New Orders" : status} ({n})
+                    </button>
+                  );
+                })}
+
+                <span className="mx-1 h-5 w-px flex-shrink-0 bg-slate-200" aria-hidden="true" />
+
+                {["Awaiting Payment", "Delivered", "Cancelled", "All"].map((status) => {
+                  const n = counts[status] ?? 0;
+                  const active = selectedStatus === status;
+                  // Unpaid orders are the one archive state that can need
+                  // chasing, so it stays visible when there are any.
+                  const warn = status === "Awaiting Payment" && n > 0;
+                  return (
+                    <button
+                      key={status}
+                      onClick={() => setSelectedStatus(status)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                        active
+                          ? "bg-[#10b981] text-white shadow-xs"
+                          : warn
+                            ? "bg-amber-50 text-amber-700 hover:bg-amber-100"
+                            : "bg-slate-50 text-slate-500 hover:bg-slate-100"
+                      }`}
+                    >
+                      {status} ({n})
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
