@@ -306,73 +306,30 @@ export const OrderService = {
         }
       }
       
-      // Write user and rider notifications for status change
-      try {
-        const order = await repos.orderRepository.getById(orderId);
-        if (order) {
-          if (order.customerId) {
-            let title = "Order Status Update";
-            let message = `Your order #${order.orderId || orderId} is now ${status}.`;
-            if (status === "Accepted") {
-              title = "Order Confirmed";
-              message = `Your order #${order.orderId || orderId} has been accepted by the Home Chef.`;
-            } else if (status === "Preparing") {
-              title = "Preparing Your Meal";
-              message = `Your gourmet meal for order #${order.orderId || orderId} is being prepared.`;
-            } else if (status === "Ready") {
-              title = "Order Ready for Pickup";
-              message = `Your order #${order.orderId || orderId} is cooked and ready for pickup!`;
-            } else if (status === "Delivered") {
-              title = "Order Delivered";
-              message = `Your order #${order.orderId || orderId} has been successfully delivered. Enjoy!`;
-            } else if (status === "Cancelled") {
-              title = "Order Cancelled";
-              message = `Your order #${order.orderId || orderId} has been cancelled.`;
-            }
-            await repos.notificationRepository.create({
-              userId: order.customerId,
-              title,
-              message,
-              type: "orders",
-              referenceId: orderId,
-              isRead: false,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp()
-            });
-          }
+      /* Notifications are the server's job, not this page's.
+       *
+       * Two bugs lived in the block that used to be here.
+       *
+       * First, `onOrderUpdated` in functions/index.js already raises a
+       * notification for every status change, so each transition produced
+       * two: one from the trigger and one from this browser. They were not
+       * even the same shape, and the trigger's `createNotificationOnce`
+       * idempotency could not collapse a document it did not write.
+       *
+       * Second, and worse, the rider notification here was written with
+       * `type: "orders"` and nothing else to say who it was for. A person who
+       * uses one account in both apps — orders dinner, rides in the evening —
+       * has the same uid in both, so "Order #… is ready! Please pick it up
+       * from the Home Chef" appeared in their *customer* app, next to an
+       * earnings deposit of ₹0.00. The server now derives the audience from
+       * the notification's type, which is the only thing that can tell a
+       * partner message from a customer one when the recipient is the same
+       * person.
+       *
+       * If a status transition needs to tell the rider something, add it to
+       * `onOrderUpdated` with a type from PARTNER_NOTIFICATION_TYPES. Do not
+       * write it from here. */
 
-          const riderId = order.assignedPartnerId || order.deliveryPartnerId;
-          if (riderId) {
-            let riderTitle = "";
-            let riderMessage = "";
-            if (status === "Preparing") {
-              riderTitle = "Meal Preparing";
-              riderMessage = `Order #${order.orderId || orderId} is being prepared by the Home Chef.`;
-            } else if (status === "Ready") {
-              riderTitle = "Order Ready for Pickup";
-              riderMessage = `Order #${order.orderId || orderId} is ready! Please pick it up from the Home Chef.`;
-            } else if (status === "Cancelled") {
-              riderTitle = "Order Cancelled";
-              riderMessage = `Order #${order.orderId || orderId} has been cancelled by the customer/chef.`;
-            }
-            if (riderTitle) {
-              await repos.notificationRepository.create({
-                userId: riderId,
-                title: riderTitle,
-                message: riderMessage,
-                type: "orders",
-                referenceId: orderId,
-                isRead: false,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp()
-              });
-            }
-          }
-        }
-      } catch (notiErr) {
-        console.warn("Could not write notification:", notiErr.message);
-      }
-      
       return result;
     } catch (e) {
       reportWriteFailure("updateOrderStatus", e);

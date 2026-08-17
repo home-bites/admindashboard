@@ -10,6 +10,7 @@ import {
   doc, onSnapshot, updateDoc, collection, query, where, getDocs, limit,
 } from "firebase/firestore";
 import { db } from "../firebase/firebaseConfig";
+import { STAGE, STAGES, stageOf } from "../lib/orderStages";
 import EditOrderItemsModal from "../components/EditOrderItemsModal";
 
 /**
@@ -101,6 +102,57 @@ const CANCELLED_BY_LABELS = {
   admin: "Admin — cancelled from the dashboard",
 };
 
+/* ── Reading a customer's contact and address off an order ─────────────────
+ *
+ * Four surfaces write these fields and none of them agree.
+ *
+ *   customer app  customerMobile / deliveryAddress{addressLine, landmark, city, pincode}
+ *   website       customerMobile / deliveryAddress{...}
+ *   spot order    phone          / address (a string, or a map for delivery)
+ *   legacy        phone          / address
+ *
+ * This page read `order.phone` alone, which only the spot-order form writes.
+ * Every order placed from the app or the website therefore showed a blank
+ * contact — "N/A" on the card for the number a rider needs when they cannot
+ * find the door, on precisely the orders that have a door to find.
+ *
+ * Both helpers return '' rather than 'N/A' so callers decide how to render an
+ * absent value.
+ */
+function contactOf(order) {
+  const raw =
+    order?.customerMobile
+    ?? order?.phone
+    ?? order?.customerPhone
+    ?? order?.phoneNumber
+    ?? order?.deliveryAddress?.phone
+    ?? order?.deliveryAddress?.alternatePhone
+    ?? '';
+  return String(raw).trim();
+}
+
+function addressOf(order) {
+  const a = order?.deliveryAddress;
+  if (a && typeof a === 'object') {
+    const parts = [
+      a.addressLine,
+      a.doorInfo,
+      a.landmark && `Landmark: ${a.landmark}`,
+      a.city,
+      a.pincode,
+    ].filter((x) => x && String(x).trim());
+    if (parts.length) return parts.join(', ');
+  }
+  if (typeof a === 'string' && a.trim()) return a.trim();
+  if (typeof order?.address === 'string' && order.address.trim()) return order.address.trim();
+  if (order?.address && typeof order.address === 'object') {
+    const parts = [order.address.addressLine, order.address.doorInfo, order.address.label]
+      .filter((x) => x && String(x).trim());
+    if (parts.length) return parts.join(', ');
+  }
+  return '';
+}
+
 export const Orders = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
@@ -137,7 +189,8 @@ export const Orders = () => {
   // that still requires someone to act.
   // Opens on new orders — the queue that needs someone to act first. "Live"
   // is no longer a tab value; it now means Accepted and lives in FLOW_TABS.
-  const [selectedStatus, setSelectedStatus] = useState("Pending");
+  // A stage id now, not a stored status. See ../lib/orderStages.js.
+  const [selectedStatus, setSelectedStatus] = useState(STAGE.ORDERS);
 
   /*
    * Selection for the bulk payment action. Scoped to the Awaiting Payment tab
@@ -772,13 +825,18 @@ export const Orders = () => {
    * the filter is a plain equality test and there is no mapping layer to drift.
    * `label` is display only.
    */
-  const FLOW_TABS = [
-    { value: "Pending", label: "New Orders" },
-    { value: "Accepted", label: "Live Orders" },
-    { value: "Preparing", label: "Preparing" },
-    { value: "Ready", label: "Ready" },
-    { value: "Out for Delivery", label: "Out for Delivery" },
-  ];
+  /* Five stages, not nine statuses.
+   *
+   * The tabs used to be one per stored status, which meant the tab strip grew
+   * every time a client invented a spelling and an order written as
+   * "OutForDelivery" appeared under no tab at all. They are now the five
+   * stages the business actually runs, and `stageOf` in ../lib/orderStages.js
+   * maps every known spelling — plus anything unrecognised, which surfaces
+   * under Orders rather than disappearing.
+   *
+   * Nothing stored changes. Orders already in flight keep their status and
+   * simply group correctly. */
+  const FLOW_TABS = STAGES.map(({ id, label }) => ({ value: id, label }));
 
   // Filter orders
   //
@@ -810,10 +868,10 @@ export const Orders = () => {
     // the filter, and those orders carry an ordinary "Pending" or "Cancelled"
     // status that would otherwise exclude every one of them.
     if (selectedStatus !== "All" && !LIST_BACKED_TABS.includes(selectedStatus)) {
-      // "Out for Delivery" is also written as "OutForDelivery" by one client,
-      // so compare with spaces stripped rather than adding a second case.
-      const norm = (s) => String(s || "").toLowerCase().replace(/[\s_]/g, "");
-      if (norm(o.status) !== norm(selectedStatus)) return false;
+      // The tab value is a stage id, and one stage covers several stored
+      // statuses. Comparing the raw strings is what used to leave
+      // "OutForDelivery" and "Completed" homeless.
+      if (stageOf(o) !== selectedStatus) return false;
     }
 
     // Payment Filter
@@ -852,14 +910,14 @@ export const Orders = () => {
    * like it had done nothing — the badge had already counted the order before
    * the button was pressed, so nothing visibly changed afterwards.
    */
-  const normStatus = (s) => String(s || "").toLowerCase().replace(/[\s_]/g, "");
-  const countOf = (status) =>
-    orders.filter((o) => normStatus(o.status) === normStatus(status)).length;
+  // Counted through the same `stageOf` the list filter uses, so a badge can
+  // never disagree with the tab it opens.
+  const countOf = (stage) => orders.filter((o) => stageOf(o) === stage).length;
 
   const counts = {
     All: orders.length,
-    Delivered: countOf("Delivered"),
-    Cancelled: countOf("Cancelled"),
+    Delivered: countOf(STAGE.COMPLETED),
+    Cancelled: countOf(STAGE.CANCELLED),
     // Not a status — these never entered the kitchen at all.
     "Awaiting Payment": awaitingPayment.length,
     // Also not statuses. Counted off the store's own selections so the chip
@@ -963,7 +1021,7 @@ export const Orders = () => {
             </tr>
             <tr>
               <td class="meta-label">PHONE:</td>
-              <td>${order.phone}</td>
+              <td>${contactOf(order) || ''}</td>
             </tr>
             <tr>
               <td class="meta-label">DELIVERY:</td>
@@ -1061,7 +1119,7 @@ export const Orders = () => {
     const rows = data.map(o => [
       o.id,
       `"${(o.customer || "").replace(/"/g, '""')}"`,
-      o.phone || "",
+      contactOf(o),
       o.createdAt ? (o.createdAt.seconds ? new Date(o.createdAt.seconds * 1000).toLocaleString() : new Date(o.createdAt).toLocaleString()) : "",
       `"${(o.itemsText || "").replace(/"/g, '""')}"`,
       o.subtotal || 0,
@@ -1121,7 +1179,7 @@ export const Orders = () => {
             <tr>
               <td>${o.id}</td>
               <td>${o.customer}</td>
-              <td>${o.phone || ""}</td>
+              <td>${contactOf(o)}</td>
               <td>${o.createdAt ? (o.createdAt.seconds ? new Date(o.createdAt.seconds * 1000).toLocaleString() : new Date(o.createdAt).toLocaleString()) : ""}</td>
               <td>${o.itemsText || ""}</td>
               <td>${(o.subtotal || 0).toFixed(2)}</td>
@@ -1159,7 +1217,7 @@ export const Orders = () => {
     const rowsHtml = data.map(o => `
       <tr>
         <td>#${o.id}</td>
-        <td>${o.customer}<br/><small>${o.phone || ""}</small></td>
+        <td>${o.customer}<br/><small>${contactOf(o)}</small></td>
         <td>${o.createdAt ? (o.createdAt.seconds ? new Date(o.createdAt.seconds * 1000).toLocaleString() : new Date(o.createdAt).toLocaleString()) : ""}</td>
         <td>${o.itemsText || ""}</td>
         <td style="text-align: right;">₹${(o.total || 0).toFixed(2)}</td>
@@ -1604,7 +1662,7 @@ export const Orders = () => {
                           <td className="py-4 px-6 font-extrabold text-[#10b981]">#{o.id}</td>
                           <td className="py-4 px-6 font-semibold">
                             {o.customer}
-                            {o.phone && <div className="text-[10px] text-slate-400 mt-0.5">{o.phone}</div>}
+                            {contactOf(o) && <div className="text-[10px] text-slate-400 mt-0.5">{contactOf(o)}</div>}
                           </td>
                           <td className="py-4 px-6 font-black text-slate-800">₹{(o.total || 0).toFixed(2)}</td>
                           {/* Selectable monospace, because this string is
@@ -1766,7 +1824,15 @@ export const Orders = () => {
                       {/* Customer Information */}
                       <div>
                         <div className="font-bold text-sm text-slate-800 leading-snug">{order.customer}</div>
-                        <div className="text-xs text-slate-500 mt-0.5 leading-none">{order.phone}</div>
+                        <div className="text-xs text-slate-500 mt-0.5 leading-none">
+                          {contactOf(order) || <span className="italic text-slate-400">no contact number</span>}
+                        </div>
+                        {!isTakeaway && addressOf(order) && (
+                          <div className="text-[11px] text-slate-500 mt-1.5 leading-snug flex gap-1">
+                            <span className="material-symbols-outlined text-[13px] leading-none mt-px">location_on</span>
+                            <span className="line-clamp-2">{addressOf(order)}</span>
+                          </div>
+                        )}
                       </div>
 
                       {/* Items Text */}
@@ -2050,7 +2116,7 @@ export const Orders = () => {
                         <td className="py-4 px-6 font-extrabold text-[#10b981]">#{o.id}</td>
                         <td className="py-4 px-6 font-semibold">
                           {o.customer}
-                          {o.phone && <div className="text-[10px] text-slate-400 mt-0.5">{o.phone}</div>}
+                          {contactOf(o) && <div className="text-[10px] text-slate-400 mt-0.5">{contactOf(o)}</div>}
                         </td>
                         <td className="py-4 px-6 text-slate-500">{oDate}</td>
                         <td className="py-4 px-6 max-w-xs truncate" title={o.itemsText}>{o.itemsText}</td>

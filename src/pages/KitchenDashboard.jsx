@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, where, orderBy } from 'firebase/firestore';
 import { db } from '../firebase/firebaseConfig';
 import * as LoadingComponents from "../components/LoadingComponents";
+import { normaliseStatus } from '../lib/orderStages';
 
 const KitchenDashboard = () => {
   const [tabValue, setTabValue] = useState(0);
@@ -35,8 +36,16 @@ const KitchenDashboard = () => {
 
   const todaysOrders = orders.filter(o => o.type !== 'subscription');
   const subMeals = orders.filter(o => o.type === 'subscription');
-  const prepQueue = orders.filter(o => o.status === 'preparing');
-  const readyQueue = orders.filter(o => o.status === 'ready');
+  /* Case and spacing, which is why both of these were always empty.
+   *
+   * Every writer stores `Preparing` and `Ready` capitalised — the dashboard,
+   * the Cloud Functions and the delivery app all do. These two lines compared
+   * against lowercase literals, so nothing ever matched and the kitchen queue
+   * showed nothing however many orders were cooking. `normaliseStatus` is the
+   * same fold the Orders page uses, so the two pages cannot disagree about
+   * what "preparing" means. */
+  const prepQueue = orders.filter(o => normaliseStatus(o.status) === 'preparing');
+  const readyQueue = orders.filter(o => normaliseStatus(o.status) === 'ready');
 
   const tabs = [
     { label: `Today's Orders (${todaysOrders.length})`, data: todaysOrders },
