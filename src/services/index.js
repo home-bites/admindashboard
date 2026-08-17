@@ -236,6 +236,43 @@ export const OrderService = {
       return [];
     }
   },
+  /**
+   * Record that money has been received for an order, or undo that.
+   *
+   * Used for the two cases the automatic paths cannot cover: cash a rider
+   * collected on a COD delivery, and a counter payment the admin took by hand.
+   * Online orders are settled by the signature-verified Razorpay webhook and
+   * must never be marked here — doing so would assert a payment nobody checked.
+   *
+   * `paid` is written lowercase because orderStore.isSettledOrder compares
+   * String(paymentStatus).toLowerCase() === "paid". Writing "Paid" would look
+   * right in the console and still leave the order in the awaiting queue.
+   *
+   * Reversible on purpose: this is a human ticking a box, and a mis-click on a
+   * money field should be fixable without a developer. Both directions are
+   * audit-logged with the actor, so "who marked this paid" always has an answer.
+   */
+  async setOrderPaymentReceived(orderId, received, actor) {
+    try {
+      const updateData = {
+        paymentStatus: received ? "paid" : "pending",
+        paymentReceivedAt: received ? Timestamp.now() : null,
+        paymentReceivedBy: received ? (actor?.uid || "system") : null,
+        updatedAt: serverTimestamp(),
+      };
+      const result = await repos.orderRepository.update(orderId, updateData);
+      await repos.auditLogRepository.logAction(
+        actor?.uid || "system",
+        "orders",
+        received ? "ORDER_PAYMENT_RECEIVED" : "ORDER_PAYMENT_REVERTED",
+        { orderId },
+      );
+      return result;
+    } catch (e) {
+      reportWriteFailure("setOrderPaymentReceived", e);
+    }
+  },
+
   async updateOrderStatus(orderId, status, actor) {
     try {
       const updateData = {
@@ -466,6 +503,22 @@ export const OrderService = {
       const payload = {
         id: orderId,
         orderId: orderId,
+        // Links the order to a real account. Every client filters its own
+        // orders with where('customerId','==',uid) — official_page
+        // OrdersPage.jsx:339 and OrderTracking.jsx:193, customer_app
+        // order_provider.dart:59 — so without this field an order placed for
+        // a known customer is invisible to that customer. It was absent
+        // entirely before, which meant passing a customerId through orderData
+        // was silently dropped.
+        //
+        // null, not "", for a genuine walk-in: an equality query never matches
+        // null, whereas an empty string is a value somebody could accidentally
+        // match on.
+        //
+        // Note this also feeds the loyalty and wallet paths further down this
+        // file (they already read order.customerId), so a linked spot order
+        // now earns points like any other order. That is intended.
+        customerId: orderData.customerId || null,
         customerName: orderData.customer || "Walk-in Customer",
         customerPhone: orderData.phone || "N/A",
         time: "Just now",
@@ -477,6 +530,38 @@ export const OrderService = {
         deliveryCharge: Number(orderData.deliveryFee || 0),
         totalAmount: Number(orderData.total || 0),
         status: orderData.status || "Pending",
+        // orderStore.isSettledOrder treats COD/CASH/WALLET as settled and
+        // everything else as awaiting an online payment. The payload carried
+        // no paymentMethod at all, so admin-created counter orders failed that
+        // test and landed in "Awaiting Payment" — the queue for online
+        // payments still in flight — instead of the live kitchen list.
+        //
+        // Money at the till is collected in person, so CASH is the honest
+        // default here. Passed through rather than hardcoded so a spot order
+        // taken on UPI can say so later.
+        paymentMethod: orderData.paymentMethod || "CASH",
+        // Without this the order is invisible.
+        //
+        // orderStore.js:67 subscribes with
+        //   query(collection(db,"orders"), orderBy("createdAt","desc"), limit(200))
+        // and Firestore silently EXCLUDES any document that lacks the field it
+        // is ordering by. The payload never set createdAt, so every spot order
+        // was written correctly, returned an id, reported success — and never
+        // appeared in the live list. No error, because nothing errored.
+        //
+        // Timestamp.now(), NOT serverTimestamp().
+        //
+        // serverTimestamp() resolves to null in the local cache until the
+        // server acknowledges the write. Combined with the orderBy("createdAt")
+        // above, that means a freshly placed order is excluded from the live
+        // list until the round trip completes — and excluded forever if the
+        // write is sitting in Firestore's offline queue, which is what a
+        // resolved promise with nothing in the console looks like.
+        //
+        // A client Timestamp is written into the cache immediately, so the
+        // order appears at once and still sorts correctly against app and
+        // website orders. The trade is that it trusts the till's clock.
+        createdAt: Timestamp.now(),
         rider: orderData.rider || "Assigning...",
         deliveryAddress: orderData.address || "Counter Pickup",
         city: orderData.city || "Bengaluru",

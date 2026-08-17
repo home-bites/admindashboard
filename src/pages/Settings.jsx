@@ -38,9 +38,29 @@ export const Settings = () => {
   const [taxRate, setTaxRate] = useState(5.0); // GST %
   const [commissionRate, setCommissionRate] = useState(10.0); // Delivery partner commission %
   const [platformFee, setPlatformFee] = useState(15.0); // Platform fee in ₹
-  const [minOrderValue, setMinOrderValue] = useState(150.0); // Min order value in ₹
+  const [minOrderValue, setMinOrderValue] = useState(0); // Min order value in ₹; 0 = no minimum
   const [deliveryCharge, setDeliveryCharge] = useState(30.0); // Delivery charge in ₹
   const [rainCharge, setRainCharge] = useState(0.0); // Rain charge in ₹
+
+  /*
+   * Pickup / kitchen coordinates.
+   *
+   * These were never editable. `centerLatitude`/`centerLongitude` are read by
+   * the delivery app to place its "HomeBites Kitchen" marker and, from now on,
+   * by the customer app to build the pin on a takeaway order — but the only
+   * way to set them was to edit the Firestore document by hand, so in practice
+   * every surface fell back to the same hardcoded pair, 16.3067 / 80.4365.
+   * That pair is the Guntur **city centre**. A takeaway customer following it
+   * walks to the middle of town.
+   *
+   * Blank is a real, meaningful state: it means nobody has set the kitchen
+   * location, and the clients say so rather than presenting the city centre as
+   * an address. So these start empty rather than pre-filled — a pre-filled
+   * default is exactly how the minimum-order field ended up writing a value
+   * nobody chose.
+   */
+  const [kitchenLat, setKitchenLat] = useState("");
+  const [kitchenLng, setKitchenLng] = useState("");
 
   // System parameters state
   const [devBypassActive, setDevBypassActive] = useState(true);
@@ -50,6 +70,26 @@ export const Settings = () => {
   const [walletEnabled, setWalletEnabled] = useState(true);
   const [loyaltyEnabled, setLoyaltyEnabled] = useState(true);
   const [couponEnabled, setCouponEnabled] = useState(true);
+
+  /*
+   * Cash on Delivery controls.
+   *
+   * None of these existed before. COD was always on, with no floor, no
+   * ceiling, and no way to turn it off during an incident — the only lever
+   * anyone had was a per-customer block that nothing read. `codEnabled`
+   * defaults to true so adding the field changes nothing until someone
+   * deliberately switches it off.
+   *
+   * `codReleaseOnPrepaidOrder` defaults to FALSE, unlike every other toggle on
+   * this page. Releasing an abuse block early because the customer paid online
+   * once is a policy decision, not a default: it hands anyone who has been
+   * blocked a one-order way out of the block.
+   */
+  const [codEnabled, setCodEnabled] = useState(true);
+  const [codMinOrderValue, setCodMinOrderValue] = useState(0);
+  const [codMaxOrderValue, setCodMaxOrderValue] = useState(0);
+  const [codReleaseOnPrepaidOrder, setCodReleaseOnPrepaidOrder] = useState(false);
+
   const [deliveryTrackingEnabled, setDeliveryTrackingEnabled] = useState(true);
   const [showPartnerEarnings, setShowPartnerEarnings] = useState(false);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
@@ -83,13 +123,41 @@ export const Settings = () => {
           setTaxRate(data.taxRate !== undefined ? data.taxRate : 5.0);
           setCommissionRate(data.commissionRate !== undefined ? data.commissionRate : 10.0);
           setPlatformFee(data.platformFee !== undefined ? data.platformFee : 15.0);
-          setMinOrderValue(data.minimumOrderValue !== undefined ? data.minimumOrderValue : 150.0);
+          // A fourth number used to live here: the form pre-filled 150 when the
+          // field was unset, so an admin who saved the page without touching it
+          // wrote a minimum nobody had chosen. Everywhere else treats an unset
+          // minimum as 0 — the website's useAppSettings, the app's
+          // AppSettings.fallback, and the server — and 0 means "no minimum".
+          setMinOrderValue(data.minimumOrderValue !== undefined ? data.minimumOrderValue : 0);
           setDeliveryCharge(data.deliveryCharge !== undefined ? data.deliveryCharge : 30.0);
           setRainCharge(data.rainCharge !== undefined ? data.rainCharge : 0.0);
 
           setWalletEnabled(data.walletEnabled !== undefined ? data.walletEnabled : true);
           setLoyaltyEnabled(data.loyaltyEnabled !== undefined ? data.loyaltyEnabled : true);
           setCouponEnabled(data.couponEnabled !== undefined ? data.couponEnabled : true);
+
+          setCodEnabled(data.codEnabled !== undefined ? data.codEnabled : true);
+          setCodMinOrderValue(data.codMinOrderValue !== undefined ? data.codMinOrderValue : 0);
+          setCodMaxOrderValue(data.codMaxOrderValue !== undefined ? data.codMaxOrderValue : 0);
+          // Absent means false here, deliberately. Every other toggle on this
+          // page reads an absent field as "on"; this one must not, or the
+          // early release would switch itself on for every kitchen the moment
+          // the feature ships.
+          setCodReleaseOnPrepaidOrder(data.codReleaseOnPrepaidOrder !== undefined ? data.codReleaseOnPrepaidOrder : false);
+
+          // Absent stays absent. Substituting the city centre here would make
+          // the clients believe a kitchen location had been configured.
+          setKitchenLat(
+            data.centerLatitude !== undefined && data.centerLatitude !== null
+              ? String(data.centerLatitude)
+              : ""
+          );
+          setKitchenLng(
+            data.centerLongitude !== undefined && data.centerLongitude !== null
+              ? String(data.centerLongitude)
+              : ""
+          );
+
           setDeliveryTrackingEnabled(data.deliveryTrackingEnabled !== undefined ? data.deliveryTrackingEnabled : true);
           setShowPartnerEarnings(data.showPartnerEarnings !== undefined ? data.showPartnerEarnings : false);
           setMaintenanceMode(data.maintenanceMode !== undefined ? data.maintenanceMode : false);
@@ -119,7 +187,43 @@ export const Settings = () => {
     setHours(newHours);
   };
 
+  /**
+   * A latitude/longitude pair is only usable when *both* halves are real.
+   *
+   * Returns `{ ok, lat, lng, error }`. `ok` with null coordinates means the
+   * pair was left blank, which is allowed — the clients handle "not
+   * configured" honestly. Half a pair is not allowed: it would write one
+   * coordinate and leave the other defaulting to the city centre, producing a
+   * point somewhere neither the admin nor the kitchen chose.
+   */
+  const parsePickupPoint = () => {
+    const latRaw = String(kitchenLat).trim();
+    const lngRaw = String(kitchenLng).trim();
+    if (!latRaw && !lngRaw) return { ok: true, lat: null, lng: null };
+    if (!latRaw || !lngRaw) {
+      return { ok: false, error: "Enter both the pickup latitude and longitude, or leave both blank." };
+    }
+    const lat = Number(latRaw);
+    const lng = Number(lngRaw);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+      return { ok: false, error: "Pickup latitude must be a number between -90 and 90." };
+    }
+    if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+      return { ok: false, error: "Pickup longitude must be a number between -180 and 180." };
+    }
+    if (lat === 0 && lng === 0) {
+      return { ok: false, error: "0, 0 is a point in the Atlantic — leave both blank instead." };
+    }
+    return { ok: true, lat, lng };
+  };
+
   const handleSave = async () => {
+    const pickup = parsePickupPoint();
+    if (!pickup.ok) {
+      addToast(pickup.error, "error");
+      return;
+    }
+
     const payload = {
       storeName,
       supportPhone: storePhone,
@@ -138,10 +242,25 @@ export const Settings = () => {
       walletEnabled,
       loyaltyEnabled,
       couponEnabled,
+      codEnabled,
+      // Numbers, not strings. The number inputs hand back strings, and the
+      // server compares these against an order subtotal — "500" > 1000 is
+      // false in JavaScript for the wrong reason, which is the sort of limit
+      // that silently never fires.
+      codMinOrderValue: Number(codMinOrderValue),
+      codMaxOrderValue: Number(codMaxOrderValue),
+      codReleaseOnPrepaidOrder,
       deliveryTrackingEnabled,
       showPartnerEarnings,
       maintenanceMode,
-      hours
+      hours,
+      // Spread, not assigned: when the pair is blank the keys are absent from
+      // the payload entirely, so an existing value is left alone and an unset
+      // one stays unset. Writing null or 0 here would read downstream as a
+      // configured location at the wrong place.
+      ...(pickup.lat !== null
+        ? { centerLatitude: pickup.lat, centerLongitude: pickup.lng }
+        : {})
     };
 
     try {
@@ -572,11 +691,19 @@ export const Settings = () => {
               {/* Minimum Order Value */}
               <div className="flex flex-col gap-2">
                 <label className="font-label-sm text-label-sm text-[#555f6f] uppercase tracking-wider font-semibold">Minimum Order Value (₹)</label>
+                <p className="font-label-sm text-[11px] text-[#555f6f]">
+                  Set to 0 for no minimum. Enforced on the website, in the app,
+                  and server-side when the order is created.
+                </p>
                 <div className="relative">
                   <input
                     type="number"
+                    min="0"
                     value={minOrderValue}
-                    onChange={(e) => setMinOrderValue(parseFloat(e.target.value))}
+                    // parseFloat('') is NaN, which was written straight to
+                    // Firestore as a broken minimum that every surface then
+                    // read as "no minimum" only by accident.
+                    onChange={(e) => setMinOrderValue(Number(e.target.value) || 0)}
                     className="w-full border border-[#dce2f3] rounded-lg pl-8 pr-4 py-2.5 font-body-md text-body-md text-[#151c27] bg-[#f9f9ff] focus:border-[#10b981] outline-none"
                   />
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#555f6f] font-semibold">₹</span>
@@ -597,6 +724,39 @@ export const Settings = () => {
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#555f6f] font-semibold">₹</span>
                 </div>
                 <p className="text-[11px] text-[#555f6f]">Standard delivery fee added per order.</p>
+              </div>
+
+              {/* Pickup / Kitchen Location */}
+              <div className="flex flex-col gap-2 md:col-span-2">
+                <label className="font-label-sm text-label-sm text-[#555f6f] uppercase tracking-wider font-semibold">Pickup Location (Kitchen)</label>
+                <p className="font-label-sm text-[11px] text-[#555f6f]">
+                  The exact point a takeaway customer collects from, and the
+                  marker the delivery app draws as the kitchen. Leave blank if
+                  it has not been surveyed — the apps will say the pickup point
+                  is not set rather than pointing at the city centre.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={kitchenLat}
+                    onChange={(e) => setKitchenLat(e.target.value)}
+                    placeholder="Latitude e.g. 16.30120"
+                    className="w-full border border-[#dce2f3] rounded-lg px-4 py-2.5 font-body-md text-body-md text-[#151c27] bg-[#f9f9ff] focus:border-[#10b981] outline-none"
+                  />
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={kitchenLng}
+                    onChange={(e) => setKitchenLng(e.target.value)}
+                    placeholder="Longitude e.g. 80.43990"
+                    className="w-full border border-[#dce2f3] rounded-lg px-4 py-2.5 font-body-md text-body-md text-[#151c27] bg-[#f9f9ff] focus:border-[#10b981] outline-none"
+                  />
+                </div>
+                <p className="text-[11px] text-[#555f6f]">
+                  Stand at the collection door and read the coordinates off
+                  Google Maps. Both fields are required together.
+                </p>
               </div>
 
               {/* Rain Surge Charge */}
@@ -728,6 +888,86 @@ export const Settings = () => {
                       />
                       <div className="w-9 h-5 bg-[#d3daea] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#10b981]"></div>
                     </label>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* Cash on Delivery Panel */}
+              <div className="p-4 border border-[#dce2f3] rounded-lg">
+                <h4 className="font-label-md text-label-md text-[#151c27] font-semibold mb-1">Cash on Delivery</h4>
+                <p className="mb-4 text-[11px] text-[#555f6f]">
+                  These apply everywhere — the customer app, the website and the
+                  server-side order check — so a COD order that fails them is
+                  refused, not just hidden. Per-customer blocks are separate and
+                  live on the customer's file.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+                  {/* COD Enabled */}
+                  <div className="flex items-center justify-between p-3 bg-[#f9f9ff] rounded border">
+                    <div>
+                      <p className="font-label-md text-label-md text-[#151c27] font-semibold">Accept Cash on Delivery</p>
+                      <p className="text-[10px] text-[#555f6f]">Master switch. Turning this off removes COD from every checkout immediately.</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={codEnabled}
+                        onChange={(e) => setCodEnabled(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-[#d3daea] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#10b981]"></div>
+                    </label>
+                  </div>
+
+                  {/* Release an auto block on a prepaid order */}
+                  <div className="flex items-center justify-between p-3 bg-[#f9f9ff] rounded border">
+                    <div>
+                      <p className="font-label-md text-label-md text-[#151c27] font-semibold">Release an Auto COD Block on a Prepaid Order</p>
+                      <p className="text-[10px] text-[#555f6f]">Also release an auto COD block when the customer completes a prepaid order. Defaults to OFF — a block otherwise ends only when its 24 hours are up.</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={codReleaseOnPrepaidOrder}
+                        onChange={(e) => setCodReleaseOnPrepaidOrder(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-[#d3daea] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#10b981]"></div>
+                    </label>
+                  </div>
+
+                  {/* Minimum COD order value */}
+                  <div className="flex flex-col gap-2 p-3 bg-[#f9f9ff] rounded border">
+                    <label className="font-label-sm text-label-sm text-[#555f6f] uppercase tracking-wider font-semibold">Minimum COD Order Value (₹)</label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="0"
+                        value={codMinOrderValue}
+                        onChange={(e) => setCodMinOrderValue(e.target.value)}
+                        className="w-full border border-[#dce2f3] rounded-lg pl-8 pr-4 py-2 font-body-md text-body-md text-[#151c27] bg-white focus:border-[#10b981] outline-none"
+                      />
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#555f6f] font-semibold">₹</span>
+                    </div>
+                    <p className="text-[10px] text-[#555f6f]">Minimum COD order value (0 = no minimum).</p>
+                  </div>
+
+                  {/* Maximum COD order value */}
+                  <div className="flex flex-col gap-2 p-3 bg-[#f9f9ff] rounded border">
+                    <label className="font-label-sm text-label-sm text-[#555f6f] uppercase tracking-wider font-semibold">Maximum COD Order Value (₹)</label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="0"
+                        value={codMaxOrderValue}
+                        onChange={(e) => setCodMaxOrderValue(e.target.value)}
+                        className="w-full border border-[#dce2f3] rounded-lg pl-8 pr-4 py-2 font-body-md text-body-md text-[#151c27] bg-white focus:border-[#10b981] outline-none"
+                      />
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#555f6f] font-semibold">₹</span>
+                    </div>
+                    <p className="text-[10px] text-[#555f6f]">Maximum COD order value (0 = no maximum), which caps the cash a rider carries.</p>
                   </div>
 
                 </div>

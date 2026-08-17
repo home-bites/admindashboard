@@ -94,7 +94,24 @@ export const uploadFile = async (file, path, onProgress = null) => {
 
     if (isFirebaseConfigured && storage) {
       const storageRef = ref(storage, path);
-      const uploadTask = uploadBytesResumable(storageRef, compressed);
+
+      /**
+       * Cache for a year, immutable.
+       *
+       * Firebase Storage sets no Cache-Control unless you ask, and the default
+       * behaviour means a browser revalidates — often re-downloads — every
+       * image on every page load. A customer opening the menu twice in a day
+       * was fetching the same photographs twice, which is most of why the home
+       * page felt slow.
+       *
+       * `immutable` is safe here because uploads are written to a timestamped
+       * path: changing a dish's photo produces a new filename and therefore a
+       * new URL, so a cached copy can never become the wrong picture. If that
+       * naming ever changes, this must change with it.
+       */
+      const uploadTask = uploadBytesResumable(storageRef, compressed, {
+        cacheControl: "public, max-age=31536000, immutable",
+      });
 
       return new Promise((resolve, reject) => {
         uploadTask.on(

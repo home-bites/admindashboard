@@ -180,8 +180,13 @@ const SecuritySettings = () => {
                 />
               </div>
 
+              {/* This box has always saved. Until now nothing read it — the
+                  threshold that actually applied was hardcoded to 2 in the
+                  customer app, so changing this number here did nothing at
+                  all. The server now reads it, which is why the label says
+                  plainly what it does rather than naming a field. */}
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">COD Block Threshold</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Abandoned COD Checkouts Before Block</label>
                 <input
                   type="number"
                   value={settings.codAbuseThreshold}
@@ -189,6 +194,11 @@ const SecuritySettings = () => {
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:outline-none focus:border-[#10b981] font-semibold"
                   required
                 />
+                <span className="text-[10px] text-slate-400 block mt-1 leading-snug">
+                  Number of abandoned COD checkouts before Cash on Delivery is
+                  automatically blocked for 24 hours. The block then releases
+                  itself, and the count starts again from zero.
+                </span>
               </div>
             </div>
           </div>

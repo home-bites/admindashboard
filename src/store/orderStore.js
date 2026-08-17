@@ -11,17 +11,81 @@ import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
  *   WALLET     → debited inside the same transaction that created the order
  *   otherwise  → only once the signature-verified webhook says "Paid"
  */
+/**
+ * An order nobody will ever collect money for.
+ *
+ * Kept separate from isSettledOrder deliberately: a cancelled order is not
+ * settled, it is abandoned. Conflating the two would have marked it paid.
+ */
+export const isDeadOrder = (o) => {
+  const s = String(o?.status || "").toLowerCase().replace(/[\s_]/g, "");
+  return s === "cancelled" || s === "canceled" || s === "rejected";
+};
+
 export const isSettledOrder = (o) => {
   const method = String(o?.paymentMethod || "").toUpperCase();
+  // TODO: WALLET is trusted here on the strength of a client-side debit.
+  // The wallet balance is decremented by the customer app inside the same
+  // transaction that creates the order, so this dashboard is taking the
+  // client's word that the money moved. Nothing server-side re-checks it.
+  // Left as-is deliberately — a separate workstream owns moving the wallet
+  // debit behind a callable, and changing the test here first would push
+  // every legitimate wallet order into the chase queue with no way to clear
+  // it. Revisit once that lands.
   if (method === "COD" || method === "CASH" || method === "WALLET") return true;
   return String(o?.paymentStatus || "").toLowerCase() === "paid";
 };
+
+/**
+ * An order that died because the money never arrived, not because a person
+ * changed their mind.
+ *
+ * `cancelUnpaidPurchase` and `expireUnpaidOrders` stamp `cancelledBy` with a
+ * `system:` prefix; a customer or an admin cancelling writes `customer` or
+ * `admin`. Without this distinction an operator opening the Cancelled tab sees
+ * one undifferentiated wall and cannot tell an abandoned checkout — which is a
+ * conversion problem — from a customer who rang up and cancelled, which is not.
+ *
+ * Matches on prefix rather than an exact list because the payment reasons are
+ * already two values (`system:paymentFailed`, `system:paymentTimeout`) and a
+ * third would otherwise silently fall out of this bucket.
+ */
+export const isPaymentFailedOrder = (o) => {
+  if (!isDeadOrder(o)) return false;
+  const by = String(o?.cancelledBy || "");
+  return by.startsWith("system:payment") || by.startsWith("system:expired");
+};
+
+/**
+ * Money that was captured against an order nobody will ever deliver.
+ *
+ * Two ways in. `refundRequired` is set by the webhook when a capture lands
+ * after cancellation (spec §1.4), and `paymentStatus: 'PaidAfterCancel'` is
+ * what that same branch writes instead of reviving the order. Both are tested
+ * because an older document, or one written by a partial deploy, may carry the
+ * status without the flag.
+ *
+ * There is no automated refund path. This is a hand-worked queue, so it has to
+ * be visible — a captured payment on a cancelled order that nobody surfaces is
+ * simply money kept by mistake.
+ */
+export const needsRefund = (o) =>
+  o?.refundRequired === true || o?.paymentStatus === "PaidAfterCancel";
 
 export const useOrderStore = create((set, get) => ({
   /** Settled orders — COD, wallet, or a verified online payment. */
   orders: [],
   /** Online orders whose payment has not been confirmed. Never cooked. */
   awaitingPayment: [],
+  /**
+   * Cancelled because the payment failed, was dismissed, or timed out.
+   * Deliberately its own bucket rather than a badge inside Cancelled: these
+   * are abandoned checkouts, and reading them as customer cancellations
+   * misdescribes what the business is actually losing.
+   */
+  paymentFailed: [],
+  /** Captured against a cancelled order. Refunded by hand, so it must be seen. */
+  refundRequired: [],
   loading: false,
   error: null,
   unsubscribeOrders: null,
@@ -112,7 +176,21 @@ export const useOrderStore = create((set, get) => ({
           // some will have succeeded with the webhook still in flight, others
           // abandoned the sheet. Hiding them entirely meant nobody could tell
           // the difference, or clear the ones that died.
-          awaitingPayment: orders.filter((o) => !isSettledOrder(o)),
+          // Cancelled and rejected orders are excluded. They are unpaid and
+          // always will be, so without this test they sat in the chase queue
+          // permanently with nothing anyone could do about them — which is
+          // how a queue meant to be actioned becomes one people stop reading.
+          awaitingPayment: orders.filter(
+            (o) => !isSettledOrder(o) && !isDeadOrder(o),
+          ),
+          // Both of these are drawn from the whole snapshot, not from the two
+          // lists above, and that is the point. A payment-failed order is
+          // cancelled, so it is excluded from awaitingPayment; a
+          // PaidAfterCancel order is cancelled and unpaid, so it is in neither
+          // list. Deriving them from `orders` or `awaitingPayment` would have
+          // produced two permanently empty queues.
+          paymentFailed: orders.filter(isPaymentFailedOrder),
+          refundRequired: orders.filter(needsRefund),
           loading: false,
         });
       },
@@ -139,6 +217,8 @@ export const useOrderStore = create((set, get) => ({
       set({
         orders: orders.filter(isSettledOrder),
         awaitingPayment: orders.filter((o) => !isSettledOrder(o)),
+        paymentFailed: orders.filter(isPaymentFailedOrder),
+        refundRequired: orders.filter(needsRefund),
         loading: false,
       });
     } catch (err) {
@@ -154,6 +234,28 @@ export const useOrderStore = create((set, get) => ({
       set({ error: err.message, loading: false });
       throw err;
     }
+  },
+
+  /**
+   * Mark one or many orders as paid (or undo it).
+   *
+   * Sequential rather than Promise.all: a partial failure must be reportable
+   * per order, and marking money received is not something to fire in parallel
+   * and hope about. Returns the ids that failed so the caller can say which.
+   */
+  setPaymentReceived: async (ids, received, actor) => {
+    set({ loading: true, error: null });
+    const failed = [];
+    for (const id of ids) {
+      try {
+        await OrderService.setOrderPaymentReceived(id, received, actor);
+      } catch (err) {
+        console.error("[payment] failed for", id, err);
+        failed.push(id);
+      }
+    }
+    set({ loading: false });
+    return failed;
   },
 
   updateOrderStatus: async (id, status, actor) => {

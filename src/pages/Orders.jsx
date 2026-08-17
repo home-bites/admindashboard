@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
-import { useOrderStore } from "../store/orderStore";
+import { useOrderStore, isPaymentFailedOrder } from "../store/orderStore";
 import { useDeliveryPartnerStore } from "../store/deliveryPartnerStore";
 import { useMenuStore } from "../store/menuStore";
 import EmptyState from "../components/EmptyState";
 import * as LoadingComponents from "../components/LoadingComponents";
-import { doc, onSnapshot, updateDoc } from "firebase/firestore";
+import {
+  doc, onSnapshot, updateDoc, collection, query, where, getDocs, limit,
+} from "firebase/firestore";
 import { db } from "../firebase/firebaseConfig";
 import EditOrderItemsModal from "../components/EditOrderItemsModal";
 
@@ -33,19 +35,88 @@ const canEditItems = (order) =>
     String(order?.status || "").toLowerCase().replace(/\s+/g, "_")
   );
 
+/**
+ * One date parser for the three shapes a timestamp arrives in here.
+ *
+ * The same field can be a Firestore Timestamp (written by a Cloud Function),
+ * an ISO string (written by this dashboard's spot-order form) or a Date (mock
+ * data). Every place in this file that reads a date inlines its own two-branch
+ * version, and each handles a different subset — which is how a new field such
+ * as `paymentExpiresAt` would silently read as "no deadline" on exactly the
+ * orders the countdown exists for. Returns null rather than epoch zero, so
+ * "missing" and "1970" stay distinguishable.
+ */
+const parseOrderDate = (val) => {
+  if (!val) return null;
+  if (val instanceof Date) return val;
+  if (typeof val.toDate === "function") return val.toDate();
+  if (val.seconds !== undefined) return new Date(val.seconds * 1000);
+  if (typeof val === "number") return new Date(val);
+  if (typeof val === "string") {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+};
+
+/**
+ * How long is left on a payment window, in words.
+ *
+ * Returns null when there is no deadline at all. That is not an error: orders
+ * created before the payment window landed carry no `paymentExpiresAt`, and
+ * the honest thing to show for those is nothing — not a countdown computed
+ * from a guessed start time.
+ */
+const formatTimeRemaining = (val) => {
+  const deadline = parseOrderDate(val);
+  if (!deadline) return null;
+
+  const msLeft = deadline.getTime() - Date.now();
+  if (msLeft <= 0) return { expired: true, text: "Payment window expired" };
+
+  const totalMinutes = Math.floor(msLeft / 60000);
+  if (totalMinutes < 1) return { expired: false, text: "Expires in under a minute" };
+  if (totalMinutes < 60) return { expired: false, text: `Expires in ${totalMinutes}m` };
+
+  const hours = Math.floor(totalMinutes / 60);
+  return { expired: false, text: `Expires in ${hours}h ${totalMinutes % 60}m` };
+};
+
+/**
+ * Who cancelled, in a sentence support can read out.
+ *
+ * The stored values are machine tokens ("system:paymentTimeout"), and showing
+ * one unmapped invites the reader to guess. The mapping is an explicit table
+ * rather than a prettifier over the string, so a token added server-side later
+ * shows up verbatim instead of being silently reworded into something
+ * plausible and wrong.
+ */
+const CANCELLED_BY_LABELS = {
+  "system:paymentFailed": "System — the payment failed",
+  "system:paymentTimeout": "System — the payment window ran out",
+  "system:expired": "System — the payment window ran out",
+  "system:outOfServiceArea": "System — outside the delivery area",
+  "customer:abandoned": "Customer — left the checkout without paying",
+  customer: "Customer — cancelled the order",
+  admin: "Admin — cancelled from the dashboard",
+};
+
 export const Orders = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
   
-  const { 
+  const {
     orders,
     awaitingPayment,
-    loading, 
+    paymentFailed,
+    refundRequired,
+    loading,
     error,
     subscribeOrders, 
     disconnectOrders, 
     addOrder, 
-    updateOrderStatus, 
+    updateOrderStatus,
+    setPaymentReceived,
     assignDeliveryPartner,
     unassignDeliveryPartner 
   } = useOrderStore();
@@ -64,7 +135,47 @@ export const Orders = () => {
   // actually needed cooking, so the one thing the kitchen opens this page to
   // find was buried in history it can do nothing about. Live is every state
   // that still requires someone to act.
-  const [selectedStatus, setSelectedStatus] = useState("Live");
+  // Opens on new orders — the queue that needs someone to act first. "Live"
+  // is no longer a tab value; it now means Accepted and lives in FLOW_TABS.
+  const [selectedStatus, setSelectedStatus] = useState("Pending");
+
+  /*
+   * Selection for the bulk payment action. Scoped to the Awaiting Payment tab
+   * and cleared whenever the tab changes, so a selection made in one queue can
+   * never be acted on from another — selecting six orders, switching tab, then
+   * pressing a button that still refers to them is a good way to mark the
+   * wrong money received.
+   */
+  const [selectedForPayment, setSelectedForPayment] = useState([]);
+  const [markingPaid, setMarkingPaid] = useState(false);
+  useEffect(() => { setSelectedForPayment([]); }, [selectedStatus]);
+
+  const togglePaymentSelection = (id) =>
+    setSelectedForPayment((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+
+  /**
+   * Which awaiting orders an admin may tick as paid.
+   *
+   * The first version of this asked for paymentMethod COD or CASH, which was
+   * self-defeating: an order only reaches this queue because isSettledOrder()
+   * said it was NOT cod/cash/wallet, so the test could never pass and no
+   * checkbox ever rendered.
+   *
+   * Inverted to the question actually worth asking — is this a gateway payment
+   * somebody would have to verify? Online payments are settled by the
+   * signature-verified Razorpay webhook; if one is sitting here the payment did
+   * not complete, and ticking it would assert money nobody checked had arrived.
+   *
+   * Everything else is money collected by a human — cash at the counter, a
+   * rider's COD, or an older order written before paymentMethod was recorded
+   * at all. Those are exactly the ones a person can vouch for.
+   */
+  const ONLINE_METHODS = ["RAZORPAY", "ONLINE", "UPI", "CARD", "NETBANKING"];
+  const canMarkPaid = (o) => {
+    const m = String(o?.paymentMethod || "").toUpperCase();
+    return !ONLINE_METHODS.includes(m);
+  };
   const [paymentFilter, setPaymentFilter] = useState("All");
   const [modeFilter, setModeFilter] = useState("All");
   const [dateFilter, setDateFilter] = useState("");
@@ -94,6 +205,203 @@ export const Orders = () => {
   const [spotCookingInstructions, setSpotCookingInstructions] = useState("");
   const [spotSelectedItems, setSpotSelectedItems] = useState({}); // { itemId: qty }
   const [spotSearchQuery, setSpotSearchQuery] = useState("");
+
+  /*
+   * Linking a spot order to an existing account.
+   *
+   * Customers phone in orders from accounts they already have. Typing their
+   * name into a free-text box creates an order that looks right on this screen
+   * and never appears in their app, so they cannot track it and it earns them
+   * nothing. spotCustomerId is what actually links it.
+   *
+   * null means a genuine walk-in, which stays the default — most counter
+   * orders really are anonymous, and forcing a lookup would slow the till down.
+   */
+  const [spotCustomerId, setSpotCustomerId] = useState(null);
+  const [spotCustomerSearch, setSpotCustomerSearch] = useState("");
+  const [spotCustomerResults, setSpotCustomerResults] = useState([]);
+  const [spotCustomerSearching, setSpotCustomerSearching] = useState(false);
+
+  // "pickup" keeps the old hardcoded behaviour. "delivery" is only offered
+  // once a real customer is linked, because a delivery needs an address and
+  // walk-ins have none.
+  const [spotMode, setSpotMode] = useState("pickup");
+  const [spotAddresses, setSpotAddresses] = useState([]);
+  const [spotAddressId, setSpotAddressId] = useState("");
+
+  // Entered by the admin rather than read from settings, deliberately. The
+  // website and app compute this from live appSettings; this screen has no
+  // verified accessor for that yet, and inventing one risked writing a wrong
+  // fee onto a real order. An explicit field is honest — the admin can see
+  // and correct the number. Wiring it to appSettings is a follow-up.
+  const [spotDeliveryFee, setSpotDeliveryFee] = useState("");
+
+  // Free-text addons: [{ name, price }]. Kept separate from spotSelectedItems
+  // because they are not menu items and must not be looked up in menuItems.
+  const [spotAddons, setSpotAddons] = useState([]);
+  const [spotAddonName, setSpotAddonName] = useState("");
+  const [spotAddonPrice, setSpotAddonPrice] = useState("");
+
+  /*
+   * Customer search.
+   *
+   * Firestore cannot do substring matching, so this fetches a bounded slice of
+   * `users` and filters in memory. That is honest for a single-kitchen customer
+   * list and avoids pretending a prefix query is a search. If the list ever
+   * outgrows this, the answer is a real search index, not a bigger limit.
+   */
+  useEffect(() => {
+    const term = spotCustomerSearch.trim().toLowerCase();
+    if (term.length < 2) { setSpotCustomerResults([]); return; }
+
+    let cancelled = false;
+    setSpotCustomerSearching(true);
+    (async () => {
+      try {
+        const snap = await getDocs(query(collection(db, "users"), limit(300)));
+        if (cancelled) return;
+        const digits = term.replace(/\D/g, "");
+        const hits = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter((u) => {
+            const name = String(u.name || u.displayName || "").toLowerCase();
+            const phone = String(u.phone || u.phoneNumber || "").replace(/\D/g, "");
+            return name.includes(term) || (digits.length >= 3 && phone.includes(digits));
+          })
+          .slice(0, 8);
+        setSpotCustomerResults(hits);
+      } catch (e) {
+        console.error("[spot] customer search failed", e);
+        if (!cancelled) setSpotCustomerResults([]);
+      } finally {
+        if (!cancelled) setSpotCustomerSearching(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [spotCustomerSearch]);
+
+  /**
+   * Delivery addresses for the linked customer, from two sources.
+   *
+   * 1. The `addresses` collection — addresses they deliberately saved.
+   * 2. Where they were actually delivered before, read off their past orders.
+   *
+   * The second source is not a nicety. ProfilePage.jsx records that the website
+   * kept the delivery location in localStorage and never wrote to `addresses`
+   * until recently, so a customer with a long order history can have no saved
+   * address documents at all. Offering only source 1 showed "no saved address"
+   * to exactly the regulars most likely to phone an order in.
+   *
+   * The orders query is a single equality filter with a client-side sort, on
+   * purpose. Adding orderBy("createdAt") would make it a composite query and
+   * require an index that does not exist — it would throw here rather than
+   * degrade, and the admin would see an empty list with no explanation.
+   */
+  useEffect(() => {
+    if (!spotCustomerId) { setSpotAddresses([]); setSpotAddressId(""); return; }
+    let cancelled = false;
+
+    /** Both coord spellings appear in this data; accept either. */
+    const coordsOf = (a) => ({
+      lat: Number(a?.latitude ?? a?.lat),
+      lng: Number(a?.longitude ?? a?.lng),
+    });
+    const usable = (a) => {
+      const { lat, lng } = coordsOf(a);
+      return Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0);
+    };
+
+    (async () => {
+      try {
+        const [addrSnap, orderSnap] = await Promise.all([
+          getDocs(query(collection(db, "addresses"), where("userId", "==", spotCustomerId))),
+          getDocs(query(
+            collection(db, "orders"),
+            where("customerId", "==", spotCustomerId),
+            limit(25),
+          )),
+        ]);
+        if (cancelled) return;
+
+        const saved = addrSnap.docs
+          .map((d) => ({ id: d.id, ...d.data(), source: "saved" }))
+          .filter(usable);
+
+        // Newest first, so the most recent delivery is the one offered.
+        const past = orderSnap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => {
+            const t = (o) => (o.createdAt?.seconds ? o.createdAt.seconds * 1000
+              : new Date(o.createdAt || 0).getTime());
+            return t(b) - t(a);
+          })
+          .map((o) => o.deliveryAddress)
+          // Counter pickup is a string, not an address.
+          .filter((a) => a && typeof a === "object" && usable(a))
+          .map((a) => ({
+            id: `past:${coordsOf(a).lat},${coordsOf(a).lng}`,
+            ...a,
+            source: "past",
+          }));
+
+        // De-duplicate on coordinates so an address that is both saved and
+        // previously delivered to appears once, preferring the saved copy.
+        const seen = new Set(saved.map((a) => {
+          const { lat, lng } = coordsOf(a);
+          return `${lat},${lng}`;
+        }));
+        const merged = [...saved];
+        past.forEach((a) => {
+          const { lat, lng } = coordsOf(a);
+          const key = `${lat},${lng}`;
+          if (!seen.has(key)) { seen.add(key); merged.push(a); }
+        });
+
+        setSpotAddresses(merged);
+        const preferred = merged.find((a) => a.isDefault) || merged[0];
+        setSpotAddressId(preferred ? preferred.id : "");
+      } catch (e) {
+        console.error("[spot] address load failed", e);
+        if (!cancelled) setSpotAddresses([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [spotCustomerId]);
+
+  /**
+   * One source of truth for the spot order money.
+   *
+   * The totals panel used to inline the same reducer three times, over
+   * spotSelectedItems only. So addons were charged on the saved order but
+   * missing from the figure the admin read out to the customer — the screen
+   * and the database disagreed, and the screen is what gets quoted.
+   *
+   * Derived rather than stored, so it cannot drift out of sync with the
+   * inputs. handlePlaceSpotOrder recomputes from the same rules.
+   */
+  const spotItemsSubtotal = Object.entries(spotSelectedItems).reduce((sum, [itemId, qty]) => {
+    const item = menuItems.find((m) => m.id === itemId);
+    return sum + (item ? Number(item.price) * qty : 0);
+  }, 0);
+  const spotAddonsSubtotal = spotAddons.reduce((sum, a) => sum + (Number(a.price) || 0), 0);
+  const spotSubtotal = spotItemsSubtotal + spotAddonsSubtotal;
+  const spotTax = spotSubtotal * 0.05;
+  const spotDelivery = spotMode === "delivery" && spotCustomerId
+    ? Number(spotDeliveryFee) || 0
+    : 0;
+  const spotTotal = spotSubtotal + spotTax + spotDelivery;
+  const spotItemCount =
+    Object.values(spotSelectedItems).reduce((a, b) => a + b, 0) + spotAddons.length;
+
+  /** Clears the account link and returns the form to walk-in defaults. */
+  const unlinkSpotCustomer = () => {
+    setSpotCustomerId(null);
+    setSpotCustomerName("Walk-in Customer");
+    setSpotCustomerPhone("");
+    setSpotMode("pickup");
+    setSpotAddresses([]);
+    setSpotAddressId("");
+  };
 
   const isTakeaway = selectedOrder 
     ? (selectedOrder.address === "Counter Pickup" || (selectedOrder.deliveryAddress && selectedOrder.deliveryAddress.addressLine === "Counter Pickup"))
@@ -283,13 +591,36 @@ export const Orders = () => {
       return;
     }
 
+    // Addons are ordinary line items once priced, so they flow through
+    // subtotal and therefore through GST. Appended after the emptiness check
+    // above on purpose: "extra raita" is not an order on its own.
+    spotAddons.forEach((a) => {
+      const price = Number(a.price) || 0;
+      items.push({ name: a.name, qty: 1, quantity: 1, price, notes: "Addon", isAddon: true });
+      subtotal += price;
+    });
+
     const taxRate = 5.0; // standard 5% tax
     const tax = subtotal * (taxRate / 100);
     const platformFee = 0.00; // no platform fee for counter pickup
-    const deliveryFee = 0.00;
+
+    // Delivery is only reachable with a linked customer, so an address exists.
+    const isDelivery = spotMode === "delivery" && Boolean(spotCustomerId);
+    const chosenAddress = isDelivery
+      ? spotAddresses.find((a) => a.id === spotAddressId)
+      : null;
+
+    if (isDelivery && !chosenAddress) {
+      addToast("Choose a delivery address, or switch to counter pickup.", "error");
+      return;
+    }
+
+    const deliveryFee = isDelivery ? Number(spotDeliveryFee) || 0 : 0;
     const total = subtotal + tax + platformFee + deliveryFee;
 
     const newOrder = {
+      // null for a walk-in. This is the field every customer client filters on.
+      customerId: spotCustomerId || null,
       customer: spotCustomerName.trim() || "Walk-in Customer",
       phone: spotCustomerPhone.trim() || "N/A",
       itemsText: items.map(i => `${i.quantity ?? i.qty ?? 1}x ${i.name}`).join(", "),
@@ -299,9 +630,33 @@ export const Orders = () => {
       deliveryFee: deliveryFee,
       total: total,
       status: "Accepted", // Directly accepted since it's a spot order placed by admin
-      rider: "No Rider Required",
-      address: "Counter Pickup",
-      city: "Store Location",
+      // Collected at the counter, so the order is settled the moment it is
+      // taken. Without this isSettledOrder() sends it to Awaiting Payment.
+      paymentMethod: "CASH",
+      // Marks this as a counter sale a member of staff is taking in person,
+      // not a customer choosing cash in the app. The server-side cash
+      // eligibility check — the abuse lock, the admin block, the value limits
+      // — governs self-service ordering and would otherwise cancel a walk-in
+      // out from under the till. Customer clients cannot write this field;
+      // `assertsServerOwnedOrderFields()` in firestore.rules refuses it.
+      placedBy: "admin",
+      rider: isDelivery ? "Assigning..." : "No Rider Required",
+      // Delivery orders carry the saved address object so the rider app and
+      // the customer's live map read the same coordinates every other order
+      // uses. Both coord spellings are kept because the clients disagree on
+      // which they read.
+      address: isDelivery
+        ? {
+            label: chosenAddress.label || "Home",
+            addressLine: chosenAddress.addressLine || chosenAddress.doorInfo || "",
+            doorInfo: chosenAddress.doorInfo || "",
+            latitude: chosenAddress.latitude ?? chosenAddress.lat ?? null,
+            longitude: chosenAddress.longitude ?? chosenAddress.lng ?? null,
+            lat: chosenAddress.lat ?? chosenAddress.latitude ?? null,
+            lng: chosenAddress.lng ?? chosenAddress.longitude ?? null,
+          }
+        : "Counter Pickup",
+      city: isDelivery ? "Guntur" : "Store Location",
       note: spotCookingInstructions.trim() || "",
       createdAt: new Date().toISOString()
     };
@@ -314,6 +669,16 @@ export const Orders = () => {
       setSpotCustomerPhone("");
       setSpotCookingInstructions("");
       setSpotSelectedItems({});
+      setSpotCustomerId(null);
+      setSpotCustomerSearch("");
+      setSpotCustomerResults([]);
+      setSpotMode("pickup");
+      setSpotAddresses([]);
+      setSpotAddressId("");
+      setSpotDeliveryFee("");
+      setSpotAddons([]);
+      setSpotAddonName("");
+      setSpotAddonPrice("");
       setShowSpotOrderModal(false);
     } catch (err) {
       addToast(`Failed to place spot order: ${err.message}`, "error");
@@ -395,16 +760,43 @@ export const Orders = () => {
     }
   };
 
-  // Every state that still needs someone to do something.
-  const LIVE_STATUSES = ["pending", "accepted", "preparing", "ready", "out for delivery", "outfordelivery"];
+  /**
+   * The kitchen flow, one tab per stage.
+   *
+   * Previously "Live" meant every active state at once, which collided with how
+   * the counter actually talks: they call an accepted-but-not-yet-cooking order
+   * a live order. So a tab labelled Live showed pending, accepted, preparing,
+   * ready and out-for-delivery together, and no tab showed accepted alone.
+   *
+   * Each entry's `value` is the literal status string stored on the order, so
+   * the filter is a plain equality test and there is no mapping layer to drift.
+   * `label` is display only.
+   */
+  const FLOW_TABS = [
+    { value: "Pending", label: "New Orders" },
+    { value: "Accepted", label: "Live Orders" },
+    { value: "Preparing", label: "Preparing" },
+    { value: "Ready", label: "Ready" },
+    { value: "Out for Delivery", label: "Out for Delivery" },
+  ];
 
   // Filter orders
   //
   // "Awaiting Payment" draws from a different list, not from a status. Those
   // orders never entered the kitchen, so they are not in `orders` at all —
   // treating it as another status value would have shown an empty tab.
+  //
+  // "Payment Failed" and "Refund Required" are the same shape of thing: both
+  // are store-side selections keyed on fields other than status (`cancelledBy`
+  // and `refundRequired` / `PaidAfterCancel`), and both would be empty if they
+  // were filtered out of `orders`, because a cancelled unpaid order is neither
+  // settled nor awaiting anything.
+  const LIST_BACKED_TABS = ["Awaiting Payment", "Payment Failed", "Refund Required"];
   const sourceOrders =
-    selectedStatus === "Awaiting Payment" ? awaitingPayment : orders;
+    selectedStatus === "Awaiting Payment" ? awaitingPayment
+      : selectedStatus === "Payment Failed" ? paymentFailed
+        : selectedStatus === "Refund Required" ? refundRequired
+          : orders;
 
   const filteredOrders = sourceOrders.filter((o) => {
     const matchesSearch = 
@@ -414,14 +806,14 @@ export const Orders = () => {
       
     if (!matchesSearch) return false;
     
-    // Status Filter. Skipped for Awaiting Payment — the list is already the
-    // filter, and those orders carry an ordinary "Pending" status that would
-    // otherwise exclude every one of them.
-    if (selectedStatus === "Live") {
-      if (!LIVE_STATUSES.includes(String(o.status || "").toLowerCase())) return false;
-    } else if (selectedStatus !== "All" && selectedStatus !== "Awaiting Payment") {
-      const targetStatus = selectedStatus === "New Orders" ? "Pending" : selectedStatus;
-      if (o.status.toLowerCase() !== targetStatus.toLowerCase()) return false;
+    // Status Filter. Skipped for the list-backed tabs — the list is already
+    // the filter, and those orders carry an ordinary "Pending" or "Cancelled"
+    // status that would otherwise exclude every one of them.
+    if (selectedStatus !== "All" && !LIST_BACKED_TABS.includes(selectedStatus)) {
+      // "Out for Delivery" is also written as "OutForDelivery" by one client,
+      // so compare with spaces stripped rather than adding a second case.
+      const norm = (s) => String(s || "").toLowerCase().replace(/[\s_]/g, "");
+      if (norm(o.status) !== norm(selectedStatus)) return false;
     }
 
     // Payment Filter
@@ -451,18 +843,31 @@ export const Orders = () => {
     return true;
   });
 
+  /*
+   * Counts are derived with the SAME comparison the list filter uses.
+   *
+   * They used not to be: counts.Preparing included "Accepted" while the list
+   * matched "Preparing" exactly, so an accepted order made the Preparing tab
+   * read "(1)" and then open empty. That is what made pressing Prepare look
+   * like it had done nothing — the badge had already counted the order before
+   * the button was pressed, so nothing visibly changed afterwards.
+   */
+  const normStatus = (s) => String(s || "").toLowerCase().replace(/[\s_]/g, "");
+  const countOf = (status) =>
+    orders.filter((o) => normStatus(o.status) === normStatus(status)).length;
+
   const counts = {
-    Live: orders.filter((o) => LIVE_STATUSES.includes(String(o.status || "").toLowerCase())).length,
     All: orders.length,
-    Pending: orders.filter((o) => o.status === "Pending").length,
-    Preparing: orders.filter((o) => o.status === "Preparing" || o.status === "Accepted").length,
-    Ready: orders.filter((o) => o.status === "Ready").length,
-    "Out for Delivery": orders.filter((o) => o.status === "Out for Delivery" || o.status === "OutForDelivery").length,
-    Delivered: orders.filter((o) => o.status === "Delivered").length,
-    Cancelled: orders.filter((o) => o.status === "Cancelled").length,
+    Delivered: countOf("Delivered"),
+    Cancelled: countOf("Cancelled"),
     // Not a status — these never entered the kitchen at all.
     "Awaiting Payment": awaitingPayment.length,
+    // Also not statuses. Counted off the store's own selections so the chip
+    // and the list it opens can never disagree.
+    "Payment Failed": paymentFailed.length,
+    "Refund Required": refundRequired.length,
   };
+  FLOW_TABS.forEach((t) => { counts[t.value] = countOf(t.value); });
 
   const handlePrintKOT = (order) => {
     if (!order) return;
@@ -957,9 +1362,18 @@ export const Orders = () => {
           {showFilters && (
             <div className="bg-white border border-slate-200 rounded-xl p-4 mb-6 shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 animate-fadeIn">
               <div>
+                {/* Filters the view only — it does not write paymentMethod to
+                    any order, and neither does its twin in the history tab.
+                    Worth stating because paymentMethod is what isSettledOrder
+                    reads to decide whether the kitchen may cook: a control
+                    that set it directly with updateDoc would let an admin
+                    turn an unpaid online order into a settled COD one with a
+                    dropdown, bypassing every payment check. If such a control
+                    is ever wanted, it must go through a callable that records
+                    who changed it and why. */}
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Payment Method</label>
-                <select 
-                  value={paymentFilter} 
+                <select
+                  value={paymentFilter}
                   onChange={(e) => setPaymentFilter(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:border-[#10b981]"
                 >
@@ -1026,7 +1440,7 @@ export const Orders = () => {
                   divider, and a zero count is dimmed so a busy kitchen can see
                   at a glance which queues are actually empty. */}
               <div className="flex items-center gap-1.5 overflow-x-auto py-1">
-                {["Live", "Pending", "Preparing", "Ready", "Out for Delivery"].map((status) => {
+                {FLOW_TABS.map(({ value: status, label }) => {
                   const n = counts[status] ?? 0;
                   const active = selectedStatus === status;
                   return (
@@ -1041,19 +1455,24 @@ export const Orders = () => {
                             : "bg-slate-50 text-slate-700 hover:bg-slate-100"
                       }`}
                     >
-                      {status === "Pending" ? "New Orders" : status} ({n})
+                      {label} ({n})
                     </button>
                   );
                 })}
 
                 <span className="mx-1 h-5 w-px flex-shrink-0 bg-slate-200" aria-hidden="true" />
 
-                {["Awaiting Payment", "Delivered", "Cancelled", "All"].map((status) => {
+                {["Awaiting Payment", "Refund Required", "Payment Failed", "Delivered", "Cancelled", "All"].map((status) => {
                   const n = counts[status] ?? 0;
                   const active = selectedStatus === status;
                   // Unpaid orders are the one archive state that can need
                   // chasing, so it stays visible when there are any.
                   const warn = status === "Awaiting Payment" && n > 0;
+                  // Refunds are louder than a chase queue on purpose: this is
+                  // money already taken from a customer for an order that will
+                  // never arrive, and nothing clears it except a person
+                  // issuing the refund.
+                  const alarm = status === "Refund Required" && n > 0;
                   return (
                     <button
                       key={status}
@@ -1061,9 +1480,11 @@ export const Orders = () => {
                       className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                         active
                           ? "bg-[#10b981] text-white shadow-xs"
-                          : warn
-                            ? "bg-amber-50 text-amber-700 hover:bg-amber-100"
-                            : "bg-slate-50 text-slate-500 hover:bg-slate-100"
+                          : alarm
+                            ? "bg-rose-50 text-rose-700 hover:bg-rose-100"
+                            : warn
+                              ? "bg-amber-50 text-amber-700 hover:bg-amber-100"
+                              : "bg-slate-50 text-slate-500 hover:bg-slate-100"
                       }`}
                     >
                       {status} ({n})
@@ -1074,8 +1495,159 @@ export const Orders = () => {
             </div>
           </div>
 
-          {/* Orders Grid */}
-          {filteredOrders.length === 0 ? (
+          {/* Bulk payment bar. Awaiting Payment only — every other tab is a
+              kitchen queue where money is not the question being asked. */}
+          {selectedStatus === "Awaiting Payment" && filteredOrders.length > 0 && (() => {
+            const markable = filteredOrders.filter(canMarkPaid);
+            const allChosen = markable.length > 0
+              && markable.every((o) => selectedForPayment.includes(o.id));
+            const onlineCount = filteredOrders.length - markable.length;
+
+            return (
+              <div className="mb-4 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={allChosen}
+                      disabled={markable.length === 0}
+                      onChange={() => setSelectedForPayment(
+                        allChosen ? [] : markable.map((o) => o.id),
+                      )}
+                      className="h-4 w-4 accent-[#10b981]"
+                    />
+                    <span className="text-xs font-bold text-slate-600">
+                      Select all cash / COD ({markable.length})
+                    </span>
+                  </label>
+
+                  <span className="text-xs text-slate-400">
+                    {selectedForPayment.length} selected
+                  </span>
+
+                  <button
+                    type="button"
+                    disabled={selectedForPayment.length === 0 || markingPaid}
+                    onClick={async () => {
+                      setMarkingPaid(true);
+                      const ids = [...selectedForPayment];
+                      const failed = await setPaymentReceived(ids, true, user);
+                      setMarkingPaid(false);
+                      setSelectedForPayment([]);
+                      if (failed.length === 0) {
+                        addToast(`Payment recorded for ${ids.length} order(s)`, "success");
+                      } else {
+                        // Names the count that failed rather than claiming a
+                        // blanket success, because this is money.
+                        addToast(
+                          `${ids.length - failed.length} updated, ${failed.length} failed`,
+                          "error",
+                        );
+                      }
+                    }}
+                    className="ml-auto rounded-lg bg-[#10b981] px-4 py-2 text-xs font-bold text-white disabled:opacity-40 hover:bg-[#0ea472]"
+                  >
+                    {markingPaid ? "Recording…" : "Payment completed"}
+                  </button>
+                </div>
+
+                {onlineCount > 0 && (
+                  <p className="mt-2.5 text-[11px] leading-relaxed text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
+                    {onlineCount} online order(s) here cannot be ticked. Those are
+                    settled by the payment gateway's verified webhook — if one is
+                    still listed, the payment did not complete, and marking it paid
+                    by hand would record money nobody confirmed arrived.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Refund queue.
+              A table rather than the card grid, deliberately. This is not a
+              kitchen queue — nobody is cooking these — it is a list somebody
+              works down with the payment gateway console open beside it, so
+              the five fields needed to find and issue the refund are what the
+              row shows, and nothing else competes with them. */}
+          {selectedStatus === "Refund Required" ? (
+            <div className="flex flex-col gap-4">
+              <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+                <h3 className="text-sm font-black text-rose-800 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[18px]">currency_rupee</span>
+                  Refunds owed to customers
+                </h3>
+                <p className="mt-1 text-[11px] leading-relaxed font-semibold text-rose-700">
+                  These payments were captured against orders that had already
+                  been cancelled — the money left the customer's account and no
+                  food will ever arrive for it. Nothing refunds them
+                  automatically. Issue each one in the payment gateway using
+                  the payment ID below, then record it there.
+                </p>
+              </div>
+
+              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-[#f0f3ff] border-b border-slate-200">
+                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider">Order ID</th>
+                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider">Customer</th>
+                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider">Amount</th>
+                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider">Payment ID</th>
+                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider">Reason</th>
+                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-xs font-medium text-slate-700 divide-y divide-slate-100">
+                      {filteredOrders.map((o) => (
+                        <tr key={o.id} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="py-4 px-6 font-extrabold text-[#10b981]">#{o.id}</td>
+                          <td className="py-4 px-6 font-semibold">
+                            {o.customer}
+                            {o.phone && <div className="text-[10px] text-slate-400 mt-0.5">{o.phone}</div>}
+                          </td>
+                          <td className="py-4 px-6 font-black text-slate-800">₹{(o.total || 0).toFixed(2)}</td>
+                          {/* Selectable monospace, because this string is
+                              pasted into the gateway console. A payment ID
+                              nobody can copy accurately is a refund nobody
+                              can issue. */}
+                          <td className="py-4 px-6 font-mono text-[11px] text-slate-600 select-all break-all">
+                            {o.paymentId || "— none recorded —"}
+                          </td>
+                          <td className="py-4 px-6 text-slate-600 max-w-xs">
+                            {o.refundReason || "Captured after the order was cancelled"}
+                            {o.paymentStatus && (
+                              <div className="text-[10px] text-rose-600 font-bold uppercase mt-0.5">
+                                {o.paymentStatus}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-4 px-6 text-right whitespace-nowrap">
+                            <button
+                              onClick={() => {
+                                setSelectedOrder(o);
+                                setDetailTab("details");
+                              }}
+                              className="px-2.5 py-1 text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors border border-slate-200"
+                            >
+                              Details
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {filteredOrders.length === 0 && (
+                        <tr>
+                          <td colSpan="6" className="py-12 text-center text-slate-400 italic">
+                            No refunds outstanding.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          ) : filteredOrders.length === 0 ? (
             <div className="bg-white border border-slate-200 rounded-xl p-12 shadow-sm text-center">
               <EmptyState
                 icon="local_pizza"
@@ -1088,6 +1660,8 @@ export const Orders = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
               {filteredOrders.map((order) => {
+                const showPaymentTick =
+                  selectedStatus === "Awaiting Payment" && canMarkPaid(order);
                 const priority = getOrderPriority(order);
                 const isTakeaway = order.address === "Counter Pickup" || (order.deliveryAddress && order.deliveryAddress.addressLine === "Counter Pickup");
                 const instructionsList = getOrderCookingInstructions(order);
@@ -1101,6 +1675,25 @@ export const Orders = () => {
                     }}
                     className="bg-white border border-slate-200 rounded-xl shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer flex flex-col justify-between overflow-hidden group hover:-translate-y-0.5"
                   >
+                    {/* Selecting an order must not also open its detail sheet,
+                        hence stopPropagation on the row's onClick above. */}
+                    {showPaymentTick && (
+                      <label
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex items-center gap-2 px-4 pt-3 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedForPayment.includes(order.id)}
+                          onChange={() => togglePaymentSelection(order.id)}
+                          className="h-4 w-4 accent-[#10b981]"
+                        />
+                        <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                          Mark payment received
+                        </span>
+                      </label>
+                    )}
+
                     {/* Card Header */}
                     <div className="p-4 pb-3 border-b border-slate-100">
                       <div className="flex justify-between items-start gap-2 mb-2">
@@ -1119,13 +1712,53 @@ export const Orders = () => {
                           {priority.label} {priority.elapsed !== undefined && `(${priority.elapsed}m ago)`}
                         </span>
                         <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase border ${
-                          isTakeaway 
-                            ? "bg-amber-50 text-amber-700 border-amber-200" 
+                          isTakeaway
+                            ? "bg-amber-50 text-amber-700 border-amber-200"
                             : "bg-indigo-50 text-indigo-700 border-indigo-200"
                         }`}>
                           {isTakeaway ? "🛍️ Takeaway" : "🚚 Delivery"}
                         </span>
+
+                        {/* A system cancellation is not a customer changing
+                            their mind. Both read "Cancelled" in the status
+                            pill, so without this badge an operator scanning
+                            the list has no way to tell an abandoned checkout
+                            from a call to the kitchen. */}
+                        {isPaymentFailedOrder(order) && (
+                          <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase border bg-rose-50 text-rose-700 border-rose-200">
+                            Payment never completed
+                          </span>
+                        )}
                       </div>
+
+                      {/* Payment window, on the queue where it decides what
+                          happens next. Older orders carry no paymentExpiresAt
+                          and say so rather than showing a countdown invented
+                          from createdAt — the sweeper will not touch those, so
+                          promising a deadline would be a lie.
+                          Resolution is a minute because the surrounding page
+                          re-renders on a 30-second tick; a seconds display
+                          would sit visibly stale. */}
+                      {selectedStatus === "Awaiting Payment" && (() => {
+                        const remaining = formatTimeRemaining(order.paymentExpiresAt);
+                        if (!remaining) {
+                          return (
+                            <div className="mt-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                              No payment deadline recorded
+                            </div>
+                          );
+                        }
+                        return (
+                          <div className={`mt-2 inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-bold ${
+                            remaining.expired
+                              ? "bg-rose-50 text-rose-700 border-rose-200"
+                              : "bg-amber-50 text-amber-700 border-amber-200"
+                          }`}>
+                            <span className="material-symbols-outlined text-[12px]">timer</span>
+                            {remaining.text}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* Card Body */}
@@ -1326,8 +1959,13 @@ export const Orders = () => {
             </div>
 
             <div>
+              {/* Archive filter, same as the one on the active tab: it narrows
+                  what is listed and writes nothing. paymentMethod is only ever
+                  set at order creation. Any future control that edits it must
+                  route through a callable rather than updateDoc — see the note
+                  on the active-tab filter above. */}
               <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Payment Method</label>
-              <select 
+              <select
                 value={histPayment}
                 onChange={(e) => setHistPayment(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:border-[#10b981] font-medium"
@@ -1580,6 +2218,94 @@ export const Orders = () => {
                       <span className="material-symbols-outlined text-[18px]">call</span>
                     </a>
                   </div>
+
+                  {/*
+                    Totals verification, from onOrderCreatedVerifyTotals.
+                    A flag written to a document and never rendered is the same
+                    failure this project has fixed repeatedly — the check runs,
+                    nobody sees it, and an underpaid order looks identical to a
+                    correct one.
+                  */}
+                  {selectedOrder.totalsVerified === false && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 flex items-start gap-2">
+                      <span className="material-symbols-outlined text-[18px] text-amber-600 mt-0.5">warning</span>
+                      <div>
+                        <p className="text-xs font-bold text-amber-800">
+                          {selectedOrder.totalsMismatch > 0
+                            ? `Underpaid by ₹${Number(selectedOrder.totalsMismatch).toFixed(2)}`
+                            : 'Totals not verified'}
+                        </p>
+                        <p className="mt-0.5 text-[11px] font-semibold text-amber-700">
+                          {selectedOrder.totalsNote || 'The bill could not be checked against the menu.'}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/*
+                    Who cancelled this, and whether money is owed back.
+
+                    Support's first question on a cancelled order is "did we do
+                    this or did they?", and the status pill answers neither —
+                    a payment that timed out and a customer who rang to cancel
+                    both read "Cancelled". `cancelledBy` has always been on the
+                    document; it simply was not shown, so the answer sat one
+                    Firestore console away from the person on the phone.
+                  */}
+                  {(selectedOrder.status === "Cancelled" || selectedOrder.status === "Rejected") && (
+                    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col gap-2.5">
+                      <span className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[16px] text-rose-600">cancel</span>
+                        Cancellation
+                      </span>
+
+                      <div>
+                        <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Cancelled by</span>
+                        <span className="text-xs font-bold text-slate-800">
+                          {/* Falls through to the raw token rather than
+                              "Unknown": an unmapped value is information, and
+                              hiding it would make a new server-side reason
+                              invisible here. */}
+                          {CANCELLED_BY_LABELS[selectedOrder.cancelledBy]
+                            || selectedOrder.cancelledBy
+                            || "Not recorded — cancelled before this was tracked"}
+                        </span>
+                      </div>
+
+                      {selectedOrder.cancellationReason && (
+                        <div>
+                          <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Reason given</span>
+                          <span className="text-xs font-semibold text-slate-700">{selectedOrder.cancellationReason}</span>
+                        </div>
+                      )}
+
+                      {parseOrderDate(selectedOrder.cancelledAt) && (
+                        <div>
+                          <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Cancelled at</span>
+                          <span className="text-xs font-semibold text-slate-700">
+                            {parseOrderDate(selectedOrder.cancelledAt).toLocaleString()}
+                          </span>
+                        </div>
+                      )}
+
+                      {(selectedOrder.refundRequired === true
+                        || selectedOrder.paymentStatus === "PaidAfterCancel") && (
+                        <div className="mt-1 rounded-lg border border-rose-200 bg-rose-50 p-2.5">
+                          <p className="text-[11px] font-bold text-rose-800">
+                            Payment captured after cancellation — refund by hand
+                          </p>
+                          <p className="mt-0.5 text-[11px] font-semibold text-rose-700">
+                            {selectedOrder.refundReason || "Captured after the order was cancelled"}
+                          </p>
+                          {selectedOrder.paymentId && (
+                            <p className="mt-1 font-mono text-[11px] text-rose-900 select-all break-all">
+                              {selectedOrder.paymentId}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Ordered Menu Items Card */}
                   <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
@@ -2119,6 +2845,144 @@ export const Orders = () => {
             
             <form onSubmit={handlePlaceSpotOrder} className="flex flex-col overflow-hidden max-h-[85vh]">
               <div className="p-6 overflow-y-auto space-y-5 flex-1">
+                {/* Link to an existing account, or leave as a walk-in. */}
+                <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4">
+                  {spotCustomerId ? (
+                    <div className="flex items-center gap-3">
+                      <span className="material-symbols-outlined text-[#10b981]">how_to_reg</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-bold text-slate-800 truncate">{spotCustomerName}</p>
+                        <p className="text-xs text-slate-500">
+                          Linked account — this order will appear in their app and earn loyalty.
+                        </p>
+                      </div>
+                      <button type="button" onClick={unlinkSpotCustomer}
+                              className="text-xs font-bold text-slate-500 hover:text-red-600 underline">
+                        Unlink
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+                        Existing customer (optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={spotCustomerSearch}
+                        onChange={(e) => setSpotCustomerSearch(e.target.value)}
+                        placeholder="Search by name or phone…"
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-sm text-slate-700 focus:outline-none focus:border-[#10b981] font-medium"
+                      />
+                      {spotCustomerSearching && (
+                        <p className="mt-2 text-xs text-slate-400">Searching…</p>
+                      )}
+                      {!spotCustomerSearching && spotCustomerSearch.trim().length >= 2
+                        && spotCustomerResults.length === 0 && (
+                        <p className="mt-2 text-xs text-slate-400">
+                          No matching account. Leave blank to place this as a walk-in.
+                        </p>
+                      )}
+                      {spotCustomerResults.length > 0 && (
+                        <ul className="mt-2 divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white overflow-hidden">
+                          {spotCustomerResults.map((u) => (
+                            <li key={u.id}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSpotCustomerId(u.id);
+                                  setSpotCustomerName(u.name || u.displayName || "Customer");
+                                  setSpotCustomerPhone(
+                                    String(u.phone || u.phoneNumber || "").replace(/\D/g, "").slice(-10),
+                                  );
+                                  setSpotCustomerSearch("");
+                                  setSpotCustomerResults([]);
+                                }}
+                                className="w-full text-left px-3.5 py-2 hover:bg-slate-50"
+                              >
+                                <span className="block text-sm font-medium text-slate-800">
+                                  {u.name || u.displayName || "Unnamed"}
+                                </span>
+                                <span className="block text-xs text-slate-400">
+                                  {String(u.phone || u.phoneNumber || "").replace(/\D/g, "").slice(-10) || "no phone"}
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {/* Fulfilment. Delivery needs a saved address, so it is only
+                    offered once an account is linked. */}
+                {spotCustomerId && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Fulfilment</label>
+                    <div className="flex gap-2">
+                      {["pickup", "delivery"].map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setSpotMode(m)}
+                          className={`flex-1 rounded-lg border px-3 py-2 text-sm font-bold capitalize transition-colors ${
+                            spotMode === m
+                              ? "border-[#10b981] bg-[#10b981]/10 text-[#0f766e]"
+                              : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                          }`}
+                        >
+                          {m === "pickup" ? "Counter pickup" : "Delivery"}
+                        </button>
+                      ))}
+                    </div>
+
+                    {spotMode === "delivery" && (
+                      <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+                            Delivery address
+                          </label>
+                          {spotAddresses.length === 0 ? (
+                            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
+                              No saved address, and no previous delivery to reuse. Ask them
+                              to add one in the app, or place this as counter pickup.
+                            </p>
+                          ) : (
+                            <select
+                              value={spotAddressId}
+                              onChange={(e) => setSpotAddressId(e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-sm text-slate-700 focus:outline-none focus:border-[#10b981] font-medium"
+                            >
+                              {spotAddresses.map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {(a.label || "Address")}: {(a.addressLine || a.doorInfo || "").slice(0, 60)}
+                                  {a.isDefault ? " (default)" : ""}
+                                  {/* Says where it came from, so the admin can
+                                      confirm an old delivery point aloud rather
+                                      than assume the customer still lives there. */}
+                                  {a.source === "past" ? " — previous delivery" : ""}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+                            Delivery charge (₹)
+                          </label>
+                          <input
+                            type="number" min="0" step="1"
+                            value={spotDeliveryFee}
+                            onChange={(e) => setSpotDeliveryFee(e.target.value)}
+                            placeholder="0"
+                            className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-sm text-slate-700 focus:outline-none focus:border-[#10b981] font-medium"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Customer Details Row */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
@@ -2142,6 +3006,67 @@ export const Orders = () => {
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-sm text-slate-700 focus:outline-none focus:border-[#10b981] font-medium"
                     />
                   </div>
+                </div>
+
+                {/* Addons: free text, priced by the admin. */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+                    Addons (optional)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={spotAddonName}
+                      onChange={(e) => setSpotAddonName(e.target.value)}
+                      placeholder="e.g. Extra raita"
+                      className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-sm text-slate-700 focus:outline-none focus:border-[#10b981] font-medium"
+                    />
+                    <input
+                      type="number" min="0" step="1"
+                      value={spotAddonPrice}
+                      onChange={(e) => setSpotAddonPrice(e.target.value)}
+                      placeholder="₹"
+                      className="w-28 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-sm text-slate-700 focus:outline-none focus:border-[#10b981] font-medium"
+                    />
+                    {/* type="button" matters: this sits inside the order form
+                        and would otherwise submit it. */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const name = spotAddonName.trim();
+                        const price = Number(spotAddonPrice);
+                        if (!name) { addToast("Give the addon a name.", "error"); return; }
+                        if (!Number.isFinite(price) || price < 0) {
+                          addToast("Enter a valid addon price.", "error"); return;
+                        }
+                        setSpotAddons((prev) => [...prev, { name, price }]);
+                        setSpotAddonName("");
+                        setSpotAddonPrice("");
+                      }}
+                      className="shrink-0 rounded-lg bg-[#10b981] px-4 text-sm font-bold text-white hover:bg-[#0ea472]"
+                    >
+                      Add
+                    </button>
+                  </div>
+
+                  {spotAddons.length > 0 && (
+                    <ul className="mt-2 divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white overflow-hidden">
+                      {spotAddons.map((a, i) => (
+                        <li key={`${a.name}-${i}`} className="flex items-center gap-3 px-3.5 py-2">
+                          <span className="flex-1 text-sm text-slate-700">{a.name}</span>
+                          <span className="text-sm font-bold text-slate-800">₹{a.price}</span>
+                          <button
+                            type="button"
+                            onClick={() => setSpotAddons((prev) => prev.filter((_, j) => j !== i))}
+                            className="text-slate-300 hover:text-red-600"
+                            aria-label={`Remove ${a.name}`}
+                          >
+                            <span className="material-symbols-outlined text-[18px]">close</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
 
                 {/* Search & Menu Item Picker */}
@@ -2216,35 +3141,37 @@ export const Orders = () => {
                 <div className="bg-[#10b981]/5 border border-[#10b981]/10 rounded-xl p-4 space-y-2.5">
                   <div className="flex justify-between items-center text-xs text-slate-500 font-bold">
                     <span>Selected Items</span>
-                    <span className="text-slate-800">
-                      {Object.values(spotSelectedItems).reduce((a, b) => a + b, 0)} item(s)
-                    </span>
+                    <span className="text-slate-800">{spotItemCount} item(s)</span>
                   </div>
+
+                  {/* Addons are shown on their own line rather than folded
+                      silently into the subtotal, so the admin can see what the
+                      customer is being charged extra for. */}
+                  {spotAddonsSubtotal > 0 && (
+                    <div className="flex justify-between items-center text-xs text-slate-500 font-bold">
+                      <span>Addons ({spotAddons.length})</span>
+                      <span className="text-slate-800">₹{spotAddonsSubtotal.toFixed(2)}</span>
+                    </div>
+                  )}
+
                   <div className="flex justify-between items-center text-xs text-slate-500 font-bold">
                     <span>Subtotal</span>
-                    <span className="text-slate-800 font-extrabold">
-                      ₹{Object.entries(spotSelectedItems).reduce((sum, [itemId, qty]) => {
-                        const item = menuItems.find(m => m.id === itemId);
-                        return sum + (item ? Number(item.price) * qty : 0);
-                      }, 0).toFixed(2)}
-                    </span>
+                    <span className="text-slate-800 font-extrabold">₹{spotSubtotal.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-center text-xs text-slate-500 font-bold">
-                    <span>GST & Taxes (5%)</span>
-                    <span className="text-slate-800">
-                      ₹{(Object.entries(spotSelectedItems).reduce((sum, [itemId, qty]) => {
-                        const item = menuItems.find(m => m.id === itemId);
-                        return sum + (item ? Number(item.price) * qty : 0);
-                      }, 0) * 0.05).toFixed(2)}
-                    </span>
+                    <span>GST &amp; Taxes (5%)</span>
+                    <span className="text-slate-800">₹{spotTax.toFixed(2)}</span>
                   </div>
+                  {spotDelivery > 0 && (
+                    <div className="flex justify-between items-center text-xs text-slate-500 font-bold">
+                      <span>Delivery</span>
+                      <span className="text-slate-800">₹{spotDelivery.toFixed(2)}</span>
+                    </div>
+                  )}
                   <div className="border-t border-[#10b981]/10 pt-2.5 flex justify-between items-center">
                     <span className="text-sm font-black text-slate-700">Total Payable</span>
                     <span className="text-lg font-black text-[#10b981]">
-                      ₹{(Object.entries(spotSelectedItems).reduce((sum, [itemId, qty]) => {
-                        const item = menuItems.find(m => m.id === itemId);
-                        return sum + (item ? Number(item.price) * qty : 0);
-                      }, 0) * 1.05).toFixed(2)}
+                      ₹{spotTotal.toFixed(2)}
                     </span>
                   </div>
                 </div>

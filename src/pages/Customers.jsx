@@ -4,6 +4,88 @@ import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
 import { useUiStore } from "../store/uiStore";
 import EmptyState from "../components/EmptyState";
 
+/** A COD block lasts 24 hours. Same figure the backend applies on abuse. */
+const COD_BLOCK_HOURS = 24;
+
+/**
+ * One date parser for the three shapes a timestamp arrives in here.
+ *
+ * A Cloud Function writes a Firestore Timestamp, this dashboard writes a Date,
+ * and the mock path writes an ISO string. Mirrors the helper in orderStore.js
+ * rather than assuming one shape — `codBlockedUntil` is now the single thing
+ * that decides whether a customer may pay cash, so misreading it in one shape
+ * would either free a blocked customer or hold a released one.
+ */
+const parseDate = (val) => {
+  if (!val) return null;
+  if (val instanceof Date) return val;
+  if (typeof val.toDate === "function") return val.toDate();
+  if (val.seconds !== undefined) return new Date(val.seconds * 1000);
+  if (typeof val === "number") return new Date(val);
+  if (typeof val === "string") {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+};
+
+/**
+ * Whether COD is blocked, and the sentence explaining it.
+ *
+ * Derived from `codBlockedUntil` alone, compared against the clock. The old
+ * `codBlocked` boolean this replaces was written by the button on this page
+ * and read by nothing at all — no app, no website, no rule, no function — so
+ * "COD Restricted successfully" was a toast over a field nobody consulted, and
+ * the customer went on paying cash.
+ *
+ * A timestamp compared against now cannot get stuck the way a boolean can:
+ * there is no release job to fail, and nothing to leave behind if one does.
+ * Past the deadline the customer is simply unblocked, everywhere, at once.
+ */
+const getCodBlock = (customer) => {
+  const until = parseDate(customer?.codBlockedUntil);
+  const abandonments = Number(customer?.codAbandonments || 0);
+  const cancellations = Number(customer?.codCancellations || 0);
+
+  if (!until) {
+    return { blocked: false, until: null, reason: null, reasonText: "", remainingText: "", abandonments, cancellations };
+  }
+
+  const msLeft = until.getTime() - Date.now();
+  const blocked = msLeft > 0;
+  const reason = customer?.codBlockedReason || null;
+
+  let reasonText;
+  if (reason === "admin") {
+    reasonText = "Blocked by support";
+  } else if (reason === "abuse") {
+    // The counters are reset to zero at the moment the block is applied, so
+    // the next block needs three fresh quits rather than one more. That makes
+    // the figure read 0 on a freshly auto-blocked customer, and quoting
+    // "0 checkout abandonments" at support would be worse than saying nothing.
+    reasonText = abandonments > 0
+      ? `Auto-blocked: ${abandonments} checkout abandonment${abandonments === 1 ? "" : "s"}`
+      : "Auto-blocked: too many abandoned COD checkouts";
+  } else {
+    reasonText = "Blocked (reason not recorded)";
+  }
+
+  if (!blocked) {
+    return { blocked: false, until, reason, reasonText, remainingText: "released", abandonments, cancellations };
+  }
+
+  const totalMinutes = Math.floor(msLeft / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const remainingText = totalMinutes < 1
+    ? "releases in under a minute"
+    : hours > 0
+      ? `releases in ${hours}h ${minutes}m`
+      : `releases in ${minutes}m`;
+
+  return { blocked: true, until, reason, reasonText, remainingText, abandonments, cancellations };
+};
+
 export const Customers = () => {
   const { addToast } = useUiStore();
   const [customers, setCustomers] = useState([]);
@@ -25,16 +107,36 @@ export const Customers = () => {
   const [editEmail, setEditEmail] = useState("");
   const [editPhone, setEditPhone] = useState("");
   const [editCodBlocked, setEditCodBlocked] = useState(false);
+  // What the switch read when the modal opened. Saving only touches the COD
+  // fields when the admin actually moved it — see handleSaveCustomer.
+  const [editCodWasBlocked, setEditCodWasBlocked] = useState(false);
   const [editIsActive, setEditIsActive] = useState(true);
+
+  /*
+   * A block ends by the clock, not by anyone writing to the document, so no
+   * snapshot arrives to re-render this page when it lapses. Without a tick the
+   * badge would still read "COD Blocked · releases in 2m" forty minutes after
+   * the customer got COD back — a screen support makes promises from.
+   */
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const isMock = import.meta.env.VITE_ENABLE_MOCK_DATA === "true" || !isFirebaseConfigured;
 
     if (isMock) {
+      // Mock customers cover the three COD states the real data has: never
+      // blocked, blocked right now, and blocked at some point in the past and
+      // since released by expiry. ISO strings on purpose — that is one of the
+      // three timestamp shapes parseDate has to survive, and the mock path is
+      // where it is cheapest to notice it does not.
       setCustomers([
-        { id: "cust1", name: "Sarah Jenkins", email: "sarah@jenkins.com", phone: "+91 98765 43210", mobileNumber: "+91 98765 43210", createdAt: new Date().toISOString(), isActive: true, codBlocked: false, walletBalance: 250, referredBy: "Michael Chen" },
-        { id: "cust2", name: "Michael Chen", email: "michael@chen.com", phone: "+91 98765 43211", mobileNumber: "+91 98765 43211", createdAt: new Date().toISOString(), isActive: true, codBlocked: true, walletBalance: 0, referredBy: "" },
-        { id: "cust3", name: "Emma Watson", email: "emma@watson.com", phone: "+91 98765 43212", mobileNumber: "+91 98765 43212", createdAt: new Date().toISOString(), isActive: false, codBlocked: false, walletBalance: 1200, referredBy: "Sarah Jenkins" }
+        { id: "cust1", name: "Sarah Jenkins", email: "sarah@jenkins.com", phone: "+91 98765 43210", mobileNumber: "+91 98765 43210", createdAt: new Date().toISOString(), isActive: true, codBlockedUntil: null, codBlockedReason: null, codAbandonments: 0, codCancellations: 0, walletBalance: 250, referredBy: "Michael Chen" },
+        { id: "cust2", name: "Michael Chen", email: "michael@chen.com", phone: "+91 98765 43211", mobileNumber: "+91 98765 43211", createdAt: new Date().toISOString(), isActive: true, codBlockedUntil: new Date(Date.now() + 6 * 60 * 60 * 1000 + 20 * 60 * 1000).toISOString(), codBlockedReason: "abuse", codBlockedAt: new Date(Date.now() - 17 * 60 * 60 * 1000 - 40 * 60 * 1000).toISOString(), codAbandonments: 3, codCancellations: 1, walletBalance: 0, referredBy: "" },
+        { id: "cust3", name: "Emma Watson", email: "emma@watson.com", phone: "+91 98765 43212", mobileNumber: "+91 98765 43212", createdAt: new Date().toISOString(), isActive: false, codBlockedUntil: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), codBlockedReason: "admin", codBlockedAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(), codAbandonments: 1, codCancellations: 0, walletBalance: 1200, referredBy: "Sarah Jenkins" }
       ]);
       setOrders([
         { id: "HB260001", customerId: "cust1", itemsText: "2x Spicy Tuna Bowl, 1x Coke", totalAmount: 480, total: 480, status: "Delivered", createdAt: new Date().toISOString(), paymentMethod: "Wallet", couponCode: "WELCOME50", discountAmount: 50 },
@@ -163,22 +265,59 @@ export const Customers = () => {
     }
   };
 
+  /**
+   * The write that puts a 24-hour COD block on, or takes it off now.
+   *
+   * Blocking writes a deadline rather than a flag, so it releases itself.
+   * Releasing clears the deadline and the reason together — leaving a stale
+   * `codBlockedReason` behind on a released customer would have this page
+   * explaining a block that no longer exists.
+   *
+   * The timestamps are computed from the admin's clock rather than
+   * serverTimestamp(), because serverTimestamp() cannot express "now plus 24
+   * hours"; taking `codBlockedAt` from the same clock keeps the pair
+   * consistent with each other, which is what support reads them as.
+   */
+  const codBlockPayload = (shouldBlock) => {
+    if (!shouldBlock) return { codBlockedUntil: null, codBlockedReason: null };
+    const now = new Date();
+    return {
+      codBlockedUntil: new Date(now.getTime() + COD_BLOCK_HOURS * 60 * 60 * 1000),
+      codBlockedReason: "admin",
+      codBlockedAt: now,
+    };
+  };
+
   const handleToggleCodBlock = async (customer) => {
-    const newCodBlocked = !customer.codBlocked;
+    const shouldBlock = !getCodBlock(customer).blocked;
+    const payload = codBlockPayload(shouldBlock);
     const isMock = import.meta.env.VITE_ENABLE_MOCK_DATA === "true" || !isFirebaseConfigured;
 
+    const applyLocally = () => {
+      setCustomers(prev => prev.map(c => c.id === customer.id ? { ...c, ...payload } : c));
+      setSelectedCustomer(prev => prev && prev.id === customer.id ? { ...prev, ...payload } : prev);
+    };
+
     if (isMock) {
-      setCustomers(prev => prev.map(c => c.id === customer.id ? { ...c, codBlocked: newCodBlocked } : c));
-      setSelectedCustomer(prev => prev && prev.id === customer.id ? { ...prev, codBlocked: newCodBlocked } : prev);
-      addToast(newCodBlocked ? "COD Restricted" : "COD Allowed", "success");
+      applyLocally();
+      addToast(shouldBlock ? `Cash on Delivery blocked for ${COD_BLOCK_HOURS} hours` : "Cash on Delivery released", "success");
       return;
     }
 
     try {
-      await updateDoc(doc(db, "users", customer.id), { codBlocked: newCodBlocked });
-      addToast(newCodBlocked ? "COD Restricted successfully" : "COD Allowed successfully", "success");
+      await updateDoc(doc(db, "users", customer.id), payload);
+      // Applied locally as well as remotely. The users listener refreshes the
+      // table, but the detail drawer holds its own copy of the customer and
+      // would otherwise keep describing the previous state until reopened.
+      applyLocally();
+      addToast(
+        shouldBlock
+          ? `Cash on Delivery blocked for ${COD_BLOCK_HOURS} hours`
+          : "Cash on Delivery released — the customer can pay cash again now",
+        "success",
+      );
     } catch (err) {
-      addToast(`Failed to toggle COD restriction: ${err.message}`, "error");
+      addToast(`Failed to update the COD block: ${err.message}`, "error");
     }
   };
 
@@ -207,7 +346,9 @@ export const Customers = () => {
     setEditName(customer.name || "");
     setEditEmail(customer.email || "");
     setEditPhone(customer.phone || customer.mobileNumber || "");
-    setEditCodBlocked(customer.codBlocked || false);
+    const codBlocked = getCodBlock(customer).blocked;
+    setEditCodBlocked(codBlocked);
+    setEditCodWasBlocked(codBlocked);
     setEditIsActive(customer.isActive !== false);
     setIsEditModalOpen(true);
   };
@@ -225,8 +366,15 @@ export const Customers = () => {
       email: editEmail,
       phone: editPhone,
       mobileNumber: editPhone,
-      codBlocked: editCodBlocked,
-      isActive: editIsActive
+      isActive: editIsActive,
+      // The COD fields are written only when the switch actually moved.
+      //
+      // Writing them unconditionally would restart the 24 hours every time
+      // anyone saved a phone number correction on a blocked customer — the
+      // block would quietly never end, and nothing on the screen would say so.
+      // The old form did not have this problem only because it wrote a boolean
+      // that nothing read.
+      ...(editCodBlocked !== editCodWasBlocked ? codBlockPayload(editCodBlocked) : {})
     };
 
     if (isMock) {
@@ -310,7 +458,7 @@ export const Customers = () => {
             <tbody className="font-body-sm text-body-sm text-[#151c27] divide-y divide-[#dce2f3]/40">
               {filteredCustomers.map(c => {
                 const isActive = c.isActive !== false;
-                const isCodBlocked = c.codBlocked === true;
+                const cod = getCodBlock(c);
                 const displayPhone = c.phone || c.mobileNumber || "N/A";
                 
                 return (
@@ -351,13 +499,23 @@ export const Customers = () => {
                     </td>
                     <td className="py-4 px-6">
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                        !isCodBlocked 
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
+                        !cod.blocked
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                           : "bg-rose-50 text-rose-700 border-rose-200"
                       }`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${!isCodBlocked ? "bg-emerald-500" : "bg-rose-500"}`}></span>
-                        {!isCodBlocked ? "COD Allowed" : "COD Blocked"}
+                        <span className={`w-1.5 h-1.5 rounded-full ${!cod.blocked ? "bg-emerald-500" : "bg-rose-500"}`}></span>
+                        {!cod.blocked ? "COD Allowed" : "COD Blocked"}
                       </span>
+                      {/* Why and for how long, on the row itself. A blocked
+                          badge with no cause is the thing support cannot act
+                          on: they cannot tell an automatic block that will
+                          clear itself this afternoon from one a colleague
+                          applied deliberately. */}
+                      {cod.blocked && (
+                        <p className="text-[10px] text-slate-400 font-semibold mt-1 leading-snug">
+                          {cod.reasonText} · {cod.remainingText}
+                        </p>
+                      )}
                     </td>
                     <td className="py-4 px-6 text-slate-500">
                       {c.createdAt ? new Date(c.createdAt).toLocaleDateString() : "N/A"}
@@ -380,12 +538,14 @@ export const Customers = () => {
                         >
                           <span className="material-symbols-outlined text-[18px]">block</span>
                         </button>
-                        <button 
+                        <button
                           onClick={() => handleToggleCodBlock(c)}
                           className={`p-1 rounded hover:bg-[#f0f3ff] transition-colors ${
-                            isCodBlocked ? "text-emerald-500 hover:text-emerald-600" : "text-slate-400 hover:text-slate-600"
+                            cod.blocked ? "text-emerald-500 hover:text-emerald-600" : "text-slate-400 hover:text-slate-600"
                           }`}
-                          title={isCodBlocked ? "Allow Cash-On-Delivery" : "Block Cash-On-Delivery"}
+                          title={cod.blocked
+                            ? "Release the COD block now"
+                            : `Block Cash on Delivery for ${COD_BLOCK_HOURS} hours`}
                         >
                           <span className="material-symbols-outlined text-[18px]">payments</span>
                         </button>
@@ -530,6 +690,93 @@ export const Customers = () => {
             {/* Profile Specifications Tab */}
             {drawerTab === "activity" && (
               <div className="space-y-4">
+                {/*
+                  COD standing.
+                  First card in the panel because it is the one thing on this
+                  screen a customer rings up about. The two counters are shown
+                  whether or not a block is active: support's question is
+                  usually "why was I blocked?", and the answer is a number they
+                  can be told, not a policy they have to be read.
+                */}
+                {(() => {
+                  const cod = getCodBlock(selectedCustomer);
+                  return (
+                    <div className="bg-white border border-[#dce2f3] rounded-xl p-4 shadow-xs">
+                      <h4 className="font-bold text-xs text-slate-700 border-b pb-2 uppercase tracking-wide flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[16px] text-[#10b981]">payments</span> Cash on Delivery
+                      </h4>
+
+                      <div className="pt-3 space-y-2 text-xs">
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400">Status:</span>
+                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                            cod.blocked
+                              ? "bg-rose-50 text-rose-700 border-rose-200"
+                              : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${cod.blocked ? "bg-rose-500" : "bg-emerald-500"}`}></span>
+                            {cod.blocked ? "Blocked" : "Allowed"}
+                          </span>
+                        </div>
+
+                        {cod.blocked && (
+                          <>
+                            <div className="flex justify-between border-t border-slate-100 pt-2">
+                              <span className="text-slate-400">Why:</span>
+                              <span className="font-bold text-slate-700 text-right">{cod.reasonText}</span>
+                            </div>
+                            <div className="flex justify-between border-t border-slate-100 pt-2">
+                              <span className="text-slate-400">Time left:</span>
+                              <span className="font-bold text-slate-700">
+                                {cod.remainingText} ({cod.until.toLocaleString()})
+                              </span>
+                            </div>
+                          </>
+                        )}
+
+                        {/* A lapsed block is still worth showing. "They were
+                            blocked until Tuesday and are not now" is the
+                            answer to a complaint about last week. */}
+                        {!cod.blocked && cod.until && (
+                          <div className="flex justify-between border-t border-slate-100 pt-2">
+                            <span className="text-slate-400">Previous block:</span>
+                            <span className="font-bold text-slate-700 text-right">
+                              {cod.reasonText}, released {cod.until.toLocaleString()}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Read-only counters. These are server-owned — the
+                          sweeper and the cancel path write them, this screen
+                          only reports them. Editing them here would let an
+                          admin move a customer closer to a block by hand with
+                          no record of having done it. */}
+                      <div className="grid grid-cols-2 gap-3 mt-3">
+                        <div className="bg-[#f0f3ff] border border-[#dce2f3]/50 rounded-lg p-2.5">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Checkout Abandonments</span>
+                          <span className="text-sm font-black text-slate-800 mt-0.5 block">{cod.abandonments}</span>
+                        </div>
+                        <div className="bg-[#f0f3ff] border border-[#dce2f3]/50 rounded-lg p-2.5">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">COD Cancellations</span>
+                          <span className="text-sm font-black text-slate-800 mt-0.5 block">{cod.cancellations}</span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => handleToggleCodBlock(selectedCustomer)}
+                        className={`w-full mt-3 px-3 py-2 rounded-lg font-bold text-xs transition-all border ${
+                          cod.blocked
+                            ? "bg-white border-[#10b981]/30 text-[#10b981] hover:bg-[#10b981]/5"
+                            : "bg-white border-rose-200 text-rose-600 hover:bg-rose-50"
+                        }`}
+                      >
+                        {cod.blocked ? "Release COD now" : `Block COD for ${COD_BLOCK_HOURS} hours`}
+                      </button>
+                    </div>
+                  );
+                })()}
+
                 {/* Referrals Section */}
                 <div className="bg-white border border-[#dce2f3] rounded-xl p-4 shadow-xs">
                   <h4 className="font-bold text-xs text-slate-700 border-b pb-2 uppercase tracking-wide flex items-center gap-1.5">
@@ -678,8 +925,17 @@ export const Customers = () => {
               <div className="space-y-3 border-t border-slate-100 pt-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-label-sm text-label-sm text-[#151c27] font-bold">Restrict Cash checkout (COD)</p>
-                    <p className="text-[10px] text-slate-400 font-semibold">Toggle to block cash payment option at checkout</p>
+                    <p className="font-label-sm text-label-sm text-[#151c27] font-bold">Block Cash on Delivery</p>
+                    {/* Says what the switch actually does now. It used to say
+                        "toggle to block cash payment at checkout" while
+                        writing a field no checkout ever read; it now sets a
+                        24-hour deadline that the app, the website and the
+                        server all honour, and that expires on its own. */}
+                    <p className="text-[10px] text-slate-400 font-semibold">
+                      {editCodWasBlocked
+                        ? "Currently blocked. Switching off releases COD immediately."
+                        : `Switching on blocks COD for ${COD_BLOCK_HOURS} hours, then it releases itself.`}
+                    </p>
                   </div>
                   <label className="relative inline-flex items-center cursor-pointer shrink-0">
                     <input
