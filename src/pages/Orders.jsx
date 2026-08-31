@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
-import { useOrderStore, isPaymentFailedOrder } from "../store/orderStore";
+import { useOrderStore, isPaymentFailedOrder, normaliseOrderDoc } from "../store/orderStore";
 import { useDeliveryPartnerStore } from "../store/deliveryPartnerStore";
 import { useMenuStore } from "../store/menuStore";
 import EmptyState from "../components/EmptyState";
 import * as LoadingComponents from "../components/LoadingComponents";
 import {
-  doc, onSnapshot, updateDoc, collection, query, where, getDocs, limit,
+  doc, onSnapshot, updateDoc, collection, query, where, getDocs, limit, orderBy, Timestamp,
 } from "firebase/firestore";
 import { db } from "../firebase/firebaseConfig";
 import { STAGE, STAGES, stageOf } from "../lib/orderStages";
@@ -59,6 +59,54 @@ const parseOrderDate = (val) => {
   }
   return null;
 };
+
+/**
+ * The one place an order timestamp becomes words, always in Asia/Kolkata.
+ *
+ * Every other date display in this file called `.toLocaleString()` directly,
+ * which renders in whatever timezone the admin's *browser* is set to — right
+ * for a Guntur-based operator on a normally-configured machine, silently
+ * wrong for anyone whose device clock or locale is not, and inconsistent
+ * with a kitchen that only ever operates on IST. `timeZone: IST_TZ` is
+ * explicit so the display is correct regardless of the browser.
+ *
+ * "Today" / "Yesterday" are computed by comparing the *IST calendar date* of
+ * the two instants, not by subtracting milliseconds — 11:58 PM and 12:03 AM
+ * IST are two minutes apart and two different days, and a millisecond
+ * threshold would call one of them "Today" from the wrong side of midnight.
+ */
+const IST_TZ = "Asia/Kolkata";
+const istDateKey = (date) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: IST_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+const istTimeFmt = new Intl.DateTimeFormat("en-IN", { timeZone: IST_TZ, hour: "numeric", minute: "2-digit", hour12: true });
+const istDateFmt = new Intl.DateTimeFormat("en-GB", { timeZone: IST_TZ, day: "2-digit", month: "short", year: "numeric" });
+
+function formatOrderTime(val) {
+  const date = parseOrderDate(val);
+  if (!date) return "Not available";
+
+  const now = new Date();
+  const dateKey = istDateKey(date);
+  const todayKey = istDateKey(now);
+  const yesterdayKey = istDateKey(new Date(now.getTime() - 24 * 60 * 60 * 1000));
+  const timeStr = istTimeFmt.format(date);
+
+  if (dateKey === todayKey) return `Today, ${timeStr}`;
+  if (dateKey === yesterdayKey) return `Yesterday, ${timeStr}`;
+  return `${istDateFmt.format(date)}, ${timeStr}`;
+}
+
+/**
+ * The full, non-relative form — "24 Aug 2026, 10:32 AM" — for records meant
+ * to be read later or out of context: CSV/Excel/PDF exports and the printed
+ * KOT slip. "Today"/"Yesterday" would be actively wrong on a report opened a
+ * week after it was generated.
+ */
+function formatOrderTimeAbsolute(val) {
+  const date = parseOrderDate(val);
+  if (!date) return "";
+  return `${istDateFmt.format(date)}, ${istTimeFmt.format(date)}`;
+}
 
 /**
  * How long is left on a payment window, in words.
@@ -242,6 +290,65 @@ export const Orders = () => {
   const [histPayment, setHistPayment] = useState("All");
   const [histMode, setHistMode] = useState("All");
   const [histRider, setHistRider] = useState("All");
+
+  /**
+   * A date range in the History tab searches Firestore directly instead of
+   * filtering the live listener's most-recent-200 window.
+   *
+   * `orders` (from useOrderStore) exists to keep the *active* kitchen queue
+   * current, so it is capped — a deliberate limit, not a bug, for that
+   * purpose. But it means "hundreds of orders per day" empties the History
+   * tab's search of anything older than yesterday within a day or two, no
+   * matter what date range is picked: the documents are simply not in the
+   * array being filtered. A dedicated range query has no such cap.
+   */
+  const [rangeResults, setRangeResults] = useState(null);
+  const [rangeLoading, setRangeLoading] = useState(false);
+  const [rangeError, setRangeError] = useState(null);
+
+  useEffect(() => {
+    if (activeTab !== "history" || (!histStartDate && !histEndDate)) {
+      setRangeResults(null);
+      setRangeError(null);
+      return;
+    }
+    let cancelled = false;
+    setRangeLoading(true);
+    setRangeError(null);
+    (async () => {
+      try {
+        const clauses = [collection(db, "orders"), orderBy("createdAt", "desc")];
+        if (histStartDate) {
+          const start = new Date(histStartDate);
+          start.setHours(0, 0, 0, 0);
+          clauses.push(where("createdAt", ">=", Timestamp.fromDate(start)));
+        }
+        if (histEndDate) {
+          const end = new Date(histEndDate);
+          end.setHours(23, 59, 59, 999);
+          clauses.push(where("createdAt", "<=", Timestamp.fromDate(end)));
+        }
+        // Well above the live listener's 200, and a hard ceiling so a wide
+        // range cannot pull the whole collection into the browser — the
+        // exact thing Part 14 of the audit asks not to do. A range this
+        // large returning the cap is itself worth a narrower search.
+        clauses.push(limit(2000));
+        const snap = await getDocs(query(...clauses));
+        if (cancelled) return;
+        const rows = [];
+        snap.forEach((d) => {
+          const data = d.data();
+          if (data.isDeleted !== true) rows.push(normaliseOrderDoc(d.id, data));
+        });
+        setRangeResults(rows);
+      } catch (e) {
+        if (!cancelled) setRangeError(e.message || "Could not search that date range.");
+      } finally {
+        if (!cancelled) setRangeLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTab, histStartDate, histEndDate]);
 
   // Active views
   const [selectedOrder, setSelectedOrder] = useState(null);
@@ -914,6 +1021,19 @@ export const Orders = () => {
   // never disagree with the tab it opens.
   const countOf = (stage) => orders.filter((o) => stageOf(o) === stage).length;
 
+  // For the "Today" summary cards. `orders` is the most recent 200 by
+  // createdAt, so on any real day's volume today's orders are well inside
+  // that window — unlike the History tab, this is not the place that needs
+  // its own unbounded query.
+  const isToday = (order) => {
+    const d = parseOrderDate(order?.createdAt);
+    return !!d && istDateKey(d) === istDateKey(new Date());
+  };
+  const countTodayOf = (stage) => orders.filter((o) => stageOf(o) === stage && isToday(o)).length;
+  const todaysRevenue = orders
+    .filter((o) => stageOf(o) === STAGE.COMPLETED && isToday(o))
+    .reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+
   const counts = {
     All: orders.length,
     Delivered: countOf(STAGE.COMPLETED),
@@ -947,9 +1067,7 @@ export const Orders = () => {
       </tr>
     `).join("") : "";
 
-    const dateStr = order.createdAt 
-      ? (order.createdAt.seconds ? new Date(order.createdAt.seconds * 1000) : new Date(order.createdAt)).toLocaleString()
-      : new Date().toLocaleString();
+    const dateStr = formatOrderTimeAbsolute(order.createdAt) || "Not available";
 
     const htmlContent = `
       <!DOCTYPE html>
@@ -997,7 +1115,7 @@ export const Orders = () => {
       </head>
       <body>
         <div class="header text-center">
-          <div class="title">HomeBites</div>
+          <div class="title">HomBites</div>
           <div class="subtitle">5-STAR GOURMET KITCHEN</div>
           <div class="star-rating">★★★★★</div>
           <div class="subtitle" style="font-size: 9px;">Central Operations Hub</div>
@@ -1098,7 +1216,7 @@ export const Orders = () => {
          <div class="footer">
            <div>*** CENTRAL KITCHEN COPY ***</div>
            <div style="margin-top: 1.5mm;">Gourmet Meals Cooked with Love & Hygiene.</div>
-           <div style="font-weight: bold; margin-top: 1.5mm;">- Chef HomeBites -</div>
+           <div style="font-weight: bold; margin-top: 1.5mm;">- Chef HomBites -</div>
          </div>
          
          <script>
@@ -1120,7 +1238,7 @@ export const Orders = () => {
       o.id,
       `"${(o.customer || "").replace(/"/g, '""')}"`,
       contactOf(o),
-      o.createdAt ? (o.createdAt.seconds ? new Date(o.createdAt.seconds * 1000).toLocaleString() : new Date(o.createdAt).toLocaleString()) : "",
+      formatOrderTimeAbsolute(o.createdAt),
       `"${(o.itemsText || "").replace(/"/g, '""')}"`,
       o.subtotal || 0,
       o.tax || 0,
@@ -1169,8 +1287,8 @@ export const Orders = () => {
       </head>
       <body>
         <table>
-          <tr><th colspan="${headers.length}" style="font-size:16px;text-align:center;font-weight:bold;height:30px;background-color:#10b981;color:white;">HomeBites Order History Report</th></tr>
-          <tr><td colspan="${headers.length}" style="text-align:center;font-style:italic;">Generated on ${new Date().toLocaleString()}</td></tr>
+          <tr><th colspan="${headers.length}" style="font-size:16px;text-align:center;font-weight:bold;height:30px;background-color:#10b981;color:white;">HomBites Order History Report</th></tr>
+          <tr><td colspan="${headers.length}" style="text-align:center;font-style:italic;">Generated on ${formatOrderTimeAbsolute(new Date())}</td></tr>
           <tr></tr>
           <tr>
             ${headers.map(h => `<th>${h}</th>`).join("")}
@@ -1180,7 +1298,7 @@ export const Orders = () => {
               <td>${o.id}</td>
               <td>${o.customer}</td>
               <td>${contactOf(o)}</td>
-              <td>${o.createdAt ? (o.createdAt.seconds ? new Date(o.createdAt.seconds * 1000).toLocaleString() : new Date(o.createdAt).toLocaleString()) : ""}</td>
+              <td>${formatOrderTimeAbsolute(o.createdAt)}</td>
               <td>${o.itemsText || ""}</td>
               <td>${(o.subtotal || 0).toFixed(2)}</td>
               <td>${(o.tax || 0).toFixed(2)}</td>
@@ -1218,7 +1336,7 @@ export const Orders = () => {
       <tr>
         <td>#${o.id}</td>
         <td>${o.customer}<br/><small>${contactOf(o)}</small></td>
-        <td>${o.createdAt ? (o.createdAt.seconds ? new Date(o.createdAt.seconds * 1000).toLocaleString() : new Date(o.createdAt).toLocaleString()) : ""}</td>
+        <td>${formatOrderTimeAbsolute(o.createdAt)}</td>
         <td>${o.itemsText || ""}</td>
         <td style="text-align: right;">₹${(o.total || 0).toFixed(2)}</td>
         <td>${o.paymentMethod || "Online"}</td>
@@ -1230,7 +1348,7 @@ export const Orders = () => {
     const htmlContent = `
       <html>
       <head>
-        <title>HomeBites Orders Report</title>
+        <title>HomBites Orders Report</title>
         <style>
           body { font-family: sans-serif; padding: 20px; color: #151c27; }
           h2 { text-align: center; color: #10b981; }
@@ -1242,8 +1360,8 @@ export const Orders = () => {
         </style>
       </head>
       <body>
-        <h2>HomeBites Order History Report</h2>
-        <div class="meta">Generated on ${new Date().toLocaleString()} | Total Orders: ${data.length}</div>
+        <h2>HomBites Order History Report</h2>
+        <div class="meta">Generated on ${formatOrderTimeAbsolute(new Date())} | Total Orders: ${data.length}</div>
         <table>
           <thead>
             <tr>
@@ -1304,7 +1422,12 @@ export const Orders = () => {
     return token;
   };
 
-  const historyOrders = orders.filter((o) => {
+  // A date range switches the source array to the dedicated Firestore query
+  // above (unbounded by the 200-order live cap); everything else still runs
+  // the same filters against it, since a range result is already the same
+  // shape `normaliseOrderDoc` produces for `orders`.
+  const historySource = rangeResults ?? orders;
+  const historyOrders = historySource.filter((o) => {
     const matchesSearch = 
       histSearch.trim() === "" ||
       o.id.toLowerCase().includes(histSearch.toLowerCase()) ||
@@ -1413,6 +1536,42 @@ export const Orders = () => {
                 <span className="material-symbols-outlined text-[18px]">add</span>
                 Place Spot Order
               </button>
+            </div>
+          </div>
+
+          {/* Live Summary Cards — every number is countOf/countTodayOf against
+              the same real, live-streamed `orders` array the tabs and lists
+              use below, so a card can never disagree with what tapping it
+              shows. Nothing here is a placeholder or a demo figure. */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 mb-6">
+            {[
+              { label: "New Orders", value: countOf(STAGE.ORDERS), icon: "receipt_long", tint: "text-slate-700", onSelect: STAGE.ORDERS },
+              { label: "Preparing", value: countOf(STAGE.PREPARING), icon: "skillet", tint: "text-amber-600", onSelect: STAGE.PREPARING },
+              { label: "Ready", value: countOf(STAGE.READY), icon: "task_alt", tint: "text-blue-600", onSelect: STAGE.READY },
+              { label: "Out for Delivery", value: countOf(STAGE.OUT_FOR_DELIVERY), icon: "motorcycle", tint: "text-indigo-600", onSelect: STAGE.OUT_FOR_DELIVERY },
+              { label: "Completed Today", value: countTodayOf(STAGE.COMPLETED), icon: "check_circle", tint: "text-[#10b981]", onSelect: "Delivered" },
+              { label: "Cancelled Today", value: countTodayOf(STAGE.CANCELLED), icon: "cancel", tint: "text-rose-600", onSelect: "Cancelled" },
+            ].map((card) => (
+              <button
+                key={card.label}
+                onClick={() => setSelectedStatus(card.onSelect)}
+                className="bg-white border border-slate-200 rounded-xl p-3 shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all text-left"
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`material-symbols-outlined text-[20px] ${card.tint}`}>{card.icon}</span>
+                  <span className="text-xl font-black text-slate-800">{card.value}</span>
+                </div>
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mt-1.5">{card.label}</div>
+              </button>
+            ))}
+            {/* Informational only — revenue is not a status, so it is not a
+                tab and does not select one. */}
+            <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-xs text-left">
+              <div className="flex items-center justify-between">
+                <span className="material-symbols-outlined text-[20px] text-emerald-700">payments</span>
+                <span className="text-xl font-black text-slate-800">₹{todaysRevenue.toFixed(0)}</span>
+              </div>
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mt-1.5">Today's Revenue</div>
             </div>
           </div>
 
@@ -1724,6 +1883,17 @@ export const Orders = () => {
                 const isTakeaway = order.address === "Counter Pickup" || (order.deliveryAddress && order.deliveryAddress.addressLine === "Counter Pickup");
                 const instructionsList = getOrderCookingInstructions(order);
                 
+                // Short item summary — "3x Chicken Biryani, 2x Paneer Tikka"
+                // trimmed to "3x Chicken Biryani +1 more" past two items, so a
+                // long cart never stretches the card. Full list stays in
+                // Order Details; nothing here is lost, just not on the card.
+                const itemNames = (order.itemsText || "")
+                  .split(",").map((s) => s.trim()).filter(Boolean);
+                const itemCount = order.items?.length || itemNames.length || 0;
+                const itemSummary = itemNames.length > 2
+                  ? `${itemNames.slice(0, 2).join(", ")} +${itemNames.length - 2} more`
+                  : itemNames.join(", ") || "No item details recorded";
+
                 return (
                   <div
                     key={order.id}
@@ -1731,10 +1901,10 @@ export const Orders = () => {
                       setSelectedOrder(order);
                       setDetailTab("details");
                     }}
-                    className="bg-white border border-slate-200 rounded-xl shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer flex flex-col justify-between overflow-hidden group hover:-translate-y-0.5"
+                    className="bg-white border border-slate-200 rounded-xl shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer flex flex-col overflow-hidden group hover:-translate-y-0.5"
                   >
                     {/* Selecting an order must not also open its detail sheet,
-                        hence stopPropagation on the row's onClick above. */}
+                        hence stopPropagation on the row's onClick below. */}
                     {showPaymentTick && (
                       <label
                         onClick={(e) => e.stopPropagation()}
@@ -1752,62 +1922,106 @@ export const Orders = () => {
                       </label>
                     )}
 
-                    {/* Card Header */}
-                    <div className="p-4 pb-3 border-b border-slate-100">
-                      <div className="flex justify-between items-start gap-2 mb-2">
-                        <div>
-                          <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Order ID</span>
-                          <h4 className="text-sm font-black text-[#10b981]">#{order.id}</h4>
-                        </div>
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] uppercase font-bold tracking-wide ${getStatusBadgeClass(order.status)}`}>
+                    <div className="p-4 flex flex-col gap-2.5">
+                      {/* 1. Order ID — 2. Status. `min-w-0` + `truncate` so a
+                          long id shrinks instead of pushing the badge off the
+                          card or wrapping onto a second line; the full id is
+                          still on hover and in Order Details. */}
+                      <div className="flex justify-between items-center gap-2">
+                        <h4 className="text-sm font-black text-[#10b981] truncate min-w-0" title={order.id}>
+                          #{order.id}
+                        </h4>
+                        <span className={`shrink-0 px-2 py-0.5 rounded-full text-[9px] uppercase font-bold tracking-wide ${getStatusBadgeClass(order.status)}`}>
                           {order.status}
                         </span>
                       </div>
-                      
-                      <div className="flex items-center gap-1.5 mt-2">
-                        <span className={`px-2 py-0.5 rounded border text-[9px] font-bold uppercase ${priority.color} flex items-center gap-1`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${priority.dot}`}></span>
-                          {priority.label} {priority.elapsed !== undefined && `(${priority.elapsed}m ago)`}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase border ${
-                          isTakeaway
-                            ? "bg-amber-50 text-amber-700 border-amber-200"
-                            : "bg-indigo-50 text-indigo-700 border-indigo-200"
-                        }`}>
-                          {isTakeaway ? "🛍️ Takeaway" : "🚚 Delivery"}
-                        </span>
 
+                      {/* Urgency, service type, payment-failure — collapsed to
+                          one compact row so it reads as a glance, not a second
+                          header. Each stays a small chip rather than a boxed
+                          section; none of this is required reading the way the
+                          rows below it are. */}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${priority.color}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${priority.dot}`} />
+                          {priority.label}
+                        </span>
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                          isTakeaway ? "bg-amber-50 text-amber-700" : "bg-indigo-50 text-indigo-700"
+                        }`}>
+                          {isTakeaway ? "Takeaway" : "Delivery"}
+                        </span>
                         {/* A system cancellation is not a customer changing
-                            their mind. Both read "Cancelled" in the status
-                            pill, so without this badge an operator scanning
-                            the list has no way to tell an abandoned checkout
-                            from a call to the kitchen. */}
+                            their mind — both read "Cancelled" in the status
+                            pill above, so without this an operator scanning
+                            the list cannot tell an abandoned checkout from a
+                            call to the kitchen. */}
                         {isPaymentFailedOrder(order) && (
-                          <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase border bg-rose-50 text-rose-700 border-rose-200">
-                            Payment never completed
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-rose-50 text-rose-700">
+                            Payment failed
                           </span>
                         )}
                       </div>
 
-                      {/* Payment window, on the queue where it decides what
-                          happens next. Older orders carry no paymentExpiresAt
+                      {/* 3. Customer. Truncates rather than wraps — a two-line
+                          name pushes every row below it down and makes cards
+                          in the same row uneven heights. */}
+                      <div className="font-bold text-sm text-slate-800 truncate" title={order.customer}>
+                        {order.customer}
+                      </div>
+
+                      {/* 4 + 5. Item summary and total, one line, exactly the
+                          density the mockup asked for — "3 items • ₹580" —
+                          with the actual dish names available on hover rather
+                          than a separate boxed section. */}
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="text-xs text-slate-500 truncate min-w-0" title={itemSummary}>
+                          {itemCount} item{itemCount === 1 ? "" : "s"}
+                          {itemNames.length > 0 && <> &middot; {itemSummary}</>}
+                        </span>
+                        <span className="shrink-0 font-black text-slate-800 text-sm">
+                          ₹{(order.total || 0).toFixed(2)}
+                        </span>
+                      </div>
+
+                      {/* 6. Actual order time. */}
+                      <div className="text-[11px] text-slate-400 font-medium">
+                        Ordered {formatOrderTime(order.createdAt)}
+                      </div>
+
+                      {/* Rider — only once there is one to name, and only for
+                          a delivery order; one line, no boxed background. */}
+                      {!isTakeaway && (order.status === "Out for Delivery" || order.status === "OutForDelivery") && (
+                        <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[13px]">motorcycle</span>
+                          {order.rider || "Not assigned"}
+                        </div>
+                      )}
+
+                      {/* Kitchen note — one truncated line, not a boxed
+                          callout, so one long note cannot dominate the card. */}
+                      {instructionsList.length > 0 && (
+                        <div className="text-[11px] text-amber-700 font-semibold truncate flex items-center gap-1" title={`${instructionsList[0].itemName}: ${instructionsList[0].note}`}>
+                          <span className="material-symbols-outlined text-[13px]">restaurant_menu</span>
+                          {instructionsList[0].itemName}: {instructionsList[0].note}
+                        </div>
+                      )}
+
+                      {/* Payment window — only on the one tab it decides
+                          anything for. Older orders carry no paymentExpiresAt
                           and say so rather than showing a countdown invented
-                          from createdAt — the sweeper will not touch those, so
-                          promising a deadline would be a lie.
-                          Resolution is a minute because the surrounding page
-                          re-renders on a 30-second tick; a seconds display
-                          would sit visibly stale. */}
+                          from createdAt. */}
                       {selectedStatus === "Awaiting Payment" && (() => {
                         const remaining = formatTimeRemaining(order.paymentExpiresAt);
                         if (!remaining) {
                           return (
-                            <div className="mt-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
                               No payment deadline recorded
                             </div>
                           );
                         }
                         return (
-                          <div className={`mt-2 inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-bold ${
+                          <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-bold w-fit ${
                             remaining.expired
                               ? "bg-rose-50 text-rose-700 border-rose-200"
                               : "bg-amber-50 text-amber-700 border-amber-200"
@@ -1819,117 +2033,109 @@ export const Orders = () => {
                       })()}
                     </div>
 
-                    {/* Card Body */}
-                    <div className="p-4 py-3 flex-grow flex flex-col gap-3">
-                      {/* Customer Information */}
-                      <div>
-                        <div className="font-bold text-sm text-slate-800 leading-snug">{order.customer}</div>
-                        <div className="text-xs text-slate-500 mt-0.5 leading-none">
-                          {contactOf(order) || <span className="italic text-slate-400">no contact number</span>}
-                        </div>
-                        {!isTakeaway && addressOf(order) && (
-                          <div className="text-[11px] text-slate-500 mt-1.5 leading-snug flex gap-1">
-                            <span className="material-symbols-outlined text-[13px] leading-none mt-px">location_on</span>
-                            <span className="line-clamp-2">{addressOf(order)}</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Items Text */}
-                      <div className="bg-slate-50 rounded-lg p-2.5 border border-slate-100 text-xs">
-                        <span className="text-[10px] font-bold text-slate-400 block uppercase mb-1">Items</span>
-                        <p className="text-slate-600 font-semibold line-clamp-2 leading-relaxed">
-                          {order.itemsText || (order.items && order.items.map(i => `${i.quantity ?? i.qty ?? 1}x ${i.name}`).join(", "))}
-                        </p>
-                      </div>
-
-                      {/* Cooking notes preview */}
-                      {instructionsList.length > 0 && (
-                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-800 font-medium">
-                          <span className="text-[9px] font-bold text-amber-600 block uppercase mb-0.5 flex items-center gap-1">
-                            <span className="material-symbols-outlined text-[12px]">restaurant_menu</span>
-                            Kitchen Note
-                          </span>
-                          <p className="truncate font-bold">{instructionsList[0].itemName}: {instructionsList[0].note}</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Card Footer */}
-                    <div className="p-4 pt-3 border-t border-slate-100 bg-slate-50/50">
-                      <div className="flex justify-between items-center text-xs text-slate-500 mb-3 font-medium">
-                        <span>{order.paymentMethod?.toUpperCase()} • {order.items?.length || 0} Items</span>
-                        <span className="font-bold text-slate-800 text-sm">₹{order.total.toFixed(2)}</span>
-                      </div>
-
-                      {/* Rider display if delivery */}
-                      {!isTakeaway && (
-                        <div className="text-[11px] font-medium text-slate-500 mb-3 flex items-center gap-1 bg-slate-100 p-1.5 rounded border border-slate-200">
-                          <span className="material-symbols-outlined text-[14px]">motorcycle</span>
-                          <span className="truncate">Rider: <span className="font-bold text-slate-700">{order.rider || "Assigning..."}</span></span>
-                        </div>
-                      )}
-
-                      {/* Quick Action Buttons */}
-                      <div className="grid grid-cols-2 gap-2" onClick={(e) => e.stopPropagation()}>
+                    {/* 7. Primary contextual action — 8. View Details.
+                        The whole card already opens Details on click; this
+                        button is the explicit, visible affordance for it. */}
+                    <div className="mt-auto border-t border-slate-100 bg-slate-50/60 p-3 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                      {order.status === "Pending" && (
                         <button
-                          onClick={(e) => handleCardPrint(e, order)}
-                          className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs py-1.5 rounded-lg font-bold transition-all flex items-center justify-center gap-1"
-                          title="Print slip"
+                          onClick={() => handleUpdateStatus(order.id, "Accepted")}
+                          className="flex-1 bg-green-700 hover:bg-green-800 text-white text-xs py-2 rounded-lg font-bold transition-all"
                         >
-                          <span className="material-symbols-outlined text-[16px]">print</span>
-                          Print KOT
+                          Accept Order
                         </button>
-                        
-                        {order.status === "Pending" && (
-                          <button
-                            onClick={() => handleUpdateStatus(order.id, "Accepted")}
-                            className="bg-green-700 hover:bg-green-800 text-white text-xs py-1.5 rounded-lg font-bold transition-all"
-                          >
-                            Accept
-                          </button>
-                        )}
-                        {order.status === "Accepted" && (
-                          <button
-                            onClick={() => handleUpdateStatus(order.id, "Preparing")}
-                            className="bg-amber-600 hover:bg-amber-700 text-white text-xs py-1.5 rounded-lg font-bold transition-all"
-                          >
-                            Prepare
-                          </button>
-                        )}
-                        {order.status === "Preparing" && (
-                          <button
-                            onClick={() => handleUpdateStatus(order.id, "Ready")}
-                            className="bg-blue-600 hover:bg-blue-700 text-white text-xs py-1.5 rounded-lg font-bold transition-all"
-                          >
-                            Mark Ready
-                          </button>
-                        )}
-                        {(order.status === "Ready" || order.status === "Out for Delivery" || order.status === "OutForDelivery") && (
-                          <button
-                            onClick={() => handleUpdateStatus(order.id, "Delivered")}
-                            className="bg-[#10b981] hover:bg-[#059669] text-white text-xs py-1.5 rounded-lg font-bold transition-all"
-                          >
-                            Deliver
-                          </button>
-                        )}
-                        {order.status === "Delivered" && (
-                          <button
-                            disabled
-                            className="bg-slate-200 text-slate-400 text-xs py-1.5 rounded-lg font-bold cursor-not-allowed"
-                          >
-                            Delivered
-                          </button>
-                        )}
-                        {order.status === "Cancelled" && (
-                          <button
-                            disabled
-                            className="bg-red-50 text-red-400 border border-red-100 text-xs py-1.5 rounded-lg font-bold cursor-not-allowed"
-                          >
-                            Cancelled
-                          </button>
-                        )}
-                      </div>
+                      )}
+                      {order.status === "Accepted" && (
+                        <button
+                          onClick={() => handleUpdateStatus(order.id, "Preparing")}
+                          className="flex-1 bg-amber-600 hover:bg-amber-700 text-white text-xs py-2 rounded-lg font-bold transition-all"
+                        >
+                          Start Preparing
+                        </button>
+                      )}
+                      {order.status === "Preparing" && (
+                        <button
+                          onClick={() => handleUpdateStatus(order.id, "Ready")}
+                          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs py-2 rounded-lg font-bold transition-all"
+                        >
+                          Mark Ready
+                        </button>
+                      )}
+                      {/*
+                        Ready splits by service type rather than both going
+                        straight to Delivered:
+
+                        A takeaway order has no rider — "picked up" is the
+                        actual next event, and it *is* delivered in every
+                        sense that matters, so writing Delivered directly is
+                        correct.
+
+                        A delivery order does not skip a step. Before this,
+                        both cases wrote Delivered directly from Ready, which
+                        meant a delivery order that used this quick button
+                        never passed through "Out for Delivery" — the exact
+                        status the customer app's tracking screen watches for
+                        a moving rider. assignDeliveryPartner (used from the
+                        details panel, opened below) is what correctly sets
+                        Out for Delivery, appends to statusHistory, and
+                        carries the actual rider's name.
+                      */}
+                      {order.status === "Ready" && isTakeaway && (
+                        <button
+                          onClick={() => handleUpdateStatus(order.id, "Delivered")}
+                          className="flex-1 bg-[#10b981] hover:bg-[#059669] text-white text-xs py-2 rounded-lg font-bold transition-all"
+                        >
+                          Mark Picked Up
+                        </button>
+                      )}
+                      {order.status === "Ready" && !isTakeaway && (
+                        <button
+                          onClick={() => { setSelectedOrder(order); setDetailTab("details"); }}
+                          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs py-2 rounded-lg font-bold transition-all"
+                        >
+                          Assign Rider
+                        </button>
+                      )}
+                      {(order.status === "Out for Delivery" || order.status === "OutForDelivery") && (
+                        <button
+                          onClick={() => handleUpdateStatus(order.id, "Delivered")}
+                          className="flex-1 bg-[#10b981] hover:bg-[#059669] text-white text-xs py-2 rounded-lg font-bold transition-all"
+                          title="Manual override — normally the rider or the customer's tracking marks this"
+                        >
+                          Mark Delivered
+                        </button>
+                      )}
+                      {order.status === "Delivered" && (
+                        <button
+                          disabled
+                          className="flex-1 bg-slate-200 text-slate-400 text-xs py-2 rounded-lg font-bold cursor-not-allowed"
+                        >
+                          Delivered
+                        </button>
+                      )}
+                      {order.status === "Cancelled" && (
+                        <button
+                          disabled
+                          className="flex-1 bg-red-50 text-red-400 border border-red-100 text-xs py-2 rounded-lg font-bold cursor-not-allowed"
+                        >
+                          Cancelled
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => { setSelectedOrder(order); setDetailTab("details"); }}
+                        className="shrink-0 w-9 h-9 flex items-center justify-center bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 rounded-lg transition-all"
+                        title="View Details"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">visibility</span>
+                      </button>
+                      <button
+                        onClick={(e) => handleCardPrint(e, order)}
+                        className="shrink-0 w-9 h-9 flex items-center justify-center bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 rounded-lg transition-all"
+                        title="Print KOT"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">print</span>
+                      </button>
                     </div>
                   </div>
                 );
@@ -1969,6 +2175,31 @@ export const Orders = () => {
               </button>
             </div>
           </div>
+
+          {/* Search here only covers whatever is currently loaded (the live
+              200-order window, or a date-range search's results) — Firestore
+              has no substring/text search, so a customer-name or item search
+              across the entire history would need a search backend this
+              project does not have. Set a date range first for anything not
+              in the most recent 200. */}
+          {!histStartDate && !histEndDate && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 text-xs font-semibold text-blue-800 flex items-center gap-2">
+              <span className="material-symbols-outlined text-[16px]">info</span>
+              Showing the most recent {orders.length} orders. Set a date range below to search further back.
+            </div>
+          )}
+          {rangeLoading && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-600 flex items-center gap-2">
+              <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+              Searching that date range…
+            </div>
+          )}
+          {rangeError && (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-2.5 text-xs font-semibold text-rose-700 flex items-center gap-2">
+              <span className="material-symbols-outlined text-[16px]">error</span>
+              {rangeError}
+            </div>
+          )}
 
           {/* Detailed Filters Grid */}
           <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -2108,9 +2339,7 @@ export const Orders = () => {
                 <tbody className="text-xs font-medium text-slate-700 divide-y divide-slate-100">
                   {historyOrders.map(o => {
                     const isTakeaway = o.address === "Counter Pickup" || (o.deliveryAddress && o.deliveryAddress.addressLine === "Counter Pickup") || o.deliveryMode === "Take Away";
-                    const oDate = o.createdAt 
-                      ? (o.createdAt.seconds ? new Date(o.createdAt.seconds * 1000).toLocaleString() : new Date(o.createdAt).toLocaleString())
-                      : "N/A";
+                    const oDate = formatOrderTime(o.createdAt);
                     return (
                       <tr key={o.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-4 px-6 font-extrabold text-[#10b981]">#{o.id}</td>
@@ -2195,7 +2424,7 @@ export const Orders = () => {
                 </div>
                 <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
                   <span className="material-symbols-outlined text-[15px]">schedule</span>
-                  {selectedOrder.timestamp}
+                  {formatOrderTime(selectedOrder.createdAt)}
                 </div>
               </div>
               
@@ -2270,20 +2499,60 @@ export const Orders = () => {
                       <div>
                         <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Customer</span>
                         <h4 className="font-bold text-slate-800 leading-tight">{selectedOrder.customer}</h4>
-                        <a href={`tel:${selectedOrder.phone}`} className="text-xs text-[#10b981] hover:underline flex items-center gap-1 mt-1 font-bold">
-                          <span className="material-symbols-outlined text-[14px]">phone</span>
-                          {selectedOrder.phone}
-                        </a>
+                        {/* contactOf, not selectedOrder.phone directly — the
+                            store's `phone` field is a normalised display
+                            fallback ("Not available") that is not a real
+                            number and must never become a tel: link. */}
+                        {contactOf(selectedOrder) ? (
+                          <a href={`tel:${contactOf(selectedOrder)}`} className="text-xs text-[#10b981] hover:underline flex items-center gap-1 mt-1 font-bold">
+                            <span className="material-symbols-outlined text-[14px]">phone</span>
+                            {contactOf(selectedOrder)}
+                          </a>
+                        ) : (
+                          <span className="text-xs text-slate-400 italic mt-1 block">Not available</span>
+                        )}
                       </div>
                     </div>
-                    <a
-                      href={`tel:${selectedOrder.phone}`}
-                      className="p-2 bg-slate-50 hover:bg-slate-100 text-[#10b981] rounded-lg transition-colors border border-slate-200/60"
-                      title="Call Customer"
-                    >
-                      <span className="material-symbols-outlined text-[18px]">call</span>
-                    </a>
+                    {contactOf(selectedOrder) && (
+                      <a
+                        href={`tel:${contactOf(selectedOrder)}`}
+                        className="p-2 bg-slate-50 hover:bg-slate-100 text-[#10b981] rounded-lg transition-colors border border-slate-200/60"
+                        title="Call Customer"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">call</span>
+                      </a>
+                    )}
                   </div>
+
+                  {/* Order Timeline — built only from statusHistory, the real
+                      array `updateOrderStatus` and `assignDeliveryPartner`
+                      append to on every transition. No stage is invented: an
+                      order that skipped or has not yet reached a stage simply
+                      has no row for it. */}
+                  {Array.isArray(selectedOrder.statusHistory) && selectedOrder.statusHistory.length > 0 && (
+                    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+                      <h4 className="font-bold text-xs text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[16px]">timeline</span>
+                        Order Timeline
+                      </h4>
+                      <div className="flex flex-col gap-3">
+                        {[...selectedOrder.statusHistory]
+                          .sort((a, b) => (parseOrderDate(a.timestamp)?.getTime() ?? 0) - (parseOrderDate(b.timestamp)?.getTime() ?? 0))
+                          .map((entry, idx, arr) => (
+                            <div key={idx} className="flex items-start gap-3">
+                              <div className="flex flex-col items-center">
+                                <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${idx === arr.length - 1 ? "bg-[#10b981]" : "bg-slate-300"}`} />
+                                {idx < arr.length - 1 && <span className="w-px flex-grow bg-slate-200 my-0.5" style={{ minHeight: 16 }} />}
+                              </div>
+                              <div className="pb-1">
+                                <span className="text-xs font-bold text-slate-800">{entry.status}</span>
+                                <span className="block text-[11px] text-slate-500">{formatOrderTime(entry.timestamp)}</span>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/*
                     Totals verification, from onOrderCreatedVerifyTotals.
@@ -2349,7 +2618,7 @@ export const Orders = () => {
                         <div>
                           <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Cancelled at</span>
                           <span className="text-xs font-semibold text-slate-700">
-                            {parseOrderDate(selectedOrder.cancelledAt).toLocaleString()}
+                            {formatOrderTime(selectedOrder.cancelledAt)}
                           </span>
                         </div>
                       )}
@@ -2551,12 +2820,7 @@ export const Orders = () => {
                             <div>
                               <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Assigned At</span>
                               <span className="font-semibold text-slate-700">
-                                {(() => {
-                                  const ts = selectedOrder.assignedAt;
-                                  if (typeof ts.toDate === "function") return ts.toDate().toLocaleString();
-                                  if (ts.seconds) return new Date(ts.seconds * 1000).toLocaleString();
-                                  return new Date(ts).toLocaleString();
-                                })()}
+                                {formatOrderTime(selectedOrder.assignedAt)}
                               </span>
                             </div>
                           )}
@@ -2669,13 +2933,13 @@ export const Orders = () => {
                 <div id="kot-print-area" className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col gap-4 shadow-sm">
                   <div className="text-center pb-3 border-b border-dashed border-slate-300">
                     <h3 className="text-xl font-black text-slate-800 tracking-wider">KITCHEN ORDER TICKET</h3>
-                    <p className="text-[10px] text-slate-500 font-bold mt-1">HOMEBITES KITCHEN OPERATIONS</p>
+                    <p className="text-[10px] text-slate-500 font-bold mt-1">HOMBITES KITCHEN OPERATIONS</p>
                   </div>
-                  
+
                   <div className="flex justify-between items-center text-xs font-semibold text-slate-600">
                     <div>
                       <div>ORDER: <span className="font-bold text-slate-800">#{selectedOrder.id}</span></div>
-                      <div className="mt-0.5">DATE: {selectedOrder.timestamp}</div>
+                      <div className="mt-0.5">DATE: {formatOrderTimeAbsolute(selectedOrder.createdAt) || "Not available"}</div>
                     </div>
                     <div className="text-right">
                       <span className={`px-2.5 py-1 rounded text-xs font-black uppercase border ${

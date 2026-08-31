@@ -1,8 +1,8 @@
 /**
- * The five stages an order moves through, and how the stored status maps onto
+ * The six stages an order moves through, and how the stored status maps onto
  * them.
  *
- * ## Why a mapping rather than five status values
+ * ## Why a mapping rather than six status values
  *
  * Three surfaces write `status` and they do not agree. The customer app writes
  * `Pending` and `Payment Pending`; the dashboard writes `Accepted`,
@@ -10,7 +10,7 @@
  * client writes it without spaces. `Delivered` and `Completed` both exist and
  * mean the same thing.
  *
- * Collapsing that to five stored values would be the tidier answer, and it is
+ * Collapsing that to six stored values would be the tidier answer, and it is
  * the one to reach eventually. It is not the one to reach in the middle of
  * service: it needs a migration over live orders and a matching release of two
  * Flutter apps that cannot be compiled here. So this maps instead. Nothing
@@ -21,11 +21,22 @@
  * {@link STAGE.ORDERS} rather than vanishing. A status nobody planned for is a
  * thing to notice at the top of the queue, not a document that quietly stops
  * appearing anywhere.
+ *
+ * ## READY used to live inside PREPARING
+ *
+ * It was folded in on the reasoning that a cooked meal still on the pass has
+ * not left the kitchen. That is still true, but it turned out to matter
+ * operationally which of the two an order is in: "still cooking" and "cooked,
+ * waiting for a rider" call for different actions (kitchen staff vs. whoever
+ * assigns riders) and looked identical in one bucket. Split into its own
+ * stage so the dashboard can tell them apart; `isInKitchenQueue` below still
+ * counts both, because the food has not left the building either way.
  */
 
 export const STAGE = {
   ORDERS: 'orders',
   PREPARING: 'preparing',
+  READY: 'ready',
   OUT_FOR_DELIVERY: 'out_for_delivery',
   COMPLETED: 'completed',
   CANCELLED: 'cancelled',
@@ -33,8 +44,9 @@ export const STAGE = {
 
 /** Tab order, left to right. Labels are display only. */
 export const STAGES = [
-  { id: STAGE.ORDERS, label: 'Orders' },
+  { id: STAGE.ORDERS, label: 'New Orders' },
   { id: STAGE.PREPARING, label: 'Preparing' },
+  { id: STAGE.READY, label: 'Ready for Pickup' },
   { id: STAGE.OUT_FOR_DELIVERY, label: 'Out for Delivery' },
   { id: STAGE.COMPLETED, label: 'Completed' },
   { id: STAGE.CANCELLED, label: 'Cancelled' },
@@ -48,10 +60,10 @@ export function normaliseStatus(status) {
 /**
  * Every stored spelling, grouped.
  *
- * `Ready` sits in PREPARING on purpose. A cooked meal on the pass has not left
- * the kitchen, and the rider has not taken it — putting it under Out for
- * Delivery would tell the dashboard a bike is moving when the food is still on
- * the counter.
+ * `Ready` gets its own stage: the meal is cooked and on the pass, but a rider
+ * has not taken it yet — a different operational moment from "still cooking"
+ * and from "a bike is moving", so it is neither PREPARING nor
+ * OUT_FOR_DELIVERY.
  */
 const STATUS_TO_STAGE = new Map(Object.entries({
   // — Orders: arrived, not yet cooking.
@@ -62,12 +74,14 @@ const STATUS_TO_STAGE = new Map(Object.entries({
   confirmed: STAGE.ORDERS,
   accepted: STAGE.ORDERS,
 
-  // — Preparing: in the kitchen, including plated and waiting for a rider.
+  // — Preparing: actively cooking in the kitchen.
   preparing: STAGE.PREPARING,
   cooking: STAGE.PREPARING,
   inkitchen: STAGE.PREPARING,
-  ready: STAGE.PREPARING,
-  readyforpickup: STAGE.PREPARING,
+
+  // — Ready: cooked, on the pass, waiting for a rider or a pickup.
+  ready: STAGE.READY,
+  readyforpickup: STAGE.READY,
 
   // — Out for delivery: a rider has it.
   outfordelivery: STAGE.OUT_FOR_DELIVERY,
@@ -91,9 +105,14 @@ export function stageOf(order) {
   return STATUS_TO_STAGE.get(normaliseStatus(raw)) || STAGE.ORDERS;
 }
 
-/** True when the order should appear in the kitchen queue. */
+/**
+ * True when the order should appear in the kitchen queue — still cooking, or
+ * cooked and waiting on the pass. Both are "the food has not left the
+ * building yet".
+ */
 export function isInKitchenQueue(order) {
-  return stageOf(order) === STAGE.PREPARING;
+  const stage = stageOf(order);
+  return stage === STAGE.PREPARING || stage === STAGE.READY;
 }
 
 /**
@@ -110,6 +129,7 @@ export function isInKitchenQueue(order) {
 const STAGE_ORDER = [
   STAGE.ORDERS,
   STAGE.PREPARING,
+  STAGE.READY,
   STAGE.OUT_FOR_DELIVERY,
   STAGE.COMPLETED,
 ];
@@ -117,6 +137,7 @@ const STAGE_ORDER = [
 /** Canonical status written when moving into a stage. */
 export const STAGE_WRITE_STATUS = {
   [STAGE.PREPARING]: 'Preparing',
+  [STAGE.READY]: 'Ready',
   [STAGE.OUT_FOR_DELIVERY]: 'Out for Delivery',
   [STAGE.COMPLETED]: 'Delivered',
   [STAGE.CANCELLED]: 'Cancelled',

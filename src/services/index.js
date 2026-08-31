@@ -205,22 +205,30 @@ export const OrderService = {
   async getOrders() {
     try {
       const list = await repos.orderRepository.getAll();
+      // Same normalisation as orderStore.js's live listener (kept as a
+      // separate copy — this file cannot import from orderStore.js, which
+      // imports OrderService from here). "Walk-in Customer" is a real,
+      // honest default only for a spot order the admin placed without
+      // typing a name (`placedBy: 'admin'`); anything else missing a name,
+      // a time, or a city is a genuine data gap and is shown as such rather
+      // than backfilled with invented text.
       const mapped = list.map(o => ({
         ...o,
-        customer: o.customerName || o.customer || "Walk-in Customer",
-        phone: o.customerPhone || o.phone || "N/A",
-        time: o.time || "Just now",
-        timestamp: o.timestamp || (o.createdAt ? parseDate(o.createdAt).toLocaleString() : ""),
+        customer: o.customerName || o.customer
+          || (o.placedBy === "admin" ? "Walk-in Customer" : "Not available"),
+        phone: o.customerPhone || o.phone || "Not available",
+        time: o.time || null,
+        timestamp: o.timestamp || null,
         itemsText: o.itemsText || (o.items ? o.items.map(i => `${i.quantity ?? i.qty ?? 1}x ${i.name}`).join(", ") : ""),
         items: o.items || [],
         subtotal: Number(o.subtotal || 0),
         tax: Number(o.tax || 0),
         deliveryFee: Number(o.deliveryFee || o.deliveryCharge || 0),
-        total: Number(o.total || o.totalAmount || 0),
+        total: Number(o.total || o.totalAmount || o.grandTotal || 0),
         status: o.status || "Pending",
-        rider: o.rider || (o.assignedPartnerName ? `${o.assignedPartnerName}` : "Assigning..."),
+        rider: o.rider || (o.assignedPartnerName ? `${o.assignedPartnerName}` : "Not assigned"),
         address: formatAddress(o.deliveryAddress || o.address),
-        city: o.city || "Bengaluru",
+        city: o.city || null,
         note: o.note || ""
       }));
       
@@ -337,10 +345,48 @@ export const OrderService = {
   },
   async assignDeliveryPartner(orderId, partnerId, partnerName, actor) {
     try {
-      const result = await repos.orderRepository.update(orderId, { 
+      /**
+       * Photo, vehicle number and phone are copied onto the order at
+       * assignment time rather than read live from `deliveryPartners` by the
+       * customer app.
+       *
+       * That collection also holds each rider's Aadhaar, PAN, driving
+       * licence and bank account/IFSC — the read rule that let a customer
+       * fetch a rider's name and photo for the tracking screen necessarily
+       * let them fetch the whole document, KYC included. Firestore rules
+       * are document-, not field-, granular, so there was no way to expose
+       * "just the display fields" from that collection to a customer.
+       *
+       * Denormalising the display fields the tracking screen actually needs
+       * onto the order — which the customer already has correctly-scoped
+       * read access to via their own `customerId` — removes the need for
+       * that customer-facing read entirely, so `deliveryPartners` can be
+       * locked to the partner themselves and admins only (see
+       * firestore.rules). `assignedPartnerName` already worked this way;
+       * this extends the same pattern to the three fields that used to
+       * require the broader read.
+       */
+      let partnerPhoto = "";
+      let partnerVehicle = "";
+      let partnerPhone = "";
+      try {
+        const partnerDoc = await repos.deliveryPartnerRepository.getById(partnerId);
+        if (partnerDoc) {
+          partnerPhoto = partnerDoc.photoUrl || partnerDoc.photo || "";
+          partnerVehicle = partnerDoc.vehicleNumber || partnerDoc.vehicleNo || "";
+          partnerPhone = partnerDoc.contactNumber || partnerDoc.phone || partnerDoc.mobile || "";
+        }
+      } catch (partnerReadErr) {
+        console.warn("Could not read partner profile for denormalisation:", partnerReadErr.message);
+      }
+
+      const result = await repos.orderRepository.update(orderId, {
         deliveryPartnerId: partnerId,
         assignedPartnerId: partnerId,
         assignedPartnerName: partnerName || "Rider",
+        assignedPartnerPhoto: partnerPhoto,
+        assignedPartnerVehicle: partnerVehicle,
+        assignedPartnerPhone: partnerPhone,
         rider: partnerName || "Rider",
         assignmentStatus: "Assigned",
         status: "Out for Delivery",
@@ -478,8 +524,13 @@ export const OrderService = {
         customerId: orderData.customerId || null,
         customerName: orderData.customer || "Walk-in Customer",
         customerPhone: orderData.phone || "N/A",
-        time: "Just now",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        // `time`/`timestamp` are not written here any more. Both used to
+        // freeze a display string at creation — "Just now", or a
+        // browser-timezone-local clock reading — directly into the
+        // document, so an order read back a day later still said "Just
+        // now" forever. `createdAt` below is the one real timestamp; every
+        // reader now derives its own display text from that, in
+        // Asia/Kolkata, at read time (see Orders.jsx's formatOrderTime).
         itemsText: orderData.itemsText || "",
         items: orderData.items || [],
         subtotal: Number(orderData.subtotal || 0),
@@ -521,7 +572,11 @@ export const OrderService = {
         createdAt: Timestamp.now(),
         rider: orderData.rider || "Assigning...",
         deliveryAddress: orderData.address || "Counter Pickup",
-        city: orderData.city || "Bengaluru",
+        // "Bengaluru" was never a real fallback for a Guntur-only kitchen —
+        // a leftover from a template. Only written when the admin actually
+        // supplied one; otherwise the field is simply absent rather than
+        // wrong.
+        ...(orderData.city ? { city: orderData.city } : {}),
         note: orderData.note || "",
         // Left empty on purpose. `onOrderCreatedIssueCode` issues the code
         // server-side for every order, whatever created it, so all three

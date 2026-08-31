@@ -72,6 +72,72 @@ export const isPaymentFailedOrder = (o) => {
 export const needsRefund = (o) =>
   o?.refundRequired === true || o?.paymentStatus === "PaidAfterCancel";
 
+/** One date parser for every shape a timestamp arrives in from this collection. */
+export const parseOrderDocDate = (val) => {
+  if (!val) return new Date(0);
+  if (val instanceof Date) return val;
+  if (typeof val.toDate === "function") return val.toDate();
+  if (val.seconds !== undefined) return new Date(val.seconds * 1000);
+  if (typeof val === "string") {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? new Date(0) : d;
+  }
+  if (typeof val === "number") return new Date(val);
+  return new Date(0);
+};
+
+const formatAddress = (addr) => {
+  if (!addr) return "N/A";
+  if (typeof addr === "string") return addr;
+  const parts = [addr.flatNo, addr.area, addr.landmark, addr.city, addr.pinCode].filter(Boolean);
+  return parts.length > 0 ? parts.join(", ") : "N/A";
+};
+
+/**
+ * Raw Firestore order data → the shape every screen in this dashboard reads.
+ *
+ * One function so the live listener below and any one-off query (the Orders
+ * page's date-range history search, which cannot rely on the live listener's
+ * 200-document cap — see `subscribeOrders`'s own note) produce identical
+ * records instead of two normalisations quietly drifting apart.
+ */
+export function normaliseOrderDoc(id, o) {
+  return {
+    id,
+    ...o,
+    // "Walk-in Customer" is a real, honest default only for a spot order the
+    // admin placed at the counter without typing a name (see the spot-order
+    // modal's own default) — `placedBy: 'admin'` marks those. Any other order
+    // without a name is a genuine data problem, and "Not available" says so
+    // instead of quietly relabelling it as a walk-in sale that never happened.
+    customer: o.customerName || o.customer
+      || (o.placedBy === "admin" ? "Walk-in Customer" : "Not available"),
+    phone: o.customerPhone || o.phone || "Not available",
+    // No source in this project ever writes a `time` string field — it was
+    // silently defaulting every order, of any age, to "Just now". `createdAt`
+    // (a real Firestore Timestamp) is the only honest source for when an
+    // order was placed; formatOrderTime (in Orders.jsx) renders it, in
+    // Asia/Kolkata, wherever a time is shown. Kept only for whatever else
+    // still reads it, and no longer fabricates a value.
+    time: o.time || null,
+    timestamp: o.timestamp || null,
+    itemsText: o.itemsText || (o.items ? o.items.map(i => `${i.quantity ?? i.qty ?? 1}x ${i.name}`).join(", ") : ""),
+    items: o.items || [],
+    subtotal: Number(o.subtotal || 0),
+    tax: Number(o.tax || 0),
+    deliveryFee: Number(o.deliveryFee || o.deliveryCharge || 0),
+    total: Number(o.total || o.totalAmount || o.grandTotal || 0),
+    status: o.status || "Pending",
+    rider: o.rider || (o.assignedPartnerName ? `${o.assignedPartnerName}` : "Not assigned"),
+    address: formatAddress(o.deliveryAddress || o.address),
+    // The business operates in Guntur only (see Part 6 of the customer-app
+    // audit). "Bengaluru" was never a real fallback — it was a leftover from
+    // a template. A missing city is not shown as any city.
+    city: o.city || null,
+    note: o.note || "",
+  };
+}
+
 export const useOrderStore = create((set, get) => ({
   /** Settled orders — COD, wallet, or a verified online payment. */
   orders: [],
@@ -101,32 +167,6 @@ export const useOrderStore = create((set, get) => ({
 
     set({ loading: true, error: null });
 
-    const formatAddress = (addr) => {
-      if (!addr) return "N/A";
-      if (typeof addr === "string") return addr;
-      const parts = [
-        addr.flatNo,
-        addr.area,
-        addr.landmark,
-        addr.city,
-        addr.pinCode
-      ].filter(Boolean);
-      return parts.length > 0 ? parts.join(", ") : "N/A";
-    };
-
-    const parseDate = (val) => {
-      if (!val) return new Date(0);
-      if (val instanceof Date) return val;
-      if (typeof val.toDate === "function") return val.toDate();
-      if (val.seconds !== undefined) return new Date(val.seconds * 1000);
-      if (typeof val === "string") {
-        const d = new Date(val);
-        return isNaN(d.getTime()) ? new Date(0) : d;
-      }
-      if (typeof val === "number") return new Date(val);
-      return new Date(0);
-    };
-
     const unsubscribe = onSnapshot(
       query(collection(db, "orders"), orderBy("createdAt", "desc"), limit(200)),
       (snapshot) => {
@@ -134,32 +174,14 @@ export const useOrderStore = create((set, get) => ({
         snapshot.forEach((doc) => {
           const o = doc.data();
           if (o.isDeleted !== true) {
-            orders.push({
-              id: doc.id,
-              ...o,
-              customer: o.customerName || o.customer || "Walk-in Customer",
-              phone: o.customerPhone || o.phone || "N/A",
-              time: o.time || "Just now",
-              timestamp: o.timestamp || (o.createdAt ? parseDate(o.createdAt).toLocaleString() : ""),
-              itemsText: o.itemsText || (o.items ? o.items.map(i => `${i.quantity ?? i.qty ?? 1}x ${i.name}`).join(", ") : ""),
-              items: o.items || [],
-              subtotal: Number(o.subtotal || 0),
-              tax: Number(o.tax || 0),
-              deliveryFee: Number(o.deliveryFee || o.deliveryCharge || 0),
-              total: Number(o.total || o.totalAmount || 0),
-              status: o.status || "Pending",
-              rider: o.rider || (o.assignedPartnerName ? `${o.assignedPartnerName}` : "Assigning..."),
-              address: formatAddress(o.deliveryAddress || o.address),
-              city: o.city || "Bengaluru",
-              note: o.note || ""
-            });
+            orders.push(normaliseOrderDoc(doc.id, o));
           }
         });
 
         // Sort by createdAt descending
         orders.sort((a, b) => {
-          const dateA = parseDate(a.createdAt || a.timestamp);
-          const dateB = parseDate(b.createdAt || b.timestamp);
+          const dateA = parseOrderDocDate(a.createdAt || a.timestamp);
+          const dateB = parseOrderDocDate(b.createdAt || b.timestamp);
           return dateB - dateA;
         });
 

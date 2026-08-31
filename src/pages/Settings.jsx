@@ -33,6 +33,7 @@ export const Settings = () => {
   const [preordersAvailable, setPreordersAvailable] = useState(true);
   const [heroBackgroundImageUrl, setHeroBackgroundImageUrl] = useState("");
   const [dietHeroBackgroundImageUrl, setDietHeroBackgroundImageUrl] = useState("");
+  const [splashImageUrl, setSplashImageUrl] = useState("");
 
   // Financial parameters state
   const [taxRate, setTaxRate] = useState(5.0); // GST %
@@ -118,6 +119,7 @@ export const Settings = () => {
           setAcceptingOrders(data.storeOpen !== undefined ? data.storeOpen : true);
           setPreordersAvailable(data.preordersAvailable !== undefined ? data.preordersAvailable : true);
           setHeroBackgroundImageUrl(data.heroBackgroundImageUrl || data.heroImage || "");
+          setSplashImageUrl(data.splashImageUrl || "");
           setDietHeroBackgroundImageUrl(data.dietHeroBackgroundImageUrl || data.dietHeroImage || "");
 
           setTaxRate(data.taxRate !== undefined ? data.taxRate : 5.0);
@@ -233,6 +235,7 @@ export const Settings = () => {
       preordersAvailable,
       heroBackgroundImageUrl,
       dietHeroBackgroundImageUrl,
+      splashImageUrl,
       taxRate: Number(taxRate),
       commissionRate: Number(commissionRate),
       platformFee: Number(platformFee),
@@ -1158,6 +1161,93 @@ export const Settings = () => {
                 folder="settings/diet_hero"
                 label="Upload / Change Diet Page Hero Background Cover Image"
               />
+            </section>
+
+            {/* Customer App Splash Screen */}
+            <section className="bg-white border border-[#dce2f3] rounded-xl p-6 relative overflow-hidden group shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-headline-md text-headline-md text-[#151c27] font-semibold flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[#10b981]">smartphone</span>
+                    Customer App Splash Screen
+                  </h3>
+                  <p className="font-body-sm text-body-sm text-[#555f6f] mt-1">
+                    The full-screen artwork shown while the app starts. Upload a
+                    tall portrait image &mdash; 1284 &times; 2778 or the same 1:2.17
+                    shape. Leave this empty to use the artwork built into the app.
+                  </p>
+                </div>
+                <button
+                  onClick={handleSave}
+                  className="inner-shine bg-[#10b981] hover:bg-[#059669] text-white font-label-md text-label-md px-5 py-2 rounded-lg shadow-xs flex items-center gap-2"
+                >
+                  <span className="material-symbols-outlined text-[16px]">save</span>
+                  Save Splash Image
+                </button>
+              </div>
+
+              {/*
+                * Says plainly when the change reaches customers.
+                *
+                * The splash is the first thing drawn, so the app cannot ask
+                * Firestore what to show without putting a network round trip
+                * in front of every cold start. It uses the copy it already has
+                * on the device. That means a new image appears on a customer's
+                * *next* launch, not the one during which their app first sees
+                * this setting — and an admin who is not told that will report
+                * it as a bug after checking their own phone once.
+                */}
+              <div className="mb-6 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                <span className="material-symbols-outlined text-amber-600 text-[18px] mt-[1px]">schedule</span>
+                <p className="text-[13px] text-amber-900 leading-relaxed">
+                  <strong>Takes effect on the customer&rsquo;s second launch.</strong> The
+                  app downloads the new artwork in the background the first time it
+                  sees this setting, and shows it from the launch after that. This is
+                  deliberate &mdash; waiting for the download would delay every app
+                  start. Customers who never open the app will not download it at all.
+                </p>
+              </div>
+
+              {/* Phone-shaped preview, because a wide crop of a 1:2.17 image
+                  tells you nothing about how it will actually sit on a phone. */}
+              <div className="mb-6 flex justify-center">
+                <div className="relative w-[200px] h-[434px] rounded-[28px] overflow-hidden border-[6px] border-slate-800 bg-[#FDF8EF] shadow-lg">
+                  {splashImageUrl ? (
+                    <img
+                      src={splashImageUrl}
+                      alt="Splash screen preview"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center text-center px-4">
+                      <span className="material-symbols-outlined text-[#10b981] text-[32px]">
+                        image
+                      </span>
+                      <p className="text-[11px] text-slate-500 mt-2 leading-snug">
+                        No custom image.<br />Using the artwork built into the app.
+                      </p>
+                    </div>
+                  )}
+                  <div className="absolute top-2 left-1/2 -translate-x-1/2 w-16 h-[5px] rounded-full bg-slate-800/70" />
+                </div>
+              </div>
+
+              <ImageUploader
+                value={splashImageUrl}
+                onChange={(url) => setSplashImageUrl(url)}
+                folder="settings/splash"
+                label="Upload / Change Customer App Splash Screen Image"
+              />
+
+              {splashImageUrl && (
+                <button
+                  onClick={() => setSplashImageUrl("")}
+                  className="mt-3 text-[13px] font-semibold text-slate-600 hover:text-red-600 flex items-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                  Clear and go back to the built-in artwork
+                </button>
+              )}
             </section>
           </div>
         )}
