@@ -6,7 +6,12 @@ export const ImageUploader = ({
   onChange,
   folder = "general",
   label = "Image",
-  helpText = "Upload file to Storage or paste external image URL"
+  helpText = "Upload file to Storage or paste external image URL",
+  // Pre-compression ceiling on the picked file. The canvas step downscales to
+  // ~1200px wide JPEG regardless, so the stored object is almost always well
+  // under this; the limit just rejects an oversized original early with a
+  // clear message instead of letting it fail mid-upload.
+  maxSizeMB = 5
 }) => {
   const [mode, setMode] = useState(value && !value.includes("firebasestorage") && !value.startsWith("data:") ? "url" : "upload");
   const [pastedUrl, setPastedUrl] = useState(value || "");
@@ -45,8 +50,8 @@ export const ImageUploader = ({
       return;
     }
 
-    if (file.size > 10 * 1024 * 1024) {
-      setError("File size exceeds 10MB limit");
+    if (file.size > maxSizeMB * 1024 * 1024) {
+      setError(`File size exceeds ${maxSizeMB}MB limit. Pick a smaller image or crop it first.`);
       return;
     }
 
@@ -202,7 +207,7 @@ export const ImageUploader = ({
               <p className="text-xs font-bold text-slate-700 dark:text-slate-200">
                 Click to upload <span className="text-slate-400 font-normal">or drag & drop</span>
               </p>
-              <p className="text-[10px] text-slate-400 mt-0.5">PNG, JPG, WEBP up to 10MB</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">PNG, JPG, WEBP up to {maxSizeMB}MB</p>
             </div>
           </label>
         </div>

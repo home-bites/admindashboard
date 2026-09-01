@@ -123,16 +123,22 @@ export const uploadFile = async (file, path, onProgress = null) => {
             }
           },
           async (err) => {
-            console.warn("[Storage Engine] Storage upload failed, trying inline fallback:", err.message);
+            console.warn("[Storage Engine] Storage upload failed, trying inline fallback:", err.code, err.message);
             const dataUrl = await fileToDataURL(compressed);
             if (dataUrlBytes(dataUrl) > MAX_INLINE_BYTES) {
               // Failing here is the point. Silently inlining a photo made the
               // upload look successful while quietly making every customer's
               // app slower, with nothing to connect the two.
+              const denied =
+                err.code === "storage/unauthorized" ||
+                err.code === "storage/unauthenticated";
               reject(new Error(
-                "Image upload failed and the file is too large to store inline. " +
-                "This usually means Firebase Storage CORS is not configured. " +
-                "Fix Storage, or use an image under 100 KB."
+                denied
+                  ? "Image upload was refused by Firebase Storage (permission denied). " +
+                    "Deploy the current storage.rules (`firebase deploy --only storage`) " +
+                    "and make sure you are signed in with an admin/manager account."
+                  : "Image upload failed and the file is too large to store inline. " +
+                    "Check the Firebase Storage bucket configuration, or use an image under 100 KB."
               ));
               return;
             }
