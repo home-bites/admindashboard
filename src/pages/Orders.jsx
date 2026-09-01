@@ -1095,6 +1095,17 @@ export const Orders = () => {
   };
 
 
+  /** Cancel / reject an order from the details drawer. Confirms first because
+   *  a mis-click here cancels a live order. */
+  const cancelOrderFromDrawer = async (order) => {
+    if (!order?.id || busyOrderId) return;
+    const stage = stageOf(order);
+    const verb = stage === STAGE.ORDERS ? "Reject" : "Cancel";
+    if (!window.confirm(`${verb} order #${order.orderId || order.id}? This cannot be undone.`)) return;
+    await advanceOrder(order, STAGE.CANCELLED);
+    setDetailOrder(null);
+  };
+
   if (loading && orders.length === 0) {
     return <LoadingComponents.LoadingPage />;
   }
@@ -2730,6 +2741,7 @@ export const Orders = () => {
                 {selectedOrder.status !== "Delivered" && selectedOrder.status !== "Cancelled" && (
                   <button
                     onClick={() => {
+                      if (!window.confirm(`Cancel order #${selectedOrder.orderId || selectedOrder.id}? This cannot be undone.`)) return;
                       handleUpdateStatus(selectedOrder.id, "Cancelled");
                       setSelectedOrder(null);
                     }}
@@ -3212,9 +3224,10 @@ export const Orders = () => {
           onClose={() => setEditingItems(null)}
           onSaved={() => {
             // The order list is a live snapshot listener, so the row updates
-            // itself. The detail panel holds its own copy, which would
+            // itself. Both detail panels hold their own copy, which would
             // otherwise keep showing the pre-edit items until reopened.
             setSelectedOrder(null);
+            setDetailOrder(null);
           }}
         />
       )}
@@ -3226,9 +3239,12 @@ export const Orders = () => {
         order={detailOrder}
         open={Boolean(detailOrder)}
         busy={busyOrderId === detailOrder?.id}
+        menuItems={menuItems}
         onClose={() => setDetailOrder(null)}
         onUpdateStatus={advanceOrder}
         onAssignRider={(o) => setAssignTarget(o)}
+        onEditItems={(o) => setEditingItems(o)}
+        onCancelOrder={cancelOrderFromDrawer}
         onPrintResult={reportPrint}
       />
 

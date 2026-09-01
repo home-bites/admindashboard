@@ -32,7 +32,10 @@ export const OrderDetailsDrawer = ({
   onClose,
   onUpdateStatus,
   onAssignRider,
+  onCancelOrder,
+  onEditItems,
   onPrintResult,
+  menuItems = [],
   busy = false,
 }) => {
   const panelRef = useRef(null);
@@ -58,6 +61,27 @@ export const OrderDetailsDrawer = ({
   const type = orderTypeOf(order);
   const timeline = buildTimeline(order);
   const items = Array.isArray(order.items) ? order.items : [];
+
+  /* The order stores a copy of each item's image at purchase time, but older
+     orders (and items whose menu photo was added later) have it blank. Fall
+     back to the current menu item's picture, matched on id, so the drawer
+     shows the dish instead of an empty grey box. */
+  const menuImageById = new Map(
+    (Array.isArray(menuItems) ? menuItems : [])
+      .map((m) => [String(m.id ?? m.menuItemId ?? ""), m.imageUrl || m.image || ""])
+      .filter(([id, url]) => id && url),
+  );
+  const itemImage = (item) =>
+    item.image || item.imageUrl || item.img || item.photo ||
+    menuImageById.get(String(item.menuItemId ?? item.itemId ?? item.id ?? "")) || "";
+
+  // "Edit items" is only honest before the kitchen starts on the order — the
+  // Cloud Function refuses it later anyway, so don't offer a button that fails.
+  const canEditItems = Boolean(onEditItems) && stage === STAGE.ORDERS;
+  // Cancelling is allowed from anywhere the state machine permits (everything
+  // except an already-finished or already-cancelled order).
+  const canCancel = Boolean(onCancelOrder) &&
+    planTransition(order, STAGE.CANCELLED).allowed;
 
   const report = (result) => onPrintResult?.(result);
 
@@ -192,7 +216,7 @@ export const OrderDetailsDrawer = ({
                   return (
                     <li key={i} className="flex gap-3 py-2.5">
                       <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-slate-100">
-                        <AssetImage src={item.image || item.imageUrl} alt={item.name || "Item"}
+                        <AssetImage src={itemImage(item)} alt={item.name || "Item"}
                                     className="h-full w-full object-cover" label="" />
                       </div>
                       <div className="min-w-0 flex-1">
@@ -305,7 +329,9 @@ export const OrderDetailsDrawer = ({
 
         {/* ── Footer actions ─────────────────────────────────────────── */}
         <footer className="shrink-0 border-t border-slate-200 bg-slate-50 px-5 py-3">
-          {moves.length === 0 && !(stage === STAGE.READY && type !== "pickup") ? (
+          {moves.length === 0
+            && !(stage === STAGE.READY && type !== "pickup")
+            && !canEditItems && !canCancel ? (
             <p className="text-xs text-slate-500">
               {stage === STAGE.COMPLETED
                 ? "This order is complete. No further status change is possible."
@@ -349,6 +375,28 @@ export const OrderDetailsDrawer = ({
                 >
                   <span className="material-symbols-outlined text-[15px]">swap_horiz</span>
                   Change rider
+                </button>
+              )}
+
+              {canEditItems && (
+                <button
+                  disabled={busy}
+                  onClick={() => onEditItems(order)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 outline-none transition-colors hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-50"
+                >
+                  <span className="material-symbols-outlined text-[15px]">edit</span>
+                  Edit items
+                </button>
+              )}
+
+              {canCancel && (
+                <button
+                  disabled={busy}
+                  onClick={() => onCancelOrder(order)}
+                  className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-4 py-2 text-xs font-bold text-rose-600 outline-none transition-colors hover:bg-rose-50 focus-visible:ring-2 focus-visible:ring-rose-400 disabled:opacity-50"
+                >
+                  <span className="material-symbols-outlined text-[15px]">cancel</span>
+                  {stage === STAGE.ORDERS ? "Reject order" : "Cancel order"}
                 </button>
               )}
             </div>
