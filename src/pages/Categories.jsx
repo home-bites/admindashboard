@@ -2,8 +2,8 @@ import React, { useState, useEffect } from "react";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
 import { useCategoryStore } from "../store/categoryStore";
-import { uploadFile } from "../firebase/storage";
 import EmptyState from "../components/EmptyState";
+import ErrorState from "../components/ErrorState";
 import * as LoadingComponents from "../components/LoadingComponents";
 import { ImageUploader } from "../components/ImageUploader";
 
@@ -15,14 +15,17 @@ export const Categories = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editCategoryId, setEditCategoryId] = useState(null);
+  // Guards the submit button. The button previously keyed off an `uploading`
+  // flag that the page no longer owns — image upload state lives inside
+  // <ImageUploader> — so nothing stopped a double submit creating two
+  // categories from one form.
+  const [saving, setSaving] = useState(false);
   
   // Modal Fields
   const [catName, setCatName] = useState("");
   const [catImage, setCatImage] = useState("");
   const [catStatus, setCatStatus] = useState("Active");
   const [displayOrder, setDisplayOrder] = useState(0);
-  
-  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     subscribeCategories();
@@ -47,22 +50,9 @@ export const Categories = () => {
     setIsModalOpen(true);
   };
 
-  const handleImageChange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setUploading(true);
-    try {
-      const imageUrl = await uploadFile(file, `categories/${Date.now()}_${file.name}`);
-      setCatImage(imageUrl);
-      addToast("Category image uploaded successfully", "success");
-    } catch (err) {
-      console.error("Upload error:", err);
-      addToast("Failed to upload category image", "error");
-    } finally {
-      setUploading(false);
-    }
-  };
+  // The category image is handled by the shared <ImageUploader>. A local
+  // handleImageChange lived here, wired to no input at all — dead since the
+  // uploader was introduced.
 
   const handleSaveCategory = async (e) => {
     e.preventDefault();
@@ -72,6 +62,9 @@ export const Categories = () => {
     }
 
     if (Number(displayOrder) < 0) return addToast("Display order cannot be negative", "error");
+
+    if (saving) return;
+    setSaving(true);
 
     const payload = {
       name: catName,
@@ -91,6 +84,8 @@ export const Categories = () => {
       setIsModalOpen(false);
     } catch (err) {
       addToast(`Error saving category: ${err.message}`, "error");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -106,7 +101,7 @@ export const Categories = () => {
   };
 
   const filteredCategories = categories.filter((c) =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase())
+    String(c.name || "").toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   if (loading && categories.length === 0) {
@@ -145,7 +140,13 @@ export const Categories = () => {
       </div>
 
       {/* Grid of Categories */}
-      {filteredCategories.length === 0 ? (
+      {error ? (
+        <ErrorState
+          title="Could not load categories"
+          message={error}
+          onRetry={() => { disconnectCategories(); subscribeCategories(); }}
+        />
+      ) : filteredCategories.length === 0 ? (
         <EmptyState
           icon="category"
           title="No Categories Available"
@@ -300,10 +301,10 @@ export const Categories = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={uploading}
+                  disabled={saving}
                   className="px-5 py-2 font-bold text-xs text-white bg-[#10b981] border-t border-white/20 rounded-lg hover:bg-[#059669] transition-colors shadow-xs inner-shine disabled:opacity-75 disabled:cursor-not-allowed"
                 >
-                  Save Category
+                  {saving ? "Saving…" : "Save Category"}
                 </button>
               </div>
             </form>

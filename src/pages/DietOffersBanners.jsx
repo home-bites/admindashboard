@@ -24,14 +24,25 @@ export const DietOffersBanners = () => {
   const [activeTab, setActiveTab] = useState("BANNERS"); // BANNERS or OFFERS
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  const [bannerForm, setBannerForm] = useState({
-    title: "Fresh 7-Day Keto Transformation",
-    subtitle: "Flat 20% OFF on all Weekly Subscription Plans",
-    imageUrl: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=1200&q=80",
+  /*
+   * An empty form, not a pre-filled one.
+   *
+   * The initial state carried a finished-looking banner: a title, a "Flat 20%
+   * OFF" subtitle promising a discount nobody had configured, and an Unsplash
+   * stock photograph. Opening the dialog and pressing save — which is exactly
+   * what happens when an admin is only exploring — published all three to the
+   * customer app as a live promotional banner, including an offer the business
+   * had not agreed to honour.
+   */
+  const EMPTY_BANNER = {
+    title: "",
+    subtitle: "",
+    imageUrl: "",
     actionUrl: "/meal-plans",
     isActive: true,
-    displayOrder: 1
-  });
+    displayOrder: 1,
+  };
+  const [bannerForm, setBannerForm] = useState(EMPTY_BANNER);
 
   // Surface a broken listener once rather than silently showing stale rows.
   useEffect(() => {

@@ -1,6 +1,53 @@
 import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { db } from "../firebase/firebaseConfig";
 import { doc, getDoc, setDoc } from "firebase/firestore";
+
+
+/* ── Which of these controls actually does anything ─────────────────────────
+ *
+ * Audited against functions/index.js, firestore.rules, customer_app and
+ * delivery_app. Of the nine settings on this page, exactly one is read by
+ * anything:
+ *
+ *   codAbuseThreshold      → read by codAbuseThreshold() in functions/index.js
+ *
+ * The other eight are written to appSettings/security and then read by
+ * nobody. Toggling them produced a success toast and changed nothing.
+ *
+ * That is not a cosmetic problem. An operator who believes rate limiting or
+ * App Check enforcement is switched on, when it is not, is worse off than one
+ * who knows it is unavailable — so the unenforced controls are disabled and
+ * labelled rather than left looking live.
+ *
+ * `remoteMaintenanceMode` was also a duplicate: the working maintenance switch
+ * is on the Settings page, which writes `maintenanceMode` to
+ * appSettings/general, and that is the field customer_app reads. This page
+ * wrote a different field on a different document, so the two disagreed and
+ * the one here did nothing.
+ *
+ * Enforcing the rest needs real backend work — App Check enforcement, a rate
+ * limiter, OTP throttling, admin session expiry and QR expiry are five
+ * separate features, not configuration. They stay visible, disabled, so the
+ * intent is not lost.
+ * ─────────────────────────────────────────────────────────────────────────── */
+const ENFORCED = new Set(["codAbuseThreshold"]);
+
+/** Marks a control the backend does not yet read.
+ *
+ * Takes the field name and consults ENFORCED, so the badge and the audited
+ * list cannot disagree — if a setting is later wired up, adding it to ENFORCED
+ * removes its badge automatically. */
+const NotEnforcedBadge = ({ field }) =>
+  ENFORCED.has(field) ? null : (
+  <span
+    title="Saved, but no backend component reads this setting yet. It has no effect."
+    className="ml-2 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide bg-amber-100 text-amber-700 border border-amber-200"
+  >
+    Not enforced
+  </span>
+);
+
 
 const SecuritySettings = () => {
   const [loading, setLoading] = useState(true);
@@ -15,7 +62,6 @@ const SecuritySettings = () => {
     qrExpirationSeconds: 300,
     codAbuseThreshold: 3,
     maxQrScanAttempts: 5,
-    remoteMaintenanceMode: false,
   });
 
   useEffect(() => {
@@ -83,26 +129,28 @@ const SecuritySettings = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="flex items-center justify-between p-3.5 bg-slate-50 border border-slate-200 rounded-lg">
                 <div>
-                  <label className="text-xs font-bold text-slate-700 block">Enforce Firebase App Check</label>
+                  <label className="text-xs font-bold text-slate-500 block">Enforce Firebase App Check<NotEnforcedBadge field="enforceAppCheck" /></label>
                   <span className="text-[10px] text-slate-400">Blocks fake clients and automation tools from queries.</span>
                 </div>
                 <input
                   type="checkbox"
                   checked={settings.enforceAppCheck}
                   onChange={(e) => setSettings({ ...settings, enforceAppCheck: e.target.checked })}
+                  disabled
                   className="w-4 h-4 text-[#10b981] focus:ring-[#10b981] border-slate-300 rounded"
                 />
               </div>
 
               <div className="flex items-center justify-between p-3.5 bg-slate-50 border border-slate-200 rounded-lg">
                 <div>
-                  <label className="text-xs font-bold text-slate-700 block">Restrict Rooted/Jailbroken Devices</label>
+                  <label className="text-xs font-bold text-slate-500 block">Restrict Rooted/Jailbroken Devices<NotEnforcedBadge field="blockRootDevices" /></label>
                   <span className="text-[10px] text-slate-400">Disables wallet deposits and checkout for modified OS.</span>
                 </div>
                 <input
                   type="checkbox"
                   checked={settings.blockRootDevices}
                   onChange={(e) => setSettings({ ...settings, blockRootDevices: e.target.checked })}
+                  disabled
                   className="w-4 h-4 text-[#10b981] focus:ring-[#10b981] border-slate-300 rounded"
                 />
               </div>
@@ -117,33 +165,36 @@ const SecuritySettings = () => {
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Max Request Rate (10s)</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Max Request Rate (10s)<NotEnforcedBadge field="rateLimitMaxRequests" /></label>
                 <input
                   type="number"
                   value={settings.rateLimitMaxRequests}
                   onChange={(e) => setSettings({ ...settings, rateLimitMaxRequests: parseInt(e.target.value) || 0 })}
+                  disabled
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:outline-none focus:border-[#10b981] font-semibold"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">OTP Limit Per Hour</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">OTP Limit Per Hour<NotEnforcedBadge field="otpLimitPerHour" /></label>
                 <input
                   type="number"
                   value={settings.otpLimitPerHour}
                   onChange={(e) => setSettings({ ...settings, otpLimitPerHour: parseInt(e.target.value) || 0 })}
+                  disabled
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:outline-none focus:border-[#10b981] font-semibold"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Admin Session Timeout (Mins)</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Admin Session Timeout (Mins)<NotEnforcedBadge field="sessionTimeoutMins" /></label>
                 <input
                   type="number"
                   value={settings.sessionTimeoutMins}
                   onChange={(e) => setSettings({ ...settings, sessionTimeoutMins: parseInt(e.target.value) || 0 })}
+                  disabled
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:outline-none focus:border-[#10b981] font-semibold"
                   required
                 />
@@ -159,22 +210,24 @@ const SecuritySettings = () => {
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">QR Expiration (Seconds)</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">QR Expiration (Seconds)<NotEnforcedBadge field="qrExpirationSeconds" /></label>
                 <input
                   type="number"
                   value={settings.qrExpirationSeconds}
                   onChange={(e) => setSettings({ ...settings, qrExpirationSeconds: parseInt(e.target.value) || 0 })}
+                  disabled
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:outline-none focus:border-[#10b981] font-semibold"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Max Scan Retries</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Max Scan Retries<NotEnforcedBadge field="maxQrScanAttempts" /></label>
                 <input
                   type="number"
                   value={settings.maxQrScanAttempts}
                   onChange={(e) => setSettings({ ...settings, maxQrScanAttempts: parseInt(e.target.value) || 0 })}
+                  disabled
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:outline-none focus:border-[#10b981] font-semibold"
                   required
                 />
@@ -209,17 +262,27 @@ const SecuritySettings = () => {
               <span className="material-symbols-outlined text-[18px]">gavel</span>
               Emergency Platform Controls
             </h3>
+            {/* The switch that used to live here wrote
+                appSettings/security.remoteMaintenanceMode, which nothing reads.
+                The working control writes appSettings/general.maintenanceMode
+                and is on the Settings page — that is the field customer_app
+                actually checks. Two switches for one behaviour, only one of
+                them real, is how an operator ends up believing the platform is
+                in maintenance when it is serving orders normally. */}
             <div className="flex items-center justify-between p-3.5 bg-red-50 border border-red-200 rounded-lg">
               <div>
-                <label className="text-xs font-bold text-red-800 block">Enforce Platform Maintenance Mode</label>
-                <span className="text-[10px] text-red-600/80">Forces all mobile clients to exit and displays a maintenance screen.</span>
+                <label className="text-xs font-bold text-red-800 block">Platform Maintenance Mode</label>
+                <span className="text-[10px] text-red-600/80">
+                  Managed on the Settings page, under Business Controls — that is
+                  the switch the mobile apps read.
+                </span>
               </div>
-              <input
-                type="checkbox"
-                checked={settings.remoteMaintenanceMode}
-                onChange={(e) => setSettings({ ...settings, remoteMaintenanceMode: e.target.checked })}
-                className="w-4 h-4 text-red-700 focus:ring-red-700 border-red-300 rounded"
-              />
+              <Link
+                to="/settings"
+                className="shrink-0 rounded-md border border-red-300 bg-white px-3 py-1.5 text-[11px] font-bold text-red-700 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-400"
+              >
+                Open Settings
+              </Link>
             </div>
           </div>
 

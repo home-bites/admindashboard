@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import ErrorState from "../components/ErrorState";
+import AssetImage from "../components/AssetImage";
 import { MealPlanService } from "../services";
 import { useUiStore } from "../store/uiStore";
 import { useLiveCollection } from "../hooks/useLiveCollection";
@@ -326,7 +328,17 @@ export const MealPlans = () => {
       </div>
 
       {/* Grid */}
-      {loading ? (
+      {/* A failed listener rendered as an empty grid with a toast that had
+          already faded — the operator was left looking at what appeared to be
+          an empty catalogue. Checked before loading so the failure wins. */}
+      {liveError ? (
+        <ErrorState
+          title="Could not load meal plans"
+          message={liveError}
+          onRetry={() => window.location.reload()}
+          retryText="Reload"
+        />
+      ) : loading ? (
         <div className="flex justify-center py-20 text-slate-400 gap-2">
           <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
           <span>Loading Meal Plans...</span>
@@ -340,8 +352,8 @@ export const MealPlans = () => {
             >
               <div>
                 <div className="relative h-48 bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                  <img
-                    src={plan.imageUrl || "https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=800&q=80"}
+                  <AssetImage
+                    src={plan.imageUrl}
                     alt={plan.title}
                     className="w-full h-full object-cover"
                   />

@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import ErrorState from "../components/ErrorState";
+import AssetImage from "../components/AssetImage";
 // Reads come from the live hook; the service layer is only used for writes.
 import { DietFoodService } from "../services";
 import { useUiStore } from "../store/uiStore";
@@ -235,7 +237,17 @@ export const DietFoods = () => {
       </div>
 
       {/* Diet Foods Grid */}
-      {loading ? (
+      {/* A failed listener rendered as an empty grid with a toast that had
+          already faded — the operator was left looking at what appeared to be
+          an empty catalogue. Checked before loading so the failure wins. */}
+      {liveError ? (
+        <ErrorState
+          title="Could not load diet foods"
+          message={liveError}
+          onRetry={() => window.location.reload()}
+          retryText="Reload"
+        />
+      ) : loading ? (
         <div className="flex justify-center py-20 text-slate-400 gap-2">
           <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
           <span>Loading Diet Foods catalog...</span>
@@ -250,8 +262,8 @@ export const DietFoods = () => {
               <div>
                 {/* Image & Badges */}
                 <div className="relative h-44 overflow-hidden bg-slate-100 dark:bg-slate-800">
-                  <img
-                    src={food.imageUrl || "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80"}
+                  <AssetImage
+                    src={food.imageUrl}
                     alt={food.name}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   />

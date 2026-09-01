@@ -496,9 +496,12 @@ export const DeliveryPartners = () => {
       mobile: partnerMobile,
       phone: partnerMobile,
       vehicleNumber,
-      avatar:
-        partnerAvatar ||
-        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200",
+      // No stock-photo fallback. This wrote an Unsplash portrait of an
+      // unrelated person into the rider's record, which then appeared as their
+      // photo to customers and to dispatch — actively misleading on a screen
+      // used to identify who is at the door. Empty means empty; the UI shows
+      // initials instead.
+      avatar: partnerAvatar || "",
       currentStatus,
       rating: Number(rating),
       totalDeliveries: Number(totalDeliveries),

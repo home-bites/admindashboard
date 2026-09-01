@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
 import { useOrderStore, isPaymentFailedOrder, normaliseOrderDoc } from "../store/orderStore";
@@ -7,10 +8,20 @@ import { useMenuStore } from "../store/menuStore";
 import EmptyState from "../components/EmptyState";
 import * as LoadingComponents from "../components/LoadingComponents";
 import {
-  doc, onSnapshot, updateDoc, collection, query, where, getDocs, limit, orderBy, Timestamp,
+  doc, getDoc, onSnapshot, updateDoc, collection, query, where, getDocs, limit, orderBy, Timestamp,
 } from "firebase/firestore";
 import { db } from "../firebase/firebaseConfig";
-import { STAGE, STAGES, stageOf } from "../lib/orderStages";
+import { STAGE, STAGES, stageOf, planTransition } from "../lib/orderStages";
+import ActiveFilterBar from "../components/ActiveFilterBar";
+import OrdersToolbar from "../components/orders/OrdersToolbar";
+import OrderRow from "../components/orders/OrderRow";
+import OrderDetailsDrawer from "../components/orders/OrderDetailsDrawer";
+import ErrorState from "../components/ErrorState";
+import { printKOT, printInvoice } from "../lib/printing";
+import {
+  STATUS_TABS, PAYMENT, paymentStateOf, isOutstanding,
+  orderTypeOf, ORDER_TYPE_LABEL,
+} from "../lib/orderPresentation";
 import EditOrderItemsModal from "../components/EditOrderItemsModal";
 
 /**
@@ -281,6 +292,95 @@ export const Orders = () => {
   const [modeFilter, setModeFilter] = useState("All");
   const [dateFilter, setDateFilter] = useState("");
   const [showFilters, setShowFilters] = useState(false);
+
+  /* ── Redesigned Orders workspace state ──────────────────────────────────
+   *
+   * `selectedStatus` used to carry both kitchen stages AND payment
+   * exceptions ("Awaiting Payment", "Payment Failed", "Refund Required") in
+   * one exclusive selector, rendered as two competing rows of chips. That is
+   * why "Cancelled" appeared twice and why Delivered and Completed both had
+   * tabs: two different axes were being forced through one variable.
+   *
+   * They are separate here. `statusFilter` holds a stage id (or null for
+   * All); `paymentState` holds a payment state. Both can be set at once, so
+   * "cancelled orders awaiting a refund" is now reachable — it was not,
+   * because picking either tab hid the other.
+   */
+  const [statusFilter, setStatusFilter] = useState(null);
+  const [paymentState, setPaymentState] = useState(null);
+  const [typeFilter, setTypeFilter] = useState(null);
+  const [dateRange, setDateRange] = useState(null);
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [partnerFilter, setPartnerFilter] = useState(null);
+
+  // Search is debounced so typing does not re-filter on every keystroke.
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    if (searchInput === debouncedSearch) return;
+    const t = setTimeout(() => setDebouncedSearch(searchInput), 250);
+    return () => clearTimeout(t);
+  }, [searchInput, debouncedSearch]);
+
+  // Which order the drawer is showing, which row is mid-write, and which
+  // order is awaiting a rider choice.
+  const [detailOrder, setDetailOrder] = useState(null);
+  const [assignTarget, setAssignTarget] = useState(null);
+  const [busyOrderId, setBusyOrderId] = useState(null);
+
+  // How many rows are rendered. Raising it never re-queries: the store's
+  // window is already bounded, so this only governs DOM size, which is what
+  // actually costs at 200+ rows.
+  const [visibleCount, setVisibleCount] = useState(40);
+
+  /*
+   * Deep link: /orders?order=<id>
+   *
+   * Global search links here with the order id it matched. Without this the
+   * link merely landed on the page and left the operator to find, by hand,
+   * the order they had just searched for — which is the behaviour the deep
+   * link existed to remove.
+   *
+   * The order may sit outside the live window (which holds the most recent
+   * 200), so a miss falls back to a single direct document read rather than
+   * widening the listener. The parameter is cleared once consumed so a later
+   * close does not immediately reopen the drawer.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const wanted = searchParams.get("order");
+    if (!wanted) return;
+
+    let cancelled = false;
+    const inWindow = [...orders, ...awaitingPayment, ...paymentFailed, ...refundRequired]
+      .find((o) => o.id === wanted);
+
+    if (inWindow) {
+      setDetailOrder(inWindow);
+      setSearchParams({}, { replace: true });
+      return;
+    }
+
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "orders", wanted));
+        if (cancelled) return;
+        if (snap.exists()) {
+          setDetailOrder(normaliseOrderDoc(snap.id, snap.data()));
+        } else {
+          addToast(`Order ${wanted} was not found.`, "error");
+        }
+      } catch (e) {
+        if (!cancelled) addToast(`Could not open that order: ${e.message}`, "error");
+      } finally {
+        if (!cancelled) setSearchParams({}, { replace: true });
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, orders, awaitingPayment, paymentFailed, refundRequired]);
 
   // Order History specific filters
   const [histSearch, setHistSearch] = useState("");
@@ -845,6 +945,155 @@ export const Orders = () => {
     }
   };
 
+  /* These derivations use hooks, so they must sit above every early return
+   * below — React requires an identical hook order on every render, and a
+   * useMemo placed after the loading guard changes that order the moment
+   * the page finishes loading. */
+  /* ── The two-axis filter ────────────────────────────────────────────────
+   *
+   * `orders` from the store is already the settled operational set and
+   * excludes the unpaid/failed queues, so filtering by payment state has to
+   * start from the union — otherwise selecting "Pending" would search a list
+   * those orders were deliberately removed from and always return nothing.
+   *
+   * De-duplicated by id: an order can legitimately appear in more than one
+   * store queue (a cancelled order awaiting a refund is in both
+   * `paymentFailed` and `refundRequired`), and rendering it twice in one list
+   * would read as two separate orders for the same customer.
+   */
+  const allOrders = useMemo(() => {
+    const byId = new Map();
+    [...orders, ...awaitingPayment, ...paymentFailed, ...refundRequired]
+      .forEach((o) => { if (o && !byId.has(o.id)) byId.set(o.id, o); });
+    return [...byId.values()];
+  }, [orders, awaitingPayment, paymentFailed, refundRequired]);
+
+  /** Start of day, in the operator's own timezone. */
+  const startOfDay = (offsetDays = 0) => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - offsetDays);
+    return d;
+  };
+
+  const matchesDate = (order) => {
+    if (!dateRange) return true;
+    const d = parseOrderDate(order?.createdAt);
+    if (!d) return false;
+
+    if (dateRange === "today") return d >= startOfDay(0);
+    if (dateRange === "yesterday") return d >= startOfDay(1) && d < startOfDay(0);
+    if (dateRange === "7d") return d >= startOfDay(6);
+    if (dateRange === "30d") return d >= startOfDay(29);
+    if (dateRange === "custom") {
+      if (customFrom && d < new Date(`${customFrom}T00:00:00`)) return false;
+      if (customTo && d > new Date(`${customTo}T23:59:59`)) return false;
+      return true;
+    }
+    return true;
+  };
+
+  /** The non-status filters, shared by the list and the tab counts so the two
+   *  can never disagree about the same order. */
+  const matchesNonStatus = (o, q) => {
+    if (q) {
+      const hay = [o.id, o.customer, o.phone, o.customerPhone, o.itemsText]
+        .map((v) => String(v || "").toLowerCase());
+      if (!hay.some((h) => h.includes(q))) return false;
+    }
+    if (paymentState) {
+      if (paymentState === PAYMENT.PENDING) {
+        // "Pending" means still chaseable. A cancelled unpaid order is
+        // abandoned, not outstanding, and used to sit in this queue forever
+        // with nothing anyone could do about it.
+        if (!isOutstanding(o)) return false;
+      } else if (paymentStateOf(o) !== paymentState) {
+        return false;
+      }
+    }
+    if (typeFilter && orderTypeOf(o) !== typeFilter) return false;
+    if (partnerFilter && o.assignedPartnerId !== partnerFilter) return false;
+    return matchesDate(o);
+  };
+
+  const filteredOrders = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase();
+    return allOrders.filter((o) => {
+      if (!matchesNonStatus(o, q)) return false;
+      // Status axis, compared through stageOf so the legacy spellings
+      // ("Completed", "OutForDelivery") land in the right tab.
+      if (statusFilter && stageOf(o) !== statusFilter) return false;
+      return true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allOrders, debouncedSearch, statusFilter, paymentState, typeFilter,
+      partnerFilter, dateRange, customFrom, customTo]);
+
+  /* Counts for the status tabs, over the same set and the same predicate the
+     list uses — a tab cannot read "(3)" and then open empty. */
+  const statusCounts = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase();
+    const base = allOrders.filter((o) => matchesNonStatus(o, q));
+    const counts = { all: base.length };
+    STATUS_TABS.forEach((t) => {
+      if (t.id) counts[t.id] = base.filter((o) => stageOf(o) === t.id).length;
+    });
+    return counts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allOrders, debouncedSearch, paymentState, typeFilter, partnerFilter,
+      dateRange, customFrom, customTo]);
+
+  /* Exception counts for the KPI strip. Independent of the status axis on
+     purpose: these are the queues that need a person, and they must stay
+     visible whichever status tab is open. */
+  const exceptionCounts = useMemo(() => ({
+    outstanding: allOrders.filter(isOutstanding).length,
+    failed: allOrders.filter((o) => paymentStateOf(o) === PAYMENT.FAILED).length,
+    refund: allOrders.filter((o) => paymentStateOf(o) === PAYMENT.REFUND_REQUIRED).length,
+  }), [allOrders]);
+
+  const visibleOrders = filteredOrders.slice(0, visibleCount);
+
+  const clearAllFilters = () => {
+    setSearchInput("");
+    setDebouncedSearch("");
+    setPaymentState(null);
+    setTypeFilter(null);
+    setDateRange(null);
+    setPartnerFilter(null);
+    setCustomFrom("");
+    setCustomTo("");
+  };
+
+  /** Print, and report what actually happened — never an unconditional
+   *  "Printed successfully". A blocked popup is the common case. */
+  const reportPrint = (result) => {
+    if (result?.ok) addToast("Print window opened", "success");
+    else addToast(result?.reason || "Could not open the print window", "error");
+  };
+
+  /** Status change from a row or the drawer, with a per-order in-flight
+   *  guard so a double click cannot fire two writes. */
+  const advanceOrder = async (order, toStage) => {
+    if (busyOrderId) return;
+    if (!toStage) { setAssignTarget(order); return; }
+
+    const plan = planTransition(order, toStage);
+    if (!plan.allowed) {
+      addToast(plan.reason || "That status change is not allowed.", "error");
+      return;
+    }
+    setBusyOrderId(order.id);
+    try {
+      await handleUpdateStatus(order.id, plan.status);
+      setDetailOrder((prev) =>
+        prev && prev.id === order.id ? { ...prev, status: plan.status } : prev);
+    } finally {
+      setBusyOrderId(null);
+    }
+  };
+
+
   if (loading && orders.length === 0) {
     return <LoadingComponents.LoadingPage />;
   }
@@ -956,58 +1205,6 @@ export const Orders = () => {
   // and `refundRequired` / `PaidAfterCancel`), and both would be empty if they
   // were filtered out of `orders`, because a cancelled unpaid order is neither
   // settled nor awaiting anything.
-  const LIST_BACKED_TABS = ["Awaiting Payment", "Payment Failed", "Refund Required"];
-  const sourceOrders =
-    selectedStatus === "Awaiting Payment" ? awaitingPayment
-      : selectedStatus === "Payment Failed" ? paymentFailed
-        : selectedStatus === "Refund Required" ? refundRequired
-          : orders;
-
-  const filteredOrders = sourceOrders.filter((o) => {
-    const matchesSearch = 
-      o.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      o.customer.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (o.itemsText && o.itemsText.toLowerCase().includes(searchQuery.toLowerCase()));
-      
-    if (!matchesSearch) return false;
-    
-    // Status Filter. Skipped for the list-backed tabs — the list is already
-    // the filter, and those orders carry an ordinary "Pending" or "Cancelled"
-    // status that would otherwise exclude every one of them.
-    if (selectedStatus !== "All" && !LIST_BACKED_TABS.includes(selectedStatus)) {
-      // The tab value is a stage id, and one stage covers several stored
-      // statuses. Comparing the raw strings is what used to leave
-      // "OutForDelivery" and "Completed" homeless.
-      if (stageOf(o) !== selectedStatus) return false;
-    }
-
-    // Payment Filter
-    if (paymentFilter !== "All") {
-      const isCod = o.paymentMethod?.toUpperCase() === "COD";
-      if (paymentFilter === "Online" && isCod) return false;
-      if (paymentFilter === "COD" && !isCod) return false;
-    }
-
-    // Delivery / Takeaway Mode Filter
-    const isTakeaway = o.address === "Counter Pickup" || (o.deliveryAddress && o.deliveryAddress.addressLine === "Counter Pickup");
-    if (modeFilter !== "All") {
-      if (modeFilter === "Takeaway" && !isTakeaway) return false;
-      if (modeFilter === "Delivery" && isTakeaway) return false;
-    }
-
-    // Date Filter
-    if (dateFilter) {
-      let oDate = "";
-      if (o.createdAt) {
-        let d = o.createdAt.seconds ? new Date(o.createdAt.seconds * 1000) : new Date(o.createdAt);
-        oDate = d.toISOString().split("T")[0];
-      }
-      if (oDate !== dateFilter) return false;
-    }
-
-    return true;
-  });
-
   /*
    * Counts are derived with the SAME comparison the list filter uses.
    *
@@ -1047,191 +1244,26 @@ export const Orders = () => {
   };
   FLOW_TABS.forEach((t) => { counts[t.value] = countOf(t.value); });
 
-  const handlePrintKOT = (order) => {
-    if (!order) return;
-    const printWindow = window.open("", "_blank", "width=600,height=800");
-    if (!printWindow) {
-      addToast("Popup blocker prevented opening the print window", "error");
-      return;
-    }
-    
-    const itemsHtml = order.items ? order.items.map(item => `
-      <tr class="item-row">
-        <td class="qty">${item.quantity ?? item.qty ?? 1}x</td>
-        <td class="desc">
-          <div class="name">${item.name}</div>
-          ${item.notes ? `<div class="notes">* Cooking Note: ${item.notes}</div>` : ""}
-          ${item.selectedAddons && item.selectedAddons.length > 0 ? `<div class="addons">+ ${item.selectedAddons.join(", ")}</div>` : ""}
-        </td>
-        <td class="amt">₹${((item.price || 0) * (item.quantity ?? item.qty ?? 1)).toFixed(2)}</td>
-      </tr>
-    `).join("") : "";
-
-    const dateStr = formatOrderTimeAbsolute(order.createdAt) || "Not available";
-
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>KOT - Order #${order.id}</title>
-        <style>
-          @page { size: 80mm auto; margin: 0; }
-          body {
-            font-family: 'Courier New', Courier, monospace;
-            width: 76mm;
-            margin: 0;
-            padding: 4mm;
-            font-size: 11px;
-            color: #000;
-            line-height: 1.4;
-          }
-          .text-center { text-align: center; }
-          .text-right { text-align: right; }
-          .header { margin-bottom: 4mm; }
-          .title { font-size: 16px; font-weight: bold; margin: 0; text-transform: uppercase; }
-          .subtitle { font-size: 10px; margin: 2px 0 0 0; letter-spacing: 0.5px; }
-          .divider { border-top: 1px dashed #000; margin: 3mm 0; }
-          .double-divider { border-top: 1px double #000; border-bottom: 1px double #000; height: 3px; margin: 3mm 0; }
-          .meta-info table { width: 100%; border-collapse: collapse; }
-          .meta-info td { padding: 2px 0; font-size: 10px; }
-          .meta-label { font-weight: bold; width: 35%; }
-          .items-table { width: 100%; border-collapse: collapse; margin-top: 2mm; }
-          .items-table th { border-bottom: 1px solid #000; padding: 3px 0; font-weight: bold; text-align: left; font-size: 10px; }
-          .items-table th.amt { text-align: right; }
-          .item-row td { padding: 4px 0; vertical-align: top; }
-          .item-row td.qty { width: 12%; font-weight: bold; }
-          .item-row td.desc { width: 63%; }
-          .item-row td.desc .name { font-weight: bold; }
-          .item-row td.desc .notes { font-size: 9px; margin-top: 2px; font-style: italic; }
-          .item-row td.desc .addons { font-size: 9px; color: #333; margin-top: 1px; }
-          .item-row td.amt { width: 25%; text-align: right; font-weight: bold; }
-          .totals-table { width: 100%; margin-top: 2mm; border-collapse: collapse; }
-          .totals-table td { padding: 3px 0; font-size: 10px; }
-          .totals-table .grand-total { font-size: 13px; font-weight: bold; border-top: 1px dashed #000; }
-          .footer { margin-top: 6mm; font-size: 9px; text-align: center; }
-          .star-rating { font-size: 14px; letter-spacing: 2px; margin: 1mm 0; }
-          @media print { body { width: 76mm; } }
-        </style>
-      </head>
-      <body>
-        <div class="header text-center">
-          <div class="title">HomBites</div>
-          <div class="subtitle">5-STAR GOURMET KITCHEN</div>
-          <div class="star-rating">★★★★★</div>
-          <div class="subtitle" style="font-size: 9px;">Central Operations Hub</div>
-        </div>
-        
-        <div class="double-divider"></div>
-        
-        <div class="meta-info">
-          <table>
-            <tr>
-              <td class="meta-label">ORDER ID:</td>
-              <td style="font-weight: bold; font-size: 12px;">#${order.id}</td>
-            </tr>
-            <tr>
-              <td class="meta-label">DATE/TIME:</td>
-              <td>${dateStr}</td>
-            </tr>
-            <tr>
-              <td class="meta-label">CUSTOMER:</td>
-              <td>${order.customer}</td>
-            </tr>
-            <tr>
-              <td class="meta-label">PHONE:</td>
-              <td>${contactOf(order) || ''}</td>
-            </tr>
-            <tr>
-              <td class="meta-label">DELIVERY:</td>
-              <td>${order.address || "Counter Pickup"}</td>
-            </tr>
-            <tr>
-              <td class="meta-label">METHOD:</td>
-              <td style="font-weight: bold; text-transform: uppercase;">${order.paymentMethod || "Online"}</td>
-            </tr>
-          </table>
-         </div>
-         
-         <div class="divider"></div>
-         
-         <table class="items-table">
-           <thead>
-             <tr>
-               <th style="width: 12%;">QTY</th>
-               <th style="width: 63%;">DESCRIPTION</th>
-               <th class="amt" style="width: 25%;">AMOUNT</th>
-             </tr>
-           </thead>
-           <tbody>
-             ${itemsHtml}
-           </tbody>
-         </table>
-         
-         <div class="divider"></div>
-         
-         <table class="totals-table">
-           <tr>
-             <td>SUBTOTAL:</td>
-             <td class="text-right">₹${(order.subtotal || 0).toFixed(2)}</td>
-           </tr>
-           <tr>
-             <td>CGST & SGST (5%):</td>
-             <td class="text-right">₹${(order.tax || 0).toFixed(2)}</td>
-           </tr>
-           <tr>
-             <td>DELIVERY CHARGE:</td>
-             <td class="text-right">₹${(order.deliveryFee || 0).toFixed(2)}</td>
-           </tr>
-           ${order.discountAmount > 0 ? `
-             <tr>
-               <td>DISCOUNT:</td>
-               <td class="text-right">-₹${order.discountAmount.toFixed(2)}</td>
-             </tr>
-           ` : ""}
-           <tr class="grand-total">
-             <td style="padding-top: 4px; font-weight: bold;">TOTAL PAID:</td>
-             <td class="text-right" style="padding-top: 4px; font-weight: bold;">₹${(order.total || 0).toFixed(2)}</td>
-           </tr>
-         </table>
-         
-         <div class="divider"></div>
-         
-         <div class="meta-info">
-           <table>
-             <tr>
-               <td class="meta-label">RIDER:</td>
-               <td>${order.rider || "Assigning..."}</td>
-             </tr>
-             <tr>
-               <td class="meta-label">OTP PIN:</td>
-               <!-- Never print a placeholder here: a docket showing 1234 is a
-                    docket a rider will try to use. -->
-               <td style="font-weight: bold; font-size: 12px; color: #000;">${order.verificationCode || "— not issued —"}</td>
-             </tr>
-           </table>
-         </div>
-         
-         <div class="double-divider"></div>
-         
-         <div class="footer">
-           <div>*** CENTRAL KITCHEN COPY ***</div>
-           <div style="margin-top: 1.5mm;">Gourmet Meals Cooked with Love & Hygiene.</div>
-           <div style="font-weight: bold; margin-top: 1.5mm;">- Chef HomBites -</div>
-         </div>
-         
-         <script>
-           window.onload = function() {
-             window.print();
-             setTimeout(function() { window.close(); }, 500);
-           }
-         </script>
-       </body>
-       </html>
-    `;
-    printWindow.document.write(htmlContent);
-    printWindow.document.close();
-  };
-
+  /*
+   * The old `handlePrintKOT` lived here and has been deleted.
+   *
+   * It produced a document headed "KOT" that was really a customer receipt:
+   * subtotal, CGST & SGST, delivery charge, "TOTAL PAID", the payment method,
+   * the customer's full delivery address, their phone number, and the
+   * delivery verification OTP — all printed onto a slip that hangs on a
+   * kitchen rail, is handled by everyone on shift and ends the night in a
+   * bin. None of it helps anyone cook, and the OTP is the credential that
+   * proves a delivery happened.
+   *
+   * It also interpolated `item.name` and `order.customer` straight into HTML
+   * with no escaping, so a dish name or delivery note containing markup
+   * executed in the print window.
+   *
+   * Replaced by `lib/printing.js`, which escapes every value and splits the
+   * document in two: printKOT (items, quantities, add-ons, notes, priority —
+   * no money, no address, no phone, no OTP) and printInvoice (the financial
+   * document, which is where all of that belongs).
+   */
   const handleExportCSV = (data) => {
     const headers = ["Order ID", "Customer", "Phone", "Date/Time", "Items", "Subtotal", "Tax", "Delivery Fee", "Total", "Payment Method", "Rider", "Status"];
     const rows = data.map(o => [
@@ -1394,7 +1426,7 @@ export const Orders = () => {
 
   const handleCardPrint = (e, order) => {
     e.stopPropagation();
-    handlePrintKOT(order);
+    reportPrint(printKOT(order, { typeLabel: ORDER_TYPE_LABEL[orderTypeOf(order)] }));
   };
 
   const getOrderCookingInstructions = (order) => {
@@ -1480,7 +1512,19 @@ export const Orders = () => {
   });
 
   return (
-    <div className="p-6 flex flex-col h-full bg-[#f8fafc] overflow-y-auto">
+    /*
+     * The page scrolls as one unit inside AdminLayout's <main>, which is the
+     * single `flex-1 overflow-y-auto` scroll container for every page.
+     *
+     * This root previously had `h-full overflow-y-auto`, adding a *second*
+     * nested scroll container sized to exactly one viewport. When the order
+     * list grew past that height the rows below the fold could not be reached
+     * — the inner container clipped them and the outer <main> had nothing to
+     * scroll. `min-h-full` keeps the background filling a short page without
+     * capping a long one; every other page (Dashboard, Categories, Settings…)
+     * uses this same pattern.
+     */
+    <div className="p-6 flex flex-col min-h-full bg-[#f8fafc]">
       {/* Tab Navigation between Live active and History directory */}
       <div className="flex border-b border-slate-200 mb-6 bg-white p-1.5 rounded-xl shadow-xs border max-w-sm shrink-0">
         <button
@@ -1509,639 +1553,282 @@ export const Orders = () => {
 
       {activeTab === "active" ? (
         <>
-          {/* Header Panel */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+          {/* ── Workspace header ─────────────────────────────────────────
+              One title, one sentence. The page previously opened with
+              "Kitchen Operations Dashboard" above a second heading and two
+              rows of chips, so the operator met three competing headings
+              before reaching an order. */}
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
-              <h2 className="text-2xl font-bold text-slate-800">Kitchen Operations Dashboard</h2>
-              <p className="text-sm text-slate-500 mt-0.5">Manage live orders and monitor kitchen output in real time.</p>
+              <h2 className="text-xl font-bold tracking-tight text-slate-900">Orders</h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Manage, process and monitor every customer order from one place.
+              </p>
             </div>
-            
-            <div className="flex gap-2">
-              <button 
-                onClick={() => setShowFilters(!showFilters)}
-                className={`px-4 py-2 border rounded-lg font-medium text-sm flex items-center gap-2 transition-all ${
-                  showFilters 
-                    ? "bg-slate-800 border-slate-800 text-white" 
-                    : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                <span className="material-symbols-outlined text-[18px]">tune</span>
-                Filters {showFilters && "Active"}
-              </button>
-              
-              <button 
-                onClick={() => setShowSpotOrderModal(true)}
-                className="bg-[#10b981] hover:bg-[#059669] text-white px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 shadow-sm"
-              >
-                <span className="material-symbols-outlined text-[18px]">add</span>
-                Place Spot Order
-              </button>
-            </div>
-          </div>
-
-          {/* Live Summary Cards — every number is countOf/countTodayOf against
-              the same real, live-streamed `orders` array the tabs and lists
-              use below, so a card can never disagree with what tapping it
-              shows. Nothing here is a placeholder or a demo figure. */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 mb-6">
-            {[
-              { label: "New Orders", value: countOf(STAGE.ORDERS), icon: "receipt_long", tint: "text-slate-700", onSelect: STAGE.ORDERS },
-              { label: "Preparing", value: countOf(STAGE.PREPARING), icon: "skillet", tint: "text-amber-600", onSelect: STAGE.PREPARING },
-              { label: "Ready", value: countOf(STAGE.READY), icon: "task_alt", tint: "text-blue-600", onSelect: STAGE.READY },
-              { label: "Out for Delivery", value: countOf(STAGE.OUT_FOR_DELIVERY), icon: "motorcycle", tint: "text-indigo-600", onSelect: STAGE.OUT_FOR_DELIVERY },
-              { label: "Completed Today", value: countTodayOf(STAGE.COMPLETED), icon: "check_circle", tint: "text-[#10b981]", onSelect: "Delivered" },
-              { label: "Cancelled Today", value: countTodayOf(STAGE.CANCELLED), icon: "cancel", tint: "text-rose-600", onSelect: "Cancelled" },
-            ].map((card) => (
+            <div className="flex flex-wrap gap-2">
               <button
-                key={card.label}
-                onClick={() => setSelectedStatus(card.onSelect)}
-                className="bg-white border border-slate-200 rounded-xl p-3 shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all text-left"
+                onClick={() => setShowSpotOrderModal(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white outline-none transition-colors hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-slate-400"
               >
-                <div className="flex items-center justify-between">
-                  <span className={`material-symbols-outlined text-[20px] ${card.tint}`}>{card.icon}</span>
-                  <span className="text-xl font-black text-slate-800">{card.value}</span>
-                </div>
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mt-1.5">{card.label}</div>
+                <span className="material-symbols-outlined text-[16px]">add</span>
+                Counter order
               </button>
+              {/* Exports respect the current filters — the button acts on
+                  `filteredOrders`, not on the whole collection, so a
+                  date-range + status + payment selection exports exactly
+                  that. */}
+              <button
+                onClick={() => handleExportCSV(filteredOrders)}
+                disabled={filteredOrders.length === 0}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 outline-none transition-colors hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="material-symbols-outlined text-[16px]">csv</span>
+                CSV
+              </button>
+              <button
+                onClick={() => handleExportExcel(filteredOrders)}
+                disabled={filteredOrders.length === 0}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 outline-none transition-colors hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="material-symbols-outlined text-[16px]">table_view</span>
+                Excel
+              </button>
+              <button
+                onClick={() => handleExportPDF(filteredOrders)}
+                disabled={filteredOrders.length === 0}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 outline-none transition-colors hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="material-symbols-outlined text-[16px]">picture_as_pdf</span>
+                PDF
+              </button>
+            </div>
+          </div>
+
+          {/* ── Compact summary ──────────────────────────────────────────
+              A single strip, not a wall of cards. Status figures are labels
+              on one line rather than a second, parallel set of status
+              controls; the exception counts beside them are the queues that
+              need a person and are clickable because acting on them is the
+              point. */}
+          <div className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-lg font-bold tabular-nums text-slate-900">{statusCounts.all}</span>
+              <span className="text-xs text-slate-500">orders in view</span>
+            </div>
+            <span className="hidden h-4 w-px bg-slate-200 sm:block" aria-hidden="true" />
+            {STATUS_TABS.filter((t) => t.id).map((t) => (
+              <span key={t.id} className="text-xs text-slate-500">
+                <span className="font-semibold tabular-nums text-slate-700">{statusCounts[t.id] ?? 0}</span>{" "}
+                {t.label}
+              </span>
             ))}
-            {/* Informational only — revenue is not a status, so it is not a
-                tab and does not select one. */}
-            <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-xs text-left">
-              <div className="flex items-center justify-between">
-                <span className="material-symbols-outlined text-[20px] text-emerald-700">payments</span>
-                <span className="text-xl font-black text-slate-800">₹{todaysRevenue.toFixed(0)}</span>
-              </div>
-              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mt-1.5">Today's Revenue</div>
-            </div>
+            <span className="hidden h-4 w-px bg-slate-200 sm:block" aria-hidden="true" />
+            <span className="text-xs text-slate-500">
+              <span className="font-semibold tabular-nums text-emerald-700">₹{todaysRevenue.toFixed(0)}</span>{" "}
+              delivered today
+            </span>
+
+            {/* Exceptions. Rendered only when non-zero: a permanent row of
+                zeroes trains people to stop reading it. */}
+            {exceptionCounts.outstanding > 0 && (
+              <button
+                onClick={() => { setPaymentState(PAYMENT.PENDING); setStatusFilter(null); setVisibleCount(40); }}
+                className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-800 ring-1 ring-inset ring-amber-600/20 transition-colors hover:bg-amber-100"
+              >
+                {exceptionCounts.outstanding} awaiting payment
+              </button>
+            )}
+            {exceptionCounts.failed > 0 && (
+              <button
+                onClick={() => { setPaymentState(PAYMENT.FAILED); setStatusFilter(null); setVisibleCount(40); }}
+                className="rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-700 ring-1 ring-inset ring-rose-600/20 transition-colors hover:bg-rose-100"
+              >
+                {exceptionCounts.failed} payment failed
+              </button>
+            )}
+            {exceptionCounts.refund > 0 && (
+              <button
+                onClick={() => { setPaymentState(PAYMENT.REFUND_REQUIRED); setStatusFilter(null); setVisibleCount(40); }}
+                className="rounded-full bg-rose-600 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-rose-700"
+              >
+                {exceptionCounts.refund} refund required
+              </button>
+            )}
           </div>
 
-          {/* Advanced Filter Collapse panel */}
-          {showFilters && (
-            <div className="bg-white border border-slate-200 rounded-xl p-4 mb-6 shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 animate-fadeIn">
-              <div>
-                {/* Filters the view only — it does not write paymentMethod to
-                    any order, and neither does its twin in the history tab.
-                    Worth stating because paymentMethod is what isSettledOrder
-                    reads to decide whether the kitchen may cook: a control
-                    that set it directly with updateDoc would let an admin
-                    turn an unpaid online order into a settled COD one with a
-                    dropdown, bypassing every payment check. If such a control
-                    is ever wanted, it must go through a callable that records
-                    who changed it and why. */}
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Payment Method</label>
-                <select
-                  value={paymentFilter}
-                  onChange={(e) => setPaymentFilter(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:border-[#10b981]"
-                >
-                  <option value="All">All Payments</option>
-                  <option value="Online">Online Payments</option>
-                  <option value="COD">Cash on Delivery (COD)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Service Type</label>
-                <select 
-                  value={modeFilter} 
-                  onChange={(e) => setModeFilter(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:border-[#10b981]"
-                >
-                  <option value="All">All Types</option>
-                  <option value="Delivery">Delivery orders</option>
-                  <option value="Takeaway">Takeaway (Pickup)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Date</label>
-                <input 
-                  type="date"
-                  value={dateFilter}
-                  onChange={(e) => setDateFilter(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:border-[#10b981]"
-                />
-              </div>
-              <div className="flex items-end">
-                <button
-                  onClick={() => {
-                    setPaymentFilter("All");
-                    setModeFilter("All");
-                    setDateFilter("");
-                    setSearchQuery("");
-                  }}
-                  className="text-xs font-bold text-rose-600 hover:text-rose-700 hover:underline px-2 py-1"
-                >
-                  Reset Advanced Filters
-                </button>
-              </div>
-            </div>
-          )}
+          {/* ── One status axis, one filter bar ──────────────────────── */}
+          <OrdersToolbar
+            status={statusFilter}
+            onStatus={(v) => { setStatusFilter(v); setVisibleCount(40); }}
+            counts={statusCounts}
+            search={searchInput}
+            onSearch={setSearchInput}
+            searching={searchInput !== debouncedSearch}
+            payment={paymentState}
+            onPayment={(v) => { setPaymentState(v); setVisibleCount(40); }}
+            type={typeFilter}
+            onType={setTypeFilter}
+            dateRange={dateRange}
+            onDateRange={setDateRange}
+            customFrom={customFrom}
+            customTo={customTo}
+            onCustomFrom={setCustomFrom}
+            onCustomTo={setCustomTo}
+            partner={partnerFilter}
+            onPartner={setPartnerFilter}
+            partners={deliveryPartners.map((p) => ({ id: p.id, name: p.name || "Rider" }))}
+            resultCount={filteredOrders.length}
+            totalCount={allOrders.length}
+            onClearAll={clearAllFilters}
+          />
 
-          {/* Main Filter / Tab Bar */}
-          <div className="sticky top-0 bg-[#f8fafc] z-10 pb-4 mb-6">
-            <div className="bg-white border border-slate-200 rounded-xl p-3 flex flex-wrap gap-4 items-center justify-between shadow-xs">
-              <div className="relative w-full md:w-80">
-                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[18px]">search</span>
-                <input
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:border-[#10b981] focus:ring-1 focus:ring-[#10b981] focus:bg-white transition-all text-sm text-slate-800 placeholder:text-slate-400"
-                  placeholder="Search ID, Customer, Items..."
-                  type="text"
-                />
-              </div>
-              
-              {/* Two groups, one row.
-                  Nine identical chips read as a wall — the eye has nothing to
-                  latch onto and every option looks equally urgent. The states
-                  that need action sit left, the archive sits right past a
-                  divider, and a zero count is dimmed so a busy kitchen can see
-                  at a glance which queues are actually empty. */}
-              <div className="flex items-center gap-1.5 overflow-x-auto py-1">
-                {FLOW_TABS.map(({ value: status, label }) => {
-                  const n = counts[status] ?? 0;
-                  const active = selectedStatus === status;
-                  return (
-                    <button
-                      key={status}
-                      onClick={() => setSelectedStatus(status)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                        active
-                          ? "bg-[#10b981] text-white shadow-xs"
-                          : n === 0
-                            ? "bg-slate-50 text-slate-400 hover:bg-slate-100"
-                            : "bg-slate-50 text-slate-700 hover:bg-slate-100"
-                      }`}
-                    >
-                      {label} ({n})
-                    </button>
-                  );
-                })}
-
-                <span className="mx-1 h-5 w-px flex-shrink-0 bg-slate-200" aria-hidden="true" />
-
-                {["Awaiting Payment", "Refund Required", "Payment Failed", "Delivered", "Cancelled", "All"].map((status) => {
-                  const n = counts[status] ?? 0;
-                  const active = selectedStatus === status;
-                  // Unpaid orders are the one archive state that can need
-                  // chasing, so it stays visible when there are any.
-                  const warn = status === "Awaiting Payment" && n > 0;
-                  // Refunds are louder than a chase queue on purpose: this is
-                  // money already taken from a customer for an order that will
-                  // never arrive, and nothing clears it except a person
-                  // issuing the refund.
-                  const alarm = status === "Refund Required" && n > 0;
-                  return (
-                    <button
-                      key={status}
-                      onClick={() => setSelectedStatus(status)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                        active
-                          ? "bg-[#10b981] text-white shadow-xs"
-                          : alarm
-                            ? "bg-rose-50 text-rose-700 hover:bg-rose-100"
-                            : warn
-                              ? "bg-amber-50 text-amber-700 hover:bg-amber-100"
-                              : "bg-slate-50 text-slate-500 hover:bg-slate-100"
-                      }`}
-                    >
-                      {status} ({n})
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* Bulk payment bar. Awaiting Payment only — every other tab is a
-              kitchen queue where money is not the question being asked. */}
-          {selectedStatus === "Awaiting Payment" && filteredOrders.length > 0 && (() => {
+          {/* ── Bulk cash settlement ─────────────────────────────────────
+              Shown when the operator is looking at the money, which is now
+              the Pending payment filter rather than a status tab. The write
+              goes through setPaymentReceived, which is the audited server
+              path — the frontend never fabricates a settlement. */}
+          {paymentState === PAYMENT.PENDING && filteredOrders.filter(canMarkPaid).length > 0 && (() => {
             const markable = filteredOrders.filter(canMarkPaid);
             const allChosen = markable.length > 0
               && markable.every((o) => selectedForPayment.includes(o.id));
-            const onlineCount = filteredOrders.length - markable.length;
+            const chosen = selectedForPayment.length;
+            const chosenValue = markable
+              .filter((o) => selectedForPayment.includes(o.id))
+              .reduce((sum, o) => sum + (Number(o.total) || 0), 0);
 
             return (
-              <div className="mb-4 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-                <div className="flex flex-wrap items-center gap-3">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={allChosen}
-                      disabled={markable.length === 0}
-                      onChange={() => setSelectedForPayment(
-                        allChosen ? [] : markable.map((o) => o.id),
-                      )}
-                      className="h-4 w-4 accent-[#10b981]"
-                    />
-                    <span className="text-xs font-bold text-slate-600">
-                      Select all cash / COD ({markable.length})
-                    </span>
-                  </label>
-
-                  <span className="text-xs text-slate-400">
-                    {selectedForPayment.length} selected
+              <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={allChosen}
+                    onChange={() => setSelectedForPayment(allChosen ? [] : markable.map((o) => o.id))}
+                    className="h-4 w-4 accent-emerald-600"
+                  />
+                  <span className="text-xs font-bold text-amber-900">
+                    Select all cash / COD ({markable.length})
                   </span>
+                </label>
+                <span className="text-xs text-amber-700 tabular-nums">
+                  {chosen} selected{chosen > 0 ? ` · ₹${chosenValue.toFixed(2)}` : ""}
+                </span>
+                <button
+                  type="button"
+                  disabled={chosen === 0 || markingPaid}
+                  onClick={async () => {
+                    // Confirmed, because it is money and it cannot be undone
+                    // from this screen.
+                    if (!window.confirm(
+                      `Record cash received for ${chosen} order(s), totalling ₹${chosenValue.toFixed(2)}?\n\n` +
+                      "This marks the payment as settled and is written to the audit log."
+                    )) return;
 
-                  <button
-                    type="button"
-                    disabled={selectedForPayment.length === 0 || markingPaid}
-                    onClick={async () => {
-                      setMarkingPaid(true);
-                      const ids = [...selectedForPayment];
-                      const failed = await setPaymentReceived(ids, true, user);
-                      setMarkingPaid(false);
-                      setSelectedForPayment([]);
-                      if (failed.length === 0) {
-                        addToast(`Payment recorded for ${ids.length} order(s)`, "success");
-                      } else {
-                        // Names the count that failed rather than claiming a
-                        // blanket success, because this is money.
-                        addToast(
-                          `${ids.length - failed.length} updated, ${failed.length} failed`,
-                          "error",
-                        );
-                      }
-                    }}
-                    className="ml-auto rounded-lg bg-[#10b981] px-4 py-2 text-xs font-bold text-white disabled:opacity-40 hover:bg-[#0ea472]"
-                  >
-                    {markingPaid ? "Recording…" : "Payment completed"}
-                  </button>
-                </div>
-
-                {onlineCount > 0 && (
-                  <p className="mt-2.5 text-[11px] leading-relaxed text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
-                    {onlineCount} online order(s) here cannot be ticked. Those are
-                    settled by the payment gateway's verified webhook — if one is
-                    still listed, the payment did not complete, and marking it paid
-                    by hand would record money nobody confirmed arrived.
-                  </p>
-                )}
+                    setMarkingPaid(true);
+                    const ids = [...selectedForPayment];
+                    const failed = await setPaymentReceived(ids, true, user);
+                    setMarkingPaid(false);
+                    setSelectedForPayment([]);
+                    if (failed.length === 0) addToast(`Payment recorded for ${ids.length} order(s)`, "success");
+                    // Names the count that failed rather than claiming a
+                    // blanket success, because this is money.
+                    else addToast(`${ids.length - failed.length} updated, ${failed.length} failed`, "error");
+                  }}
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {markingPaid ? "Recording…" : "Mark cash received"}
+                </button>
+                <span className="text-[11px] text-amber-700">
+                  Online payments settle themselves and cannot be marked here.
+                </span>
               </div>
             );
           })()}
 
-          {/* Refund queue.
-              A table rather than the card grid, deliberately. This is not a
-              kitchen queue — nobody is cooking these — it is a list somebody
-              works down with the payment gateway console open beside it, so
-              the five fields needed to find and issue the refund are what the
-              row shows, and nothing else competes with them. */}
-          {selectedStatus === "Refund Required" ? (
-            <div className="flex flex-col gap-4">
-              <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
-                <h3 className="text-sm font-black text-rose-800 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[18px]">currency_rupee</span>
-                  Refunds owed to customers
-                </h3>
-                <p className="mt-1 text-[11px] leading-relaxed font-semibold text-rose-700">
-                  These payments were captured against orders that had already
-                  been cancelled — the money left the customer's account and no
-                  food will ever arrive for it. Nothing refunds them
-                  automatically. Issue each one in the payment gateway using
-                  the payment ID below, then record it there.
-                </p>
-              </div>
-
-              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="bg-[#f0f3ff] border-b border-slate-200">
-                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider">Order ID</th>
-                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider">Customer</th>
-                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider">Amount</th>
-                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider">Payment ID</th>
-                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider">Reason</th>
-                        <th className="py-3.5 px-6 font-bold text-xs text-slate-500 uppercase tracking-wider text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="text-xs font-medium text-slate-700 divide-y divide-slate-100">
-                      {filteredOrders.map((o) => (
-                        <tr key={o.id} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="py-4 px-6 font-extrabold text-[#10b981]">#{o.id}</td>
-                          <td className="py-4 px-6 font-semibold">
-                            {o.customer}
-                            {contactOf(o) && <div className="text-[10px] text-slate-400 mt-0.5">{contactOf(o)}</div>}
-                          </td>
-                          <td className="py-4 px-6 font-black text-slate-800">₹{(o.total || 0).toFixed(2)}</td>
-                          {/* Selectable monospace, because this string is
-                              pasted into the gateway console. A payment ID
-                              nobody can copy accurately is a refund nobody
-                              can issue. */}
-                          <td className="py-4 px-6 font-mono text-[11px] text-slate-600 select-all break-all">
-                            {o.paymentId || "— none recorded —"}
-                          </td>
-                          <td className="py-4 px-6 text-slate-600 max-w-xs">
-                            {o.refundReason || "Captured after the order was cancelled"}
-                            {o.paymentStatus && (
-                              <div className="text-[10px] text-rose-600 font-bold uppercase mt-0.5">
-                                {o.paymentStatus}
-                              </div>
-                            )}
-                          </td>
-                          <td className="py-4 px-6 text-right whitespace-nowrap">
-                            <button
-                              onClick={() => {
-                                setSelectedOrder(o);
-                                setDetailTab("details");
-                              }}
-                              className="px-2.5 py-1 text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors border border-slate-200"
-                            >
-                              Details
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                      {filteredOrders.length === 0 && (
-                        <tr>
-                          <td colSpan="6" className="py-12 text-center text-slate-400 italic">
-                            No refunds outstanding.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          ) : filteredOrders.length === 0 ? (
-            <div className="bg-white border border-slate-200 rounded-xl p-12 shadow-sm text-center">
-              <EmptyState
-                icon="local_pizza"
-                title="No Active Orders"
-                description="There are currently no orders under this status or matching filter criteria."
-                actionText="Place Spot Order"
-                onActionClick={() => setShowSpotOrderModal(true)}
-              />
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-              {filteredOrders.map((order) => {
-                const showPaymentTick =
-                  selectedStatus === "Awaiting Payment" && canMarkPaid(order);
-                const priority = getOrderPriority(order);
-                const isTakeaway = order.address === "Counter Pickup" || (order.deliveryAddress && order.deliveryAddress.addressLine === "Counter Pickup");
-                const instructionsList = getOrderCookingInstructions(order);
-                
-                // Short item summary — "3x Chicken Biryani, 2x Paneer Tikka"
-                // trimmed to "3x Chicken Biryani +1 more" past two items, so a
-                // long cart never stretches the card. Full list stays in
-                // Order Details; nothing here is lost, just not on the card.
-                const itemNames = (order.itemsText || "")
-                  .split(",").map((s) => s.trim()).filter(Boolean);
-                const itemCount = order.items?.length || itemNames.length || 0;
-                const itemSummary = itemNames.length > 2
-                  ? `${itemNames.slice(0, 2).join(", ")} +${itemNames.length - 2} more`
-                  : itemNames.join(", ") || "No item details recorded";
-
-                return (
-                  <div
-                    key={order.id}
-                    onClick={() => {
-                      setSelectedOrder(order);
-                      setDetailTab("details");
-                    }}
-                    className="bg-white border border-slate-200 rounded-xl shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer flex flex-col overflow-hidden group hover:-translate-y-0.5"
-                  >
-                    {/* Selecting an order must not also open its detail sheet,
-                        hence stopPropagation on the row's onClick below. */}
-                    {showPaymentTick && (
-                      <label
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex items-center gap-2 px-4 pt-3 cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedForPayment.includes(order.id)}
-                          onChange={() => togglePaymentSelection(order.id)}
-                          className="h-4 w-4 accent-[#10b981]"
-                        />
-                        <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
-                          Mark payment received
-                        </span>
-                      </label>
-                    )}
-
-                    <div className="p-4 flex flex-col gap-2.5">
-                      {/* 1. Order ID — 2. Status. `min-w-0` + `truncate` so a
-                          long id shrinks instead of pushing the badge off the
-                          card or wrapping onto a second line; the full id is
-                          still on hover and in Order Details. */}
-                      <div className="flex justify-between items-center gap-2">
-                        <h4 className="text-sm font-black text-[#10b981] truncate min-w-0" title={order.id}>
-                          #{order.id}
-                        </h4>
-                        <span className={`shrink-0 px-2 py-0.5 rounded-full text-[9px] uppercase font-bold tracking-wide ${getStatusBadgeClass(order.status)}`}>
-                          {order.status}
-                        </span>
-                      </div>
-
-                      {/* Urgency, service type, payment-failure — collapsed to
-                          one compact row so it reads as a glance, not a second
-                          header. Each stays a small chip rather than a boxed
-                          section; none of this is required reading the way the
-                          rows below it are. */}
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${priority.color}`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${priority.dot}`} />
-                          {priority.label}
-                        </span>
-                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
-                          isTakeaway ? "bg-amber-50 text-amber-700" : "bg-indigo-50 text-indigo-700"
-                        }`}>
-                          {isTakeaway ? "Takeaway" : "Delivery"}
-                        </span>
-                        {/* A system cancellation is not a customer changing
-                            their mind — both read "Cancelled" in the status
-                            pill above, so without this an operator scanning
-                            the list cannot tell an abandoned checkout from a
-                            call to the kitchen. */}
-                        {isPaymentFailedOrder(order) && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-rose-50 text-rose-700">
-                            Payment failed
-                          </span>
-                        )}
-                      </div>
-
-                      {/* 3. Customer. Truncates rather than wraps — a two-line
-                          name pushes every row below it down and makes cards
-                          in the same row uneven heights. */}
-                      <div className="font-bold text-sm text-slate-800 truncate" title={order.customer}>
-                        {order.customer}
-                      </div>
-
-                      {/* 4 + 5. Item summary and total, one line, exactly the
-                          density the mockup asked for — "3 items • ₹580" —
-                          with the actual dish names available on hover rather
-                          than a separate boxed section. */}
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span className="text-xs text-slate-500 truncate min-w-0" title={itemSummary}>
-                          {itemCount} item{itemCount === 1 ? "" : "s"}
-                          {itemNames.length > 0 && <> &middot; {itemSummary}</>}
-                        </span>
-                        <span className="shrink-0 font-black text-slate-800 text-sm">
-                          ₹{(order.total || 0).toFixed(2)}
-                        </span>
-                      </div>
-
-                      {/* 6. Actual order time. */}
-                      <div className="text-[11px] text-slate-400 font-medium">
-                        Ordered {formatOrderTime(order.createdAt)}
-                      </div>
-
-                      {/* Rider — only once there is one to name, and only for
-                          a delivery order; one line, no boxed background. */}
-                      {!isTakeaway && (order.status === "Out for Delivery" || order.status === "OutForDelivery") && (
-                        <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
-                          <span className="material-symbols-outlined text-[13px]">motorcycle</span>
-                          {order.rider || "Not assigned"}
-                        </div>
-                      )}
-
-                      {/* Kitchen note — one truncated line, not a boxed
-                          callout, so one long note cannot dominate the card. */}
-                      {instructionsList.length > 0 && (
-                        <div className="text-[11px] text-amber-700 font-semibold truncate flex items-center gap-1" title={`${instructionsList[0].itemName}: ${instructionsList[0].note}`}>
-                          <span className="material-symbols-outlined text-[13px]">restaurant_menu</span>
-                          {instructionsList[0].itemName}: {instructionsList[0].note}
-                        </div>
-                      )}
-
-                      {/* Payment window — only on the one tab it decides
-                          anything for. Older orders carry no paymentExpiresAt
-                          and say so rather than showing a countdown invented
-                          from createdAt. */}
-                      {selectedStatus === "Awaiting Payment" && (() => {
-                        const remaining = formatTimeRemaining(order.paymentExpiresAt);
-                        if (!remaining) {
-                          return (
-                            <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                              No payment deadline recorded
-                            </div>
-                          );
-                        }
-                        return (
-                          <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-bold w-fit ${
-                            remaining.expired
-                              ? "bg-rose-50 text-rose-700 border-rose-200"
-                              : "bg-amber-50 text-amber-700 border-amber-200"
-                          }`}>
-                            <span className="material-symbols-outlined text-[12px]">timer</span>
-                            {remaining.text}
-                          </div>
-                        );
-                      })()}
+          {/* ── The list ─────────────────────────────────────────────────
+              Loading, error and empty are three distinct outcomes. The page
+              previously showed "No Active Orders" for all three, so a failed
+              listener looked like a quiet kitchen. */}
+          <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+            {loading && allOrders.length === 0 ? (
+              <ul className="divide-y divide-slate-100">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <li key={i} className="flex items-center gap-4 px-4 py-4">
+                    <div className="h-9 w-9 animate-pulse rounded-lg bg-slate-100" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-3 w-1/4 animate-pulse rounded bg-slate-100" />
+                      <div className="h-3 w-1/2 animate-pulse rounded bg-slate-100" />
                     </div>
-
-                    {/* 7. Primary contextual action — 8. View Details.
-                        The whole card already opens Details on click; this
-                        button is the explicit, visible affordance for it. */}
-                    <div className="mt-auto border-t border-slate-100 bg-slate-50/60 p-3 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                      {order.status === "Pending" && (
-                        <button
-                          onClick={() => handleUpdateStatus(order.id, "Accepted")}
-                          className="flex-1 bg-green-700 hover:bg-green-800 text-white text-xs py-2 rounded-lg font-bold transition-all"
-                        >
-                          Accept Order
-                        </button>
-                      )}
-                      {order.status === "Accepted" && (
-                        <button
-                          onClick={() => handleUpdateStatus(order.id, "Preparing")}
-                          className="flex-1 bg-amber-600 hover:bg-amber-700 text-white text-xs py-2 rounded-lg font-bold transition-all"
-                        >
-                          Start Preparing
-                        </button>
-                      )}
-                      {order.status === "Preparing" && (
-                        <button
-                          onClick={() => handleUpdateStatus(order.id, "Ready")}
-                          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs py-2 rounded-lg font-bold transition-all"
-                        >
-                          Mark Ready
-                        </button>
-                      )}
-                      {/*
-                        Ready splits by service type rather than both going
-                        straight to Delivered:
-
-                        A takeaway order has no rider — "picked up" is the
-                        actual next event, and it *is* delivered in every
-                        sense that matters, so writing Delivered directly is
-                        correct.
-
-                        A delivery order does not skip a step. Before this,
-                        both cases wrote Delivered directly from Ready, which
-                        meant a delivery order that used this quick button
-                        never passed through "Out for Delivery" — the exact
-                        status the customer app's tracking screen watches for
-                        a moving rider. assignDeliveryPartner (used from the
-                        details panel, opened below) is what correctly sets
-                        Out for Delivery, appends to statusHistory, and
-                        carries the actual rider's name.
-                      */}
-                      {order.status === "Ready" && isTakeaway && (
-                        <button
-                          onClick={() => handleUpdateStatus(order.id, "Delivered")}
-                          className="flex-1 bg-[#10b981] hover:bg-[#059669] text-white text-xs py-2 rounded-lg font-bold transition-all"
-                        >
-                          Mark Picked Up
-                        </button>
-                      )}
-                      {order.status === "Ready" && !isTakeaway && (
-                        <button
-                          onClick={() => { setSelectedOrder(order); setDetailTab("details"); }}
-                          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs py-2 rounded-lg font-bold transition-all"
-                        >
-                          Assign Rider
-                        </button>
-                      )}
-                      {(order.status === "Out for Delivery" || order.status === "OutForDelivery") && (
-                        <button
-                          onClick={() => handleUpdateStatus(order.id, "Delivered")}
-                          className="flex-1 bg-[#10b981] hover:bg-[#059669] text-white text-xs py-2 rounded-lg font-bold transition-all"
-                          title="Manual override — normally the rider or the customer's tracking marks this"
-                        >
-                          Mark Delivered
-                        </button>
-                      )}
-                      {order.status === "Delivered" && (
-                        <button
-                          disabled
-                          className="flex-1 bg-slate-200 text-slate-400 text-xs py-2 rounded-lg font-bold cursor-not-allowed"
-                        >
-                          Delivered
-                        </button>
-                      )}
-                      {order.status === "Cancelled" && (
-                        <button
-                          disabled
-                          className="flex-1 bg-red-50 text-red-400 border border-red-100 text-xs py-2 rounded-lg font-bold cursor-not-allowed"
-                        >
-                          Cancelled
-                        </button>
-                      )}
-
-                      <button
-                        onClick={() => { setSelectedOrder(order); setDetailTab("details"); }}
-                        className="shrink-0 w-9 h-9 flex items-center justify-center bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 rounded-lg transition-all"
-                        title="View Details"
-                      >
-                        <span className="material-symbols-outlined text-[18px]">visibility</span>
-                      </button>
-                      <button
-                        onClick={(e) => handleCardPrint(e, order)}
-                        className="shrink-0 w-9 h-9 flex items-center justify-center bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 rounded-lg transition-all"
-                        title="Print KOT"
-                      >
-                        <span className="material-symbols-outlined text-[18px]">print</span>
-                      </button>
-                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : error ? (
+              <div className="p-6">
+                <ErrorState
+                  title="Could not load orders"
+                  message={error}
+                  onRetry={() => window.location.reload()}
+                  retryText="Reload"
+                />
+              </div>
+            ) : filteredOrders.length === 0 ? (
+              <div className="px-6 py-16 text-center">
+                <span className="material-symbols-outlined text-[32px] text-slate-300">receipt_long</span>
+                {/* Distinguishes "no orders at all" from "your filters
+                    excluded them" — the same empty grid used to mean both. */}
+                {allOrders.length === 0 ? (
+                  <>
+                    <p className="mt-2 text-sm font-semibold text-slate-700">No orders yet</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Orders will appear here as customers place them.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="mt-2 text-sm font-semibold text-slate-700">No orders match these filters</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {allOrders.length} orders are loaded, but none match the current selection.
+                    </p>
+                    <button
+                      onClick={clearAllFilters}
+                      className="mt-4 rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-slate-700"
+                    >
+                      Clear all filters
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : (
+              <>
+                <ul>
+                  {visibleOrders.map((order) => (
+                    <OrderRow
+                      key={order.id}
+                      order={order}
+                      busy={busyOrderId === order.id}
+                      onOpen={setDetailOrder}
+                      onPrimaryAction={advanceOrder}
+                      selectable={paymentState === PAYMENT.PENDING && canMarkPaid(order)}
+                      selected={selectedForPayment.includes(order.id)}
+                      onSelect={(o) => togglePaymentSelection(o.id)}
+                    />
+                  ))}
+                </ul>
+                {filteredOrders.length > visibleOrders.length && (
+                  <div className="border-t border-slate-100 px-4 py-3 text-center">
+                    <button
+                      onClick={() => setVisibleCount((n) => n + 40)}
+                      className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                    >
+                      Show more ({filteredOrders.length - visibleOrders.length} remaining)
+                    </button>
+                    <p className="mt-1.5 text-[11px] text-slate-400">
+                      Older orders are in the Archive tab, which queries history directly.
+                    </p>
                   </div>
-                );
-              })}
-            </div>
-          )}
+                )}
+              </>
+            )}
+          </div>
         </>
       ) : (
         /* Order History Tab */
@@ -2376,7 +2063,7 @@ export const Orders = () => {
                             Details
                           </button>
                           <button
-                            onClick={() => handlePrintKOT(o)}
+                            onClick={() => reportPrint(printKOT(o, { typeLabel: ORDER_TYPE_LABEL[orderTypeOf(o)] }))}
                             className="px-2.5 py-1 text-[11px] font-bold bg-[#10b981] hover:bg-[#059669] text-white rounded-lg transition-colors shadow-xs"
                           >
                             Print
@@ -3006,7 +2693,7 @@ export const Orders = () => {
                   {/* Print Button inside KOT tab */}
                   <div className="no-print pt-4 border-t border-dashed border-slate-200 mt-2">
                     <button
-                      onClick={() => handlePrintKOT(selectedOrder)}
+                      onClick={() => reportPrint(printKOT(selectedOrder, { typeLabel: ORDER_TYPE_LABEL[orderTypeOf(selectedOrder)] }))}
                       className="w-full bg-slate-800 hover:bg-slate-900 text-white py-2.5 rounded-lg font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm"
                     >
                       <span className="material-symbols-outlined text-[16px]">print</span>
@@ -3543,6 +3230,97 @@ export const Orders = () => {
             setSelectedOrder(null);
           }}
         />
+      )}
+
+      {/* Order details. Mounted once at the page root rather than per row, so
+          only one panel can ever be open and the list underneath keeps its
+          scroll position when it closes. */}
+      <OrderDetailsDrawer
+        order={detailOrder}
+        open={Boolean(detailOrder)}
+        busy={busyOrderId === detailOrder?.id}
+        onClose={() => setDetailOrder(null)}
+        onUpdateStatus={advanceOrder}
+        onAssignRider={(o) => setAssignTarget(o)}
+        onPrintResult={reportPrint}
+      />
+
+      {/* Rider assignment / reassignment. Calls the existing
+          assignDeliveryPartner path — the same audited write the previous UI
+          used — so nothing about the security model changes here. */}
+      {assignTarget && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 p-4"
+             role="dialog" aria-modal="true" aria-label="Assign a delivery partner">
+          <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-slate-900">
+                  {assignTarget.assignedPartnerName ? "Change rider" : "Assign a rider"}
+                </h3>
+                <p className="truncate text-xs text-slate-500">
+                  Order #{String(assignTarget.id).slice(-6).toUpperCase()}
+                  {assignTarget.assignedPartnerName
+                    ? ` · currently ${assignTarget.assignedPartnerName}`
+                    : ""}
+                </p>
+              </div>
+              <button onClick={() => setAssignTarget(null)} aria-label="Close"
+                      className="shrink-0 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
+                <span className="material-symbols-outlined text-[20px]">close</span>
+              </button>
+            </div>
+
+            <div className="max-h-80 overflow-y-auto p-2">
+              {deliveryPartners.filter((p) => p.isOnline).length === 0 ? (
+                /* Honest about why the list is empty, rather than an empty box
+                   that reads as a loading failure. */
+                <p className="px-3 py-8 text-center text-xs text-slate-500">
+                  No delivery partners are online right now.
+                  {deliveryPartners.length > 0 && ` ${deliveryPartners.length} are registered but offline.`}
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {deliveryPartners.filter((p) => p.isOnline).map((p) => {
+                    const current = p.id === assignTarget.assignedPartnerId;
+                    return (
+                      <li key={p.id}>
+                        <button
+                          // Reassigning to the rider already on the order is a
+                          // no-op write and a confusing one; it is disabled
+                          // and labelled rather than silently accepted.
+                          disabled={busyOrderId === assignTarget.id || current}
+                          onClick={async () => {
+                            setBusyOrderId(assignTarget.id);
+                            try {
+                              await handleAssignDeliveryPartner(assignTarget.id, p.id, p.name || "Rider");
+                              setAssignTarget(null);
+                            } finally {
+                              setBusyOrderId(null);
+                            }
+                          }}
+                          className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold text-slate-800">
+                              {p.name || "Rider"}
+                            </span>
+                            <span className="block truncate text-[11px] text-slate-500">
+                              {p.phone || "No phone recorded"}
+                              {typeof p.rating === "number" ? ` · ${p.rating.toFixed(1)}★` : ""}
+                            </span>
+                          </span>
+                          <span className="ml-2 shrink-0 text-[11px] font-bold text-emerald-600">
+                            {current ? "Assigned" : "Assign"}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

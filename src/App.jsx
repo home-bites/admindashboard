@@ -38,8 +38,6 @@ import Subscriptions from "./pages/Subscriptions";
 import LiveCommandCenter from "./pages/LiveCommandCenter";
 import DietOffersBanners from "./pages/DietOffersBanners";
 import { MediaLibrary } from "./pages/MediaLibrary";
-// Built but never imported, so never routed and unreachable from anywhere.
-import KitchenDashboard from "./pages/KitchenDashboard";
 import DeliveryDashboard from "./pages/DeliveryDashboard";
 import { useAuthStore } from "./store/authStore";
 
@@ -169,11 +167,11 @@ export const App = () => {
               }
             />
 
-            {/* Kitchen & dispatch. KitchenDashboard and DeliveryDashboard
-                existed as components but were never imported or routed — the
-                sidebar linked to /subscriptions/kitchen-queue and
-                /delivery-tracking, neither of which was declared. */}
-            <Route path="kitchen" element={<KitchenDashboard />} />
+            {/* Dispatch. The separate queue page that sat beside this was
+                removed: it was a fourth view of the same work, reading its own
+                collection that could drift from `orders`, and its one unique
+                capability — printing a ticket — lives on the Orders page,
+                which is now the single operational surface. */}
             <Route path="delivery-tracking" element={<DeliveryDashboard />} />
 
             {/* The Daily Menu route is gone. Subscription dishes are edited on
@@ -285,7 +283,27 @@ export const App = () => {
             <Route path="support" element={<CustomerSupport />} />
 
             {/* Customers Directory (All roles) */}
-            <Route path="customers" element={<Customers />} />
+            {/*
+              Customer directory (Super Admin & Admin).
+
+              This route was the only one exposing customer PII — names, phone
+              numbers, addresses and lifetime spend — without a role guard,
+              while Wallet and Reviews next to it were both guarded. Firestore
+              rules already restrict `list` on /users to dashboard admins, so
+              this was never a data leak; the effect was that a lower-privilege
+              signed-in user reached the page and met a permissions error
+              rather than a clear "Access Denied". Matching the guard on the
+              neighbouring customer screens closes the inconsistency and makes
+              the refusal legible.
+            */}
+            <Route
+              path="customers"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <Customers />
+                </RBACGuard>
+              }
+            />
 
             {/* Customer Reviews (Super Admin & Admin roles) */}
             <Route

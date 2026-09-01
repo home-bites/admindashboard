@@ -2,18 +2,17 @@ import React, { useState, useEffect } from "react";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { app } from "../firebase/firebaseConfig";
 import { useUiStore } from "../store/uiStore";
-import { useAuthStore } from "../store/authStore";
 import { useWalletStore } from "../store/walletStore";
 import { useOrderStore } from "../store/orderStore";
 import { useDeliveryPartnerStore } from "../store/deliveryPartnerStore";
 import EmptyState from "../components/EmptyState";
 import * as LoadingComponents from "../components/LoadingComponents";
-import { userRepository } from "../repositories";
+import { where } from "firebase/firestore";
+import { userRepository, walletTransactionRepository } from "../repositories";
 
 export const Wallet = () => {
   const { addToast } = useUiStore();
-  const { user } = useAuthStore();
-  const { transactions, loading, subscribeTransactions, disconnectTransactions, addTransaction } = useWalletStore();
+  const { transactions, loading, subscribeTransactions, disconnectTransactions } = useWalletStore();
   const { orders, subscribeOrders, disconnectOrders } = useOrderStore();
   const {
     deliveryPartners, subscribeDeliveryPartners, disconnectDeliveryPartners,
@@ -33,12 +32,91 @@ export const Wallet = () => {
   const [customers, setCustomers] = useState([]);
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
 
+  /*
+   * Customer lookup for the credit dialog.
+   *
+   * This was `userRepository.getAll()` on mount — the entire users collection
+   * downloaded into memory so a dropdown could substring-match against it. At
+   * ten thousand customers that is ten thousand document reads every time the
+   * page opens, to support typing into one field.
+   *
+   * A credit is always issued against a specific known customer, and the
+   * identifier to hand is their phone number, so the lookup is now an indexed
+   * equality query fired once the operator has typed a full number. Both the
+   * bare digits and the +91 form are tried, because both spellings exist in
+   * the collection.
+   */
+  const [lookupState, setLookupState] = useState("idle"); // idle | searching | done
   useEffect(() => {
-    userRepository.getAll().then(users => {
-      // Filter out admins if needed, or just keep all users
-      setCustomers(users);
-    }).catch(err => console.error("Failed to load users for autocomplete", err));
-  }, []);
+    const digits = String(creditForm.phone || "").replace(/\D/g, "");
+    if (digits.length < 10) {
+      setCustomers([]);
+      setLookupState("idle");
+      return;
+    }
+
+    let cancelled = false;
+    setLookupState("searching");
+    const timer = setTimeout(async () => {
+      try {
+        const found = (
+          await Promise.all([
+            userRepository.findByField("phone", digits).catch(() => []),
+            userRepository.findByField("phone", `+91${digits.slice(-10)}`).catch(() => []),
+          ])
+        ).flat();
+        if (cancelled) return;
+        const byId = new Map(found.map((u) => [u.id, u]));
+        setCustomers([...byId.values()]);
+      } finally {
+        if (!cancelled) setLookupState("done");
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [creditForm.phone]);
+
+  /*
+   * Lifetime ledger totals, from server-side aggregation.
+   *
+   * These were reduced from the `transactions` array. That array is now the
+   * newest 200 rows rather than the whole ledger, so reducing it would have
+   * produced a partial sum still captioned "Total Store Balance" — a wrong
+   * number on a finance screen, which is worse than no number. `sum()` runs
+   * server-side over the full collection and is unaffected by the window.
+   */
+  const [totals, setTotals] = useState(null);
+  const [totalsError, setTotalsError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      setTotalsError(null);
+      try {
+        const [earnings, payouts, refunds] = await Promise.all([
+          walletTransactionRepository.sumWhere("amount", [where("type", "==", "Earning")]),
+          walletTransactionRepository.sumWhere("amount", [where("type", "==", "Payout")]),
+          walletTransactionRepository.sumWhere("amount", [where("type", "==", "Refund")]),
+        ]);
+        if (cancelled) return;
+        setTotals({
+          earnings: Math.abs(earnings),
+          payouts: Math.abs(payouts),
+          refunds: Math.abs(refunds),
+        });
+      } catch (e) {
+        if (!cancelled) setTotalsError(e?.message || "Could not load ledger totals.");
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // Recomputed when the visible ledger changes, which is the cheapest
+    // available signal that something was written.
+  }, [transactions.length]);
 
   // All three sources are live. Wallet rows in particular are written by
   // Cloud Functions on refunds and cashback, so the page has to reflect
@@ -58,21 +136,15 @@ export const Wallet = () => {
     subscribeDeliveryPartners, disconnectDeliveryPartners,
   ]);
 
-  // --- Real-time Financial Calculations ---
-  const totalRevenue = transactions
-    .filter(t => t.type === "Earning")
-    .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
+  // --- Lifetime figures (server-side aggregation; null until loaded) ---
+  const totalRevenue = totals?.earnings ?? null;
+  const totalPayouts = totals?.payouts ?? null;
+  const totalRefunds = totals?.refunds ?? null;
+  const totalStoreBalance =
+    totals ? totals.earnings - totals.payouts - totals.refunds : null;
 
-  const totalPayouts = transactions
-    .filter(t => t.type === "Payout")
-    .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
-
-  const totalRefunds = transactions
-    .filter(t => t.type === "Refund")
-    .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
-
-  const totalStoreBalance = totalRevenue - totalPayouts - totalRefunds;
-
+  // Pending refunds are recent by nature, so the live window is the right
+  // source — unlike the lifetime figures above.
   const pendingRefunds = transactions.filter(t => t.type === "Refund" && t.status === "Pending");
   const pendingRefundCount = pendingRefunds.length;
   const pendingRefundValue = pendingRefunds.reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
@@ -83,32 +155,33 @@ export const Wallet = () => {
 
   const partnerCount = deliveryPartners.length;
 
-  const handleNewTransfer = async () => {
-    const amountVal = prompt("Enter amount (positive for credit/earning, negative for debit/payout/refund):");
-    if (amountVal === null) return;
-    const amountNum = parseFloat(amountVal);
-    if (isNaN(amountNum) || amountNum === 0) {
-      addToast("Invalid amount entered", "error");
-      return;
-    }
-    const description = prompt("Enter transfer description:");
-    if (!description) return;
-    const type = amountNum > 0 ? "Earning" : amountNum < 0 ? "Payout" : "Refund";
-
-    const payload = {
-      amount: amountNum,
-      type,
-      description,
-      status: "Settled"
-    };
-
-    try {
-      await addTransaction(payload, user);
-      addToast("Transfer recorded successfully in Firestore", "success");
-    } catch (err) {
-      addToast(`Failed to record transfer: ${err.message}`, "error");
-    }
-  };
+  /*
+   * "Record Transfer" is gone, and this is why.
+   *
+   * It collected an amount and a description through two `prompt()` dialogs
+   * and wrote a wallet transaction straight into Firestore from the browser.
+   * Three things were wrong with it, in increasing order of severity:
+   *
+   *  1. `prompt()` is a blocking browser dialog with no validation, no
+   *     cancel-safety and no formatting — not an interface for entering a
+   *     money amount.
+   *
+   *  2. The row it wrote had `userId: "system"`. It was attached to no
+   *     customer and no rider, so nobody's balance moved. The ledger gained
+   *     an entry that corresponded to no transfer of money.
+   *
+   *  3. Because the entry was real as far as the ledger was concerned, it
+   *     counted toward the store totals. A mistyped digit permanently skewed
+   *     the headline financial figures with no customer to reconcile against
+   *     and no way to reverse it from the UI.
+   *
+   * Every legitimate movement already has a proper path: customer credits go
+   * through `adminCreditCustomerWallet` below, which is a callable Cloud
+   * Function that validates the target, moves the balance and writes the
+   * ledger row as one server-side operation. Rider earnings are written by
+   * the delivery flow. There is no remaining case for a free-text ledger
+   * write from the browser, so the button now opens the credit dialog.
+   */
 
   const handleCreditWallet = async () => {
     // A customer must be picked from the list, not merely typed.
@@ -161,8 +234,8 @@ export const Wallet = () => {
 
   const filteredTxns = transactions.filter((t) => {
     const matchesSearch =
-      t.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.description.toLowerCase().includes(searchQuery.toLowerCase());
+      String(t.id || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      String(t.description || "").toLowerCase().includes(searchQuery.toLowerCase());
     
     if (selectedTab === "All") return matchesSearch;
     return t.type.toLowerCase() === selectedTab.toLowerCase() && matchesSearch;
@@ -199,13 +272,10 @@ export const Wallet = () => {
             <span className="material-symbols-outlined text-[18px]">account_balance_wallet</span>
             Credit Wallet
           </button>
-          <button 
-            onClick={handleNewTransfer}
-            className="px-4 py-2 bg-[#10b981] text-white font-label-md text-label-md rounded-lg flex items-center gap-2 hover:bg-[#059669] transition-colors shadow-sm border-t border-white/20 inner-shine"
-          >
-            <span className="material-symbols-outlined text-[18px]">add</span>
-            New Transfer
-          </button>
+          {/* "New Transfer" stood here. It wrote unattached ledger rows via
+              prompt() dialogs — see the note above handleCreditWallet. Credit
+              Wallet is the real, server-validated path and was already next
+              to it, so removing this leaves no capability behind. */}
         </div>
       </div>
 
@@ -246,12 +316,17 @@ export const Wallet = () => {
                     onMouseDown={(e) => e.preventDefault()}
                     className="absolute z-10 w-full mt-1 max-h-60 overflow-auto bg-white border border-gray-200 rounded-md shadow-lg text-left"
                   >
+                    {/* No client-side filter here any more. The lookup is a
+                        server query by phone, so everything in `customers` is
+                        already a match — and re-filtering was actively wrong:
+                        selecting a customer rewrites the field to
+                        "Name · phone", which matched none of the three
+                        predicates, so the chosen row vanished from the list
+                        the instant it was picked. */}
+                    {lookupState === "searching" && (
+                      <li className="px-4 py-3 text-center text-sm italic text-gray-500">Searching…</li>
+                    )}
                     {customers
-                      .filter(c => 
-                        (c.firstName + ' ' + c.lastName).toLowerCase().includes(creditForm.phone.toLowerCase()) || 
-                        (c.email || '').toLowerCase().includes(creditForm.phone.toLowerCase()) || 
-                        (c.phone || '').includes(creditForm.phone)
-                      )
                       .slice(0, 8)
                       .map(c => (
                         <li 
@@ -270,15 +345,26 @@ export const Wallet = () => {
                             setShowCustomerDropdown(false);
                           }}
                         >
-                          <div className="font-semibold text-gray-800">{c.firstName} {c.lastName}</div>
+                          <div className="font-semibold text-gray-800">{[c.firstName, c.lastName].filter(Boolean).join(' ') || c.displayName || 'Customer'}</div>
                           <div className="text-gray-500 text-xs flex justify-between mt-0.5">
                             <span>{c.email}</span>
                             <span className="text-[#10b981] font-medium">{c.phone}</span>
                           </div>
                         </li>
                     ))}
-                    {customers.filter(c => (c.firstName + ' ' + c.lastName).toLowerCase().includes(creditForm.phone.toLowerCase()) || (c.email || '').toLowerCase().includes(creditForm.phone.toLowerCase()) || (c.phone || '').includes(creditForm.phone)).length === 0 && (
-                      <li className="px-4 py-3 text-sm text-gray-500 italic text-center">No customers found</li>
+                    {/* "No customers found" is only true once a lookup has
+                        actually run. Before that the honest message is that
+                        a full number is needed — the previous version showed
+                        "not found" while the admin was still typing. */}
+                    {lookupState === "idle" && (
+                      <li className="px-4 py-3 text-center text-sm italic text-gray-500">
+                        Enter the customer&apos;s full phone number
+                      </li>
+                    )}
+                    {lookupState === "done" && customers.length === 0 && (
+                      <li className="px-4 py-3 text-center text-sm italic text-gray-500">
+                        No customer with that phone number
+                      </li>
                     )}
                   </ul>
                 )}
@@ -332,10 +418,35 @@ export const Wallet = () => {
             <div className="p-2 bg-[#f0f3ff] rounded-lg text-[#10b981]">
               <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>account_balance</span>
             </div>
-            <span className="font-label-sm text-label-sm px-2 py-0.5 bg-[#ecfdf5] text-[#006c49] rounded-full border border-[#10b981]/20 font-semibold">+12.5% this month</span>
+            {/* "+12.5% this month" used to sit here as a literal. It was not
+                computed from anything — the same figure showed on every
+                account, in every period, forever. A fabricated trend badge on
+                a balance card is worse than no badge: it invites a decision.
+                Replaced with the real scope of the number below it. */}
+            <span className="font-label-sm text-label-sm px-2 py-0.5 bg-[#f0f3ff] text-[#555f6f] rounded-full border border-[#dce2f3]">
+              Lifetime
+            </span>
           </div>
           <p className="font-label-md text-label-md text-[#555f6f] mb-1">Total Store Balance</p>
-          <h3 className="font-headline-display text-headline-display text-[#151c27] font-bold">₹{totalStoreBalance.toFixed(2)}</h3>
+          {totalsError ? (
+            <h3 className="font-headline-display text-headline-display text-[#ba1a1a] font-bold">
+              Unavailable
+            </h3>
+          ) : totals ? (
+            <h3 className="font-headline-display text-headline-display text-[#151c27] font-bold">
+              ₹{totalStoreBalance.toFixed(2)}
+            </h3>
+          ) : (
+            <div className="h-9 w-40 animate-pulse rounded-md bg-slate-100" aria-label="Loading balance" />
+          )}
+          {totalsError && (
+            <p className="font-body-sm text-body-sm text-[#ba1a1a] mt-1">{totalsError}</p>
+          )}
+          {totals && (
+            <p className="font-body-sm text-body-sm text-[#555f6f] mt-1">
+              ₹{totalRevenue.toFixed(0)} earned · ₹{totalPayouts.toFixed(0)} paid out · ₹{totalRefunds.toFixed(0)} refunded
+            </p>
+          )}
         </div>
 
         {/* Pending Refunds KPI (Monetary value details = Value: ₹--) */}
@@ -359,11 +470,19 @@ export const Wallet = () => {
             <div className="p-2 bg-[#f0f3ff] rounded-lg text-[#006c49]">
               <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>payments</span>
             </div>
-            <span className="font-label-sm text-label-sm px-2 py-0.5 bg-[#f0f3ff] text-[#555f6f] rounded-full border border-[#dce2f3]">Due Today</span>
+            {/* Was labelled "Due Today". Nothing about the figure is scoped to
+                today — it sums rider earnings across every delivered order in
+                the loaded window. An operator paying out against a number
+                captioned "due today" would pay the wrong amount. */}
+            <span className="font-label-sm text-label-sm px-2 py-0.5 bg-[#f0f3ff] text-[#555f6f] rounded-full border border-[#dce2f3]">
+              Recent orders
+            </span>
           </div>
-          <p className="font-label-md text-label-md text-[#555f6f] mb-1">Partner Payouts</p>
+          <p className="font-label-md text-label-md text-[#555f6f] mb-1">Rider Earnings Accrued</p>
           <h3 className="font-headline-display text-headline-display text-[#151c27] font-bold">₹{partnerPayouts.toFixed(2)}</h3>
-          <p className="font-body-sm text-body-sm text-[#555f6f] mt-1">Across {partnerCount} partners</p>
+          <p className="font-body-sm text-body-sm text-[#555f6f] mt-1">
+            Delivered orders in view · {partnerCount} partners
+          </p>
         </div>
       </div>
 

@@ -11,6 +11,9 @@ export const Deals = () => {
   const { user } = useAuthStore();
   const { deals, loading, subscribeDeals, disconnectDeals, addDeal, updateDeal, deleteDeal } = useDealStore();
 
+  // Real, from the loaded deals — not a literal.
+  const activeDealCount = deals.filter((d) => d.status === "Active").length;
+
   const [searchQuery, setSearchQuery] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editDealId, setEditDealId] = useState(null);
@@ -76,16 +79,27 @@ export const Deals = () => {
       } else {
         await addDeal(dealPayload, user);
 
-        // Send a marketing notification to all customers
-        await notificationRepository.create({
-          userId: "all",
-          type: "marketing",
-          title: "New Deal Available!",
-          message: `${title}. Get this deal on orders above ₹${minOrderVal}!`,
-          isRead: false
-        });
-
-        addToast("New deal campaign created successfully", "success");
+        /*
+         * The broadcast must not be able to fail the save.
+         *
+         * This was awaited inside the same try/catch as `addDeal`, so a
+         * notification write rejected by rules surfaced as "Failed to save
+         * deal" for a deal that had already been created — and the natural
+         * response is to create it again, producing duplicate campaigns and a
+         * second broadcast.
+         */
+        addToast("New deal campaign created", "success");
+        try {
+          await notificationRepository.create({
+            userId: "all",
+            type: "marketing",
+            title: "New Deal Available!",
+            message: `${title}. Get this deal on orders above ₹${minOrderVal}!`,
+            isRead: false
+          });
+        } catch (notifyErr) {
+          addToast(`Deal saved, but customers were not notified: ${notifyErr.message}`, "warning");
+        }
       }
       setIsModalOpen(false);
     } catch (err) {
@@ -144,10 +158,18 @@ export const Deals = () => {
             <span className="material-symbols-outlined text-[#006c49] p-2 bg-[#00af79]/20 rounded-lg">local_offer</span>
           </div>
           <div className="relative z-10">
-            <span className="font-headline-display text-headline-display text-[#151c27] font-bold">₹--</span>
-            <div className="flex items-center gap-1 mt-2 text-[#006c49]">
-              <span className="material-symbols-outlined text-[16px]">trending_up</span>
-              <span className="font-label-sm text-label-sm">+8.2% vs last month</span>
+            {/* The figure was the literal "₹--" under a "+8.2% vs last
+                month" trend. Nothing in the deal documents records redemption
+                value, so neither the amount nor the trend was ever computed —
+                the percentage was the same on every load, forever. Deals are
+                applied at checkout without writing back a redemption record,
+                so this cannot be derived here; saying so beats a number that
+                looks measured. */}
+            <span className="font-headline-display text-headline-display text-[#555f6f] font-bold">Not tracked</span>
+            <div className="mt-2">
+              <span className="font-label-sm text-label-sm text-[#555f6f]">
+                Deal redemptions are not recorded against orders
+              </span>
             </div>
           </div>
         </div>
@@ -160,10 +182,15 @@ export const Deals = () => {
             <span className="material-symbols-outlined text-[#10b981] p-2 bg-[#10b981]/20 rounded-lg">campaign</span>
           </div>
           <div className="relative z-10">
-            <span className="font-headline-display text-headline-display text-[#151c27] font-bold">6 Deals</span>
-            <div className="flex items-center gap-1 mt-2 text-[#555f6f]">
-              <span className="material-symbols-outlined text-[16px]">horizontal_rule</span>
-              <span className="font-label-sm text-label-sm">Steady performance</span>
+            {/* Was the literal "6 Deals" with "Steady performance" beneath
+                it, regardless of how many deals existed. This one is real. */}
+            <span className="font-headline-display text-headline-display text-[#151c27] font-bold">
+              {activeDealCount}
+            </span>
+            <div className="mt-2">
+              <span className="font-label-sm text-label-sm text-[#555f6f]">
+                of {deals.length} total campaigns
+              </span>
             </div>
           </div>
         </div>
@@ -176,9 +203,12 @@ export const Deals = () => {
             <span className="material-symbols-outlined text-[#596373] p-2 bg-[#d6e0f3] rounded-lg">shopping_basket</span>
           </div>
           <div className="relative z-10">
-            <span className="font-headline-display text-headline-display text-[#151c27] font-bold">648 Claims</span>
-            <div className="flex items-center gap-1 mt-2 text-[#555f6f]">
-              <span className="font-label-sm text-label-sm">18% increase this week</span>
+            {/* "648 Claims" and "18% increase this week" were both literals. */}
+            <span className="font-headline-display text-headline-display text-[#555f6f] font-bold">Not tracked</span>
+            <div className="mt-2">
+              <span className="font-label-sm text-label-sm text-[#555f6f]">
+                No per-claim record is written when a deal is applied
+              </span>
             </div>
           </div>
         </div>

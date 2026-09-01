@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { collection, onSnapshot, doc, updateDoc, query, orderBy, limit } from "firebase/firestore";
+import { collection, onSnapshot, doc, updateDoc, query, orderBy, limit, where, getDocs } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
 import { useUiStore } from "../store/uiStore";
 import EmptyState from "../components/EmptyState";
@@ -90,6 +90,12 @@ export const Customers = () => {
   const { addToast } = useUiStore();
   const [customers, setCustomers] = useState([]);
   const [orders, setOrders] = useState([]);
+
+  /* Orders for the customer whose panel is open, fetched per customer.
+   * `orders` above is now only used by the mock path. */
+  const [customerOrders, setCustomerOrders] = useState([]);
+  const [customerOrdersLoading, setCustomerOrdersLoading] = useState(false);
+  const [customerOrdersError, setCustomerOrdersError] = useState(false);
   const [addresses, setAddresses] = useState([]);
   const [reviews, setReviews] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
@@ -124,8 +130,13 @@ export const Customers = () => {
     return () => clearInterval(timer);
   }, []);
 
+  /* Hoisted so the per-customer order fetch below can skip itself in mock
+   * mode, where there is no Firestore to query. */
+  const isMockMode =
+    import.meta.env.VITE_ENABLE_MOCK_DATA === "true" || !isFirebaseConfigured;
+
   useEffect(() => {
-    const isMock = import.meta.env.VITE_ENABLE_MOCK_DATA === "true" || !isFirebaseConfigured;
+    const isMock = isMockMode;
 
     if (isMock) {
       // Mock customers cover the three COD states the real data has: never
@@ -156,6 +167,7 @@ export const Customers = () => {
         { id: "log1", uid: "cust1", email: "sarah@jenkins.com", action: "LOGIN", timestamp: new Date().toISOString(), loginMethod: "firebase_auth" },
         { id: "log2", uid: "cust2", email: "michael@chen.com", action: "LOGIN", timestamp: new Date().toISOString(), loginMethod: "firebase_auth" }
       ]);
+      setCustomerOrders([]);
       setLoading(false);
       return;
     }
@@ -175,19 +187,27 @@ export const Customers = () => {
       setLoading(false);
     });
 
-    const unsubOrders = onSnapshot(query(collection(db, "orders"), orderBy("createdAt", "desc"), limit(200)), (snapshot) => {
-      const list = [];
-      snapshot.forEach(docSnap => {
-        const data = docSnap.data();
-        if (data.isDeleted !== true) {
-          list.push({
-            id: docSnap.id,
-            ...data
-          });
-        }
-      });
-      setOrders(list);
-    });
+    /* The global orders listener has been removed.
+     *
+     * It streamed the 200 most recent orders across the whole business, and
+     * the customer panel then filtered that window by customerId to show
+     * "Total Orders Placed" and the order list. Past 200 orders company-wide,
+     * a customer's own orders simply were not in the window — so the panel
+     * reported 0 orders for customers who had ordered many times. That is the
+     * "customer data not displaying correctly" symptom.
+     *
+     * Two replacements, both cheaper and both correct:
+     *
+     *   * the headline counts come from `totalOrders` / `totalSpent` on the
+     *     user document, which `onOrderUpdated` maintains server-side and
+     *     which are therefore right regardless of volume;
+     *   * the order *list* is fetched per customer when the panel opens
+     *     (see loadCustomerOrders), scoped with where('customerId') so it
+     *     reads that customer's orders and nobody else's.
+     *
+     * This also removes a continuous 200-document live stream from every
+     * admin session.
+     */
 
     const unsubAddresses = onSnapshot(query(collection(db, "addresses"), limit(200)), (snapshot) => {
       const list = [];
@@ -227,12 +247,11 @@ export const Customers = () => {
 
     return () => {
       unsubUsers();
-      unsubOrders();
       unsubAddresses();
       unsubReviews();
       unsubLogs();
     };
-  }, [addToast]);
+  }, [addToast, isMockMode]);
 
   const formatAddress = (addr) => {
     if (!addr) return "N/A";
@@ -403,6 +422,50 @@ export const Customers = () => {
     c.id?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  /* This customer's orders, read for this customer.
+   *
+   * Scoped with where('customerId'), so it returns their orders however many
+   * the business has in total — the previous client-side filter over a global
+   * 200-order window returned nothing once the business passed 200 orders.
+   *
+   * Uses the existing (customerId, createdAt DESC) composite index; see
+   * firestore.indexes.json. Twenty is a panel's worth — the authoritative
+   * lifetime totals come from the user document, not from counting these.
+   */
+  useEffect(() => {
+    if (!selectedCustomer || isMockMode) return;
+    let cancelled = false;
+
+    setCustomerOrdersError(false);
+    setCustomerOrdersLoading(true);
+    getDocs(query(
+      collection(db, "orders"),
+      where("customerId", "==", selectedCustomer.id),
+      orderBy("createdAt", "desc"),
+      limit(20),
+    ))
+      .then((snap) => {
+        if (cancelled) return;
+        setCustomerOrders(
+          snap.docs
+            .map((d) => ({ id: d.id, ...d.data() }))
+            .filter((o) => o.isDeleted !== true),
+        );
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        // Surfaced rather than swallowed: an empty list and a failed read look
+        // identical to an operator, and one of them means "call support".
+        console.error("[Customers] order history load failed", e);
+        setCustomerOrdersError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setCustomerOrdersLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedCustomer, isMockMode]);
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-[#f9f9ff]">
@@ -411,8 +474,8 @@ export const Customers = () => {
     );
   }
 
+
   // Details calculations for selected user
-  const customerOrders = selectedCustomer ? orders.filter(o => o.customerId === selectedCustomer.id) : [];
   const customerAddresses = selectedCustomer ? addresses.filter(a => a.userId === selectedCustomer.id) : [];
   const customerReviews = selectedCustomer ? reviews.filter(r => r.customerId === selectedCustomer.id) : [];
   const customerLogs = selectedCustomer ? auditLogs.filter(l => l.uid === selectedCustomer.id || l.email === selectedCustomer.email) : [];
@@ -605,9 +668,23 @@ export const Customers = () => {
                 <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Wallet Balance</span>
                 <span className="text-sm font-black text-[#10b981] mt-0.5 block">₹{(selectedCustomer.walletBalance || 0).toFixed(2)}</span>
               </div>
+              {/* Lifetime totals come from the user document, which
+                  onOrderUpdated maintains server-side. Counting the fetched
+                  page instead — which is what this did — under-reported every
+                  customer with more orders than the page holds, and reported
+                  zero for everyone once the business passed the old global
+                  200-order window. */}
               <div className="bg-[#f0f3ff] border border-[#dce2f3]/50 rounded-lg p-2.5">
                 <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Total Orders Placed</span>
-                <span className="text-sm font-black text-slate-800 mt-0.5 block">{customerOrders.length} order(s)</span>
+                <span className="text-sm font-black text-slate-800 mt-0.5 block">
+                  {Number(selectedCustomer.totalOrders ?? 0)} order(s)
+                </span>
+              </div>
+              <div className="bg-[#f0f3ff] border border-[#dce2f3]/50 rounded-lg p-2.5">
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Lifetime Spend</span>
+                <span className="text-sm font-black text-slate-800 mt-0.5 block">
+                  ₹{Number(selectedCustomer.totalSpent ?? 0).toFixed(2)}
+                </span>
               </div>
             </div>
 
@@ -640,7 +717,25 @@ export const Customers = () => {
             {/* Orders Tab */}
             {drawerTab === "orders" && (
               <div className="space-y-3">
-                {customerOrders.length === 0 ? (
+                {customerOrdersLoading ? (
+                  /* Loading, failure and genuinely-empty must look different.
+                     Previously all three rendered "No order transactions
+                     found", so a failed read was indistinguishable from a
+                     customer who had never ordered. */
+                  <div className="flex justify-center py-8">
+                    <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-[#10b981]" />
+                  </div>
+                ) : customerOrdersError ? (
+                  <div className="text-center py-8">
+                    <p className="text-xs text-red-500 font-semibold">Could not load this customer's orders.</p>
+                    <button
+                      onClick={() => setSelectedCustomer({ ...selectedCustomer })}
+                      className="mt-2 text-[11px] font-bold text-[#10b981] underline"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : customerOrders.length === 0 ? (
                   <p className="text-xs text-slate-400 italic text-center py-8">No order transactions found for this user.</p>
                 ) : (
                   customerOrders.map(o => (

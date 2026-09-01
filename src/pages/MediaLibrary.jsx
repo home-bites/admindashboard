@@ -1,84 +1,144 @@
-import React, { useState, useEffect } from "react";
-import { uploadFile } from "../firebase/storage";
+import React, { useState, useEffect, useCallback } from "react";
 import { ImageUploader } from "../components/ImageUploader";
+import ErrorState from "../components/ErrorState";
 import { useUiStore } from "../store/uiStore";
+import { useAuthStore } from "../store/authStore";
+import { mediaAssetRepository } from "../repositories";
+
+/**
+ * Media Library.
+ *
+ * ── What this page used to be ────────────────────────────────────────────
+ *
+ * A `useState` array seeded with four hardcoded Unsplash URLs — "Blinkit Hero
+ * Banner", "Biryani Special" and two others — presented as the contents of an
+ * "Enterprise Media Library" with an asset count above it.
+ *
+ * Uploading did put the file in Firebase Storage (the shared ImageUploader
+ * did that part), but "Save to Media Library" then pushed a record onto the
+ * local array and reported "added successfully". Deleting spliced the array
+ * and said "deleted". Neither touched a database. On the next refresh every
+ * asset the admin had catalogued was gone and the four stock photographs were
+ * back, and the delete button implied a destructive action it never performed
+ * — a file "deleted" here stayed in Storage forever.
+ *
+ * It is now backed by the `mediaAssets` collection through the same
+ * repository layer as every other page, so the library persists, is shared
+ * between admins, and its counts are real.
+ */
+const FOLDERS = ["all", "banners", "categories", "foods", "diet", "mealplans", "general"];
+
+/** Bytes to a human size, or a dash when the size was never recorded. */
+const formatSize = (bytes) =>
+  Number.isFinite(bytes) && bytes > 0
+    ? bytes >= 1024 * 1024
+      ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+      : `${Math.round(bytes / 1024)} KB`
+    : "—";
 
 export const MediaLibrary = () => {
   const { addToast } = useUiStore();
+  const { user } = useAuthStore();
   const [selectedFolder, setSelectedFolder] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [images, setImages] = useState([
-    {
-      id: "img_1",
-      name: "Blinkit Hero Banner",
-      url: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800&q=80",
-      folder: "banners",
-      size: "245 KB",
-      createdAt: "2026-07-25",
-    },
-    {
-      id: "img_2",
-      name: "Biryani Special",
-      url: "https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=800&q=80",
-      folder: "foods",
-      size: "310 KB",
-      createdAt: "2026-07-25",
-    },
-    {
-      id: "img_3",
-      name: "Keto Protein Bowl",
-      url: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&q=80",
-      folder: "diet",
-      size: "180 KB",
-      createdAt: "2026-07-25",
-    },
-    {
-      id: "img_4",
-      name: "South Indian Tiffin",
-      url: "https://images.unsplash.com/photo-1589301760014-d929f3979dbc?w=800&q=80",
-      folder: "categories",
-      size: "220 KB",
-      createdAt: "2026-07-25",
-    },
-  ]);
+
+  const [images, setImages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+
   const [newUploadUrl, setNewUploadUrl] = useState("");
   const [uploadName, setUploadName] = useState("");
   const [targetFolder, setTargetFolder] = useState("general");
 
-  const handleAddMedia = () => {
+  /* Live, so two admins cataloguing assets see each other's work. The
+     collection is a catalogue — bounded by how many images the business has —
+     so a full subscription is appropriate here. */
+  const subscribe = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    return mediaAssetRepository.listenAll(
+      (items) => {
+        setImages(items);
+        setLoading(false);
+      },
+      (err) => {
+        setError(err.message || "Could not load the media library.");
+        setLoading(false);
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    const unsub = subscribe();
+    return () => unsub && unsub();
+  }, [subscribe]);
+
+  const handleAddMedia = async () => {
     if (!newUploadUrl) {
       addToast("Please upload or paste an image URL first", "error");
       return;
     }
-    const newMedia = {
-      id: `img_${Date.now()}`,
-      name: uploadName || `Media_${Date.now()}`,
-      url: newUploadUrl,
-      folder: targetFolder,
-      size: "Compressed WebP/JPG",
-      createdAt: new Date().toISOString().split("T")[0],
-    };
-    setImages([newMedia, ...images]);
-    setNewUploadUrl("");
-    setUploadName("");
-    addToast("Image added to Media Library successfully!", "success");
+    if (saving) return;
+    setSaving(true);
+    try {
+      await mediaAssetRepository.create({
+        name: uploadName.trim() || `Asset ${new Date().toLocaleDateString()}`,
+        url: newUploadUrl,
+        folder: targetFolder,
+        uploadedBy: user?.uid || "unknown",
+      });
+      setNewUploadUrl("");
+      setUploadName("");
+      addToast("Asset saved to the media library", "success");
+    } catch (err) {
+      // Previously impossible to reach, because nothing was written.
+      addToast(`Could not save the asset: ${err.message}`, "error");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleDeleteMedia = (id) => {
-    setImages(images.filter((img) => img.id !== id));
-    addToast("Image deleted from Media Library", "info");
+  const handleDeleteMedia = async (asset) => {
+    if (
+      !window.confirm(
+        `Remove "${asset.name}" from the media library?\n\n` +
+          "This removes the catalogue entry. Anywhere the image is already in " +
+          "use — a banner, a menu item — keeps working, because those store the " +
+          "URL themselves.",
+      )
+    ) {
+      return;
+    }
+    setDeletingId(asset.id);
+    try {
+      await mediaAssetRepository.delete(asset.id);
+      addToast("Asset removed from the library", "success");
+    } catch (err) {
+      addToast(`Could not remove the asset: ${err.message}`, "error");
+    } finally {
+      setDeletingId(null);
+    }
   };
 
-  const handleCopyUrl = (url) => {
-    navigator.clipboard.writeText(url);
-    addToast("Image URL copied to clipboard!", "success");
+  const handleCopyUrl = async (url) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      addToast("Image URL copied", "success");
+    } catch {
+      // clipboard is unavailable over plain HTTP and when permission is
+      // refused; claiming success there sends the admin to paste nothing.
+      addToast("Could not copy — your browser blocked clipboard access.", "error");
+    }
   };
 
   const filteredImages = images.filter((img) => {
     const matchesFolder = selectedFolder === "all" || img.folder === selectedFolder;
+    const q = searchQuery.toLowerCase();
     const matchesSearch =
-      img.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      img.folder.toLowerCase().includes(searchQuery.toLowerCase());
+      String(img.name || "").toLowerCase().includes(q) ||
+      String(img.folder || "").toLowerCase().includes(q);
     return matchesFolder && matchesSearch;
   });
 
@@ -89,15 +149,16 @@ export const MediaLibrary = () => {
         <div>
           <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
             <span className="material-symbols-outlined text-[#10b981]">photo_library</span>
-            Enterprise Media Library
+            Media Library
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Shopify &amp; WordPress style centralized media management with automatic canvas compression.
+            Reusable images for banners, categories, foods and meal plans. Uploaded to
+            Firebase Storage and catalogued here.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <span className="px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-[#10b981] rounded-xl text-xs font-bold">
-            {images.length} Assets Registered
+            {loading ? "Loading…" : `${images.length} assets`}
           </span>
         </div>
       </div>
@@ -146,10 +207,11 @@ export const MediaLibrary = () => {
         {newUploadUrl && (
           <button
             onClick={handleAddMedia}
-            className="w-full py-2.5 bg-[#10b981] hover:bg-[#0ea5e9] text-white rounded-xl font-bold text-xs transition-colors shadow-md flex items-center justify-center gap-2"
+            disabled={saving}
+            className="w-full py-2.5 bg-[#10b981] hover:bg-[#0ea5e9] disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-bold text-xs transition-colors shadow-md flex items-center justify-center gap-2"
           >
             <span className="material-symbols-outlined text-base">cloud_done</span>
-            Save to Media Library
+            {saving ? "Saving…" : "Save to Media Library"}
           </button>
         )}
       </div>
@@ -158,7 +220,7 @@ export const MediaLibrary = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800">
         {/* Folder Tabs */}
         <div className="flex flex-wrap gap-1.5 text-xs font-bold">
-          {["all", "banners", "categories", "foods", "diet", "mealplans"].map((folder) => (
+          {FOLDERS.map((folder) => (
             <button
               key={folder}
               onClick={() => setSelectedFolder(folder)}
@@ -186,7 +248,32 @@ export const MediaLibrary = () => {
         </div>
       </div>
 
-      {/* Media Grid */}
+      {/* Media Grid — three distinct outcomes, previously all one blank grid. */}
+      {error ? (
+        <ErrorState
+          title="Could not load the media library"
+          message={error}
+          onRetry={subscribe}
+        />
+      ) : loading ? (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-52 animate-pulse rounded-2xl border border-slate-200/80 bg-slate-100 dark:border-slate-800 dark:bg-slate-800" />
+          ))}
+        </div>
+      ) : filteredImages.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center dark:border-slate-700 dark:bg-slate-900">
+          <span className="material-symbols-outlined text-[30px] text-slate-400">photo_library</span>
+          <p className="mt-2 text-sm font-bold text-slate-700 dark:text-slate-200">
+            {images.length === 0 ? "No assets yet" : "Nothing matches these filters"}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            {images.length === 0
+              ? "Upload an image above to add the first asset."
+              : "Try a different folder or clear the search."}
+          </p>
+        </div>
+      ) : (
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
         {filteredImages.map((img) => (
           <div
@@ -202,8 +289,8 @@ export const MediaLibrary = () => {
             <div className="p-3 space-y-1.5">
               <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">{img.name}</p>
               <div className="flex items-center justify-between text-[10px] text-slate-400">
-                <span>{img.createdAt}</span>
-                <span>{img.size}</span>
+                <span>{img.createdAt ? new Date(img.createdAt).toLocaleDateString() : "—"}</span>
+                <span>{formatSize(img.sizeBytes)}</span>
               </div>
               <div className="pt-2 flex gap-1 border-t border-slate-100 dark:border-slate-800">
                 <button
@@ -214,8 +301,10 @@ export const MediaLibrary = () => {
                   Copy
                 </button>
                 <button
-                  onClick={() => handleDeleteMedia(img.id)}
-                  className="px-2 py-1 bg-red-50 dark:bg-red-950/40 text-red-600 hover:bg-red-600 hover:text-white rounded-lg text-[10px] font-bold transition-colors"
+                  onClick={() => handleDeleteMedia(img)}
+                  disabled={deletingId === img.id}
+                  aria-label={`Remove ${img.name}`}
+                  className="px-2 py-1 bg-red-50 dark:bg-red-950/40 text-red-600 hover:bg-red-600 hover:text-white disabled:opacity-50 rounded-lg text-[10px] font-bold transition-colors"
                 >
                   <span className="material-symbols-outlined text-[12px]">delete</span>
                 </button>
@@ -224,6 +313,7 @@ export const MediaLibrary = () => {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 };

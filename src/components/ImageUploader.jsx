@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useId, useState } from "react";
 import { uploadFile } from "../firebase/storage";
 
 export const ImageUploader = ({
@@ -14,6 +14,21 @@ export const ImageUploader = ({
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  // Whether the current `value` failed to load. Reset whenever the value
+  // changes, so replacing a dead image shows the new one rather than staying
+  // stuck on the error card.
+  const [imageBroken, setImageBroken] = useState(false);
+  useEffect(() => setImageBroken(false), [value]);
+
+  /*
+   * The file input's id was `file-input-${folder}`. Two uploaders sharing a
+   * folder on one page — a form with a thumbnail and a hero image, say —
+   * produced duplicate DOM ids, and the browser resolves a label to the FIRST
+   * matching element, so clicking the second uploader opened the picker for
+   * the first and the chosen file landed on the wrong field. useId is unique
+   * per component instance.
+   */
+  const inputId = useId();
 
   const handleUrlChange = (e) => {
     const url = e.target.value;
@@ -100,15 +115,44 @@ export const ImageUploader = ({
       {/* Image Preview Box */}
       {value ? (
         <div className="relative group rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 h-40 flex items-center justify-center">
-          <img
-            src={value}
-            alt="Preview"
-            className="h-full w-full object-cover"
-            onError={(e) => {
-              e.target.onerror = null;
-              e.target.src = "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500&q=80";
-            }}
-          />
+          {/*
+           * A broken image now says so.
+           *
+           * This `onError` used to swap in an Unsplash stock photograph of a
+           * meal. The intent was presumably a tidy placeholder; the effect was
+           * that any unreachable image URL — a failed upload, a deleted
+           * Storage object, a bad pasted link, a Storage rule denying read —
+           * rendered in this preview as an attractive, entirely plausible
+           * photo of food.
+           *
+           * So the admin saw a working image, saved, and moved on. The
+           * customer app, which has no such fallback, showed a broken box.
+           * This is the most likely mechanism behind "changing the banner
+           * image doesn't work": it did work in the sense that a URL was
+           * saved, and the one screen able to reveal that the URL was dead was
+           * the screen actively hiding it.
+           *
+           * The preview must be a truthful view of what customers will get.
+           */}
+          {imageBroken ? (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-rose-50 px-4 text-center dark:bg-rose-950/30">
+              <span className="material-symbols-outlined text-[26px] text-rose-500">broken_image</span>
+              <p className="text-[11px] font-bold text-rose-700 dark:text-rose-300">
+                This image cannot be loaded
+              </p>
+              <p className="text-[10px] leading-snug text-rose-600 dark:text-rose-400">
+                Customers will see it broken too. Replace it, or check the URL and
+                Storage read permissions.
+              </p>
+            </div>
+          ) : (
+            <img
+              src={value}
+              alt="Preview"
+              className="h-full w-full object-cover"
+              onError={() => setImageBroken(true)}
+            />
+          )}
           <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center space-x-2">
             <button
               type="button"
@@ -145,10 +189,10 @@ export const ImageUploader = ({
             type="file"
             accept="image/*"
             className="hidden"
-            id={`file-input-${folder}`}
+            id={inputId}
             onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
           />
-          <label htmlFor={`file-input-${folder}`} className="cursor-pointer space-y-2 block">
+          <label htmlFor={inputId} className="cursor-pointer space-y-2 block">
             <div className="w-10 h-10 bg-emerald-100 dark:bg-emerald-950 text-[#10b981] rounded-full flex items-center justify-center mx-auto">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />

@@ -173,17 +173,23 @@ export const Coupons = () => {
         await addCoupon(couponPayload, user);
 
         // Only send marketing push notification if coupon is public (showToCustomer = true) and active
-        if (showToCustomer === true && String(status).toLowerCase() === "active") {
-          await notificationRepository.create({
-            userId: "all",
-            type: "marketing",
-            title: "New Offer Available!",
-            message: `Use code ${code.toUpperCase()} to get ${displayType} on your orders!`,
-            isRead: false
-          });
-        }
+        addToast("New coupon created", "success");
 
-        addToast("New coupon created successfully", "success");
+        // Non-fatal, for the same reason as Deals: a failed broadcast must not
+        // report the coupon itself as unsaved and invite a duplicate.
+        if (showToCustomer === true && String(status).toLowerCase() === "active") {
+          try {
+            await notificationRepository.create({
+              userId: "all",
+              type: "marketing",
+              title: "New Offer Available!",
+              message: `Use code ${code.toUpperCase()} to get ${displayType} on your orders!`,
+              isRead: false
+            });
+          } catch (notifyErr) {
+            addToast(`Coupon saved, but customers were not notified: ${notifyErr.message}`, "warning");
+          }
+        }
       }
       setIsModalOpen(false);
     } catch (err) {

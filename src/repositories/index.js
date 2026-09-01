@@ -226,6 +226,21 @@ export class ThreatScoreRepository extends BaseRepository {
   }
 }
 
+/**
+ * Uploaded media assets.
+ *
+ * The Media Library page held its contents in `useState`, seeded with four
+ * hardcoded Unsplash URLs. Uploading pushed onto that array and reported
+ * "added successfully"; deleting spliced it. Nothing was ever persisted, so a
+ * refresh discarded every asset an admin had added and restored the four
+ * stock photos. This collection makes the page real.
+ */
+export class MediaAssetRepository extends BaseRepository {
+  constructor() {
+    super("mediaAssets");
+  }
+}
+
 // Instantiate and export singleton instances for easy usage
 export const userRepository = new UserRepository();
 export const addressRepository = new AddressRepository();
@@ -256,4 +271,4 @@ export const favoriteRepository = new FavoriteRepository();
 export const cartRepository = new CartRepository();
 export const systemCounterRepository = new SystemCounterRepository();
 export const threatScoreRepository = new ThreatScoreRepository();
-
+export const mediaAssetRepository = new MediaAssetRepository();

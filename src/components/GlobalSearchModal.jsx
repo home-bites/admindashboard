@@ -1,14 +1,105 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useUiStore } from "../store/uiStore";
 import * as repos from "../repositories";
+import { ACTIVE_ORDER_WINDOW } from "../lib/orderStages";
+
+/**
+ * Catalogue collections, cached for the session.
+ *
+ * These have a natural ceiling in the hundreds and change rarely, so reading
+ * them once and filtering in memory is both correct and cheap. The previous
+ * implementation re-read them on every keystroke, along with `orders` and
+ * `users`, which do not have a ceiling at all — a single search of a
+ * production database was six figures of document reads, repeated 200ms after
+ * the operator stopped typing.
+ */
+const CATALOGUE = ["menuItemRepository", "dietFoodRepository", "mealPlanRepository", "deliveryPartnerRepository"];
+
+/** Digits only — how a phone number is matched regardless of formatting. */
+const digitsOf = (s) => String(s || "").replace(/\D/g, "");
 
 export const GlobalSearchModal = () => {
   const { isSearchOpen, setSearchOpen } = useUiStore();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+  // Bumping this re-runs the search effect on an unchanged query, which is
+  // what "Retry" has to do after a failure.
+  const [retryNonce, setRetryNonce] = useState(0);
   const navigate = useNavigate();
+
+  // Session cache for the bounded catalogue collections. A ref, not state:
+  // filling it must not trigger a render, and it should survive the modal
+  // being closed and reopened.
+  const catalogueRef = useRef(null);
+
+  const loadCatalogue = async () => {
+    if (catalogueRef.current) return catalogueRef.current;
+    const loaded = await Promise.all(
+      CATALOGUE.map((name) => repos[name].getAll().catch(() => [])),
+    );
+    catalogueRef.current = loaded;
+    return loaded;
+  };
+
+  /**
+   * Orders matching the term.
+   *
+   * An order id is the thing operators actually paste in — from a support
+   * chat, a payment dashboard, a refund request — so an exact id lookup is
+   * tried first and is a single document read. Failing that, the recent
+   * window is scanned for a partial id, customer name or status, which covers
+   * "the order that just came in" without touching history.
+   */
+  const findOrders = async (q) => {
+    const hits = [];
+    const seen = new Set();
+
+    const exact = await repos.orderRepository.getById(query.trim()).catch(() => null);
+    if (exact) {
+      hits.push(exact);
+      seen.add(exact.id);
+    }
+
+    const { items } = await repos.orderRepository.getPage({ limitTo: ACTIVE_ORDER_WINDOW });
+    items.forEach((o) => {
+      if (seen.has(o.id)) return;
+      const match =
+        (o.id && o.id.toLowerCase().includes(q)) ||
+        (o.customerName && o.customerName.toLowerCase().includes(q)) ||
+        (o.status && o.status.toLowerCase().includes(q));
+      if (match) hits.push(o);
+    });
+    return hits;
+  };
+
+  /**
+   * Customers matching the term, by exact email or phone.
+   *
+   * Both are indexed equality lookups returning at most a handful of
+   * documents. Name search is deliberately absent: Firestore cannot do it
+   * without downloading the collection, and the footer says so rather than
+   * silently returning nothing for a name that does exist.
+   */
+  const findCustomers = async (q) => {
+    const digits = digitsOf(q);
+    const lookups = [];
+
+    if (q.includes("@")) {
+      lookups.push(repos.userRepository.findByField("email", q).catch(() => []));
+    }
+    if (digits.length >= 10) {
+      lookups.push(repos.userRepository.findByField("phone", digits).catch(() => []));
+      lookups.push(repos.userRepository.findByField("phone", `+91${digits.slice(-10)}`).catch(() => []));
+    }
+    if (!lookups.length) return [];
+
+    const byId = new Map();
+    (await Promise.all(lookups)).flat().forEach((u) => byId.set(u.id, u));
+    return [...byId.values()];
+  };
 
   // Keyboard shortcut Ctrl+K or Cmd+K
   useEffect(() => {
@@ -34,30 +125,42 @@ export const GlobalSearchModal = () => {
 
     const timer = setTimeout(async () => {
       setLoading(true);
+      setSearchError(null);
       const q = query.toLowerCase().trim();
       const combined = [];
 
       try {
-        const [orders, menu, diet, plans, riders, users] = await Promise.all([
-          repos.orderRepository.getAll().catch(() => []),
-          repos.menuItemRepository.getAll().catch(() => []),
-          repos.dietFoodRepository.getAll().catch(() => []),
-          repos.mealPlanRepository.getAll().catch(() => []),
-          repos.deliveryPartnerRepository.getAll().catch(() => []),
-          repos.userRepository.getAll().catch(() => [])
+        /*
+         * Firestore has no substring index, so "search everything" cannot be
+         * a server query. The honest split:
+         *
+         *  - Catalogue (menu, diet, plans, riders): bounded, cached once per
+         *    session, filtered in memory. Substring matching works.
+         *  - Orders: looked up by id — exact, then a scan of the recent
+         *    window for a partial. Not a full-history text search, and the
+         *    footer says so rather than implying otherwise.
+         *  - Customers: matched on exact email or phone via an indexed
+         *    query. Downloading 10k users to substring-match a name is what
+         *    this replaced.
+         */
+        const [catalogue, orderHits, userHits] = await Promise.all([
+          loadCatalogue(),
+          findOrders(q),
+          findCustomers(q),
         ]);
+        const [menu, diet, plans, riders] = catalogue;
 
-        // Filter Orders
-        orders.filter(o => 
-          (o.id && o.id.toLowerCase().includes(q)) ||
-          (o.customerName && o.customerName.toLowerCase().includes(q)) ||
-          (o.status && o.status.toLowerCase().includes(q))
-        ).slice(0, 3).forEach(o => {
+        orderHits.slice(0, 3).forEach(o => {
           combined.push({
             type: "Order",
             title: `Order #${o.id?.slice(-6) || o.id}`,
             subtitle: `${o.customerName || 'Customer'} • ₹${o.totalAmount || o.total || 0} • ${o.status || 'Pending'}`,
-            link: "/orders",
+            // Deep-links to the order itself. This used to drop the operator
+            // on an unfiltered /orders list, leaving them to find by hand the
+            // order they had just searched for.
+            // Deep-links to the order itself, rather than dropping the
+            // operator on an unfiltered list to find it by hand.
+            link: `/orders?order=${encodeURIComponent(o.id)}`,
             badge: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
           });
         });
@@ -118,31 +221,31 @@ export const GlobalSearchModal = () => {
           });
         });
 
-        // Filter Customers
-        users.filter(u => 
-          (u.displayName && u.displayName.toLowerCase().includes(q)) ||
-          (u.email && u.email.toLowerCase().includes(q)) ||
-          (u.phone && u.phone.includes(q))
-        ).slice(0, 2).forEach(u => {
+        userHits.slice(0, 3).forEach(u => {
           combined.push({
             type: "Customer",
             title: u.displayName || u.email || "Customer",
             subtitle: `${u.email || u.phone || 'Customer User'}`,
-            link: "/customers",
+            link: `/customers?id=${encodeURIComponent(u.id)}`,
             badge: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20"
           });
         });
 
       } catch (err) {
-        console.warn("Global search error:", err);
+        // A failed search used to be swallowed into a console warning and an
+        // empty list — indistinguishable from "nothing matched", which sends
+        // the operator looking for a record they have been wrongly told is
+        // not there.
+        setSearchError(err?.message || "Search failed.");
       } finally {
         setResults(combined);
         setLoading(false);
       }
-    }, 200);
+    }, 250);
 
     return () => clearTimeout(timer);
-  }, [query]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, retryNonce]);
 
   if (!isSearchOpen) return null;
 
@@ -209,9 +312,32 @@ export const GlobalSearchModal = () => {
                 </svg>
               </div>
             ))
+          ) : searchError ? (
+            // Distinct from "nothing matched" — the operator must not go on
+            // believing a record does not exist when the query simply broke.
+            <div className="py-10 text-center">
+              <span className="material-symbols-outlined text-[24px] text-rose-500">error</span>
+              <p className="mt-1 text-sm font-semibold text-rose-600 dark:text-rose-400">Search failed</p>
+              <p className="mx-auto mt-1 max-w-sm text-xs text-slate-500">{searchError}</p>
+              <button
+                onClick={() => setRetryNonce((n) => n + 1)}
+                className="mt-3 rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700"
+              >
+                Retry
+              </button>
+            </div>
           ) : query.trim() ? (
-            <div className="text-center py-10 text-slate-400 text-sm">
-              No matching records found for "{query}"
+            <div className="py-10 text-center">
+              <p className="text-sm text-slate-400">No matching records found for &ldquo;{query}&rdquo;</p>
+              {/* What is searchable is a real constraint of the datastore, not
+                  a detail to hide — an operator who knows a name is not
+                  indexed will paste the phone number instead of concluding
+                  the customer is missing. */}
+              <p className="mx-auto mt-2 max-w-md text-[11px] leading-relaxed text-slate-400">
+                Orders match on ID (any order) or on customer and status within the {ACTIVE_ORDER_WINDOW} most
+                recent. Customers match on full email or phone number, not name. Menu, diet foods,
+                meal plans and riders match on any part of the name.
+              </p>
             </div>
           ) : (
             <div className="py-8 text-center text-slate-400 text-sm">

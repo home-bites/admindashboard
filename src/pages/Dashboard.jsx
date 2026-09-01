@@ -1,9 +1,23 @@
 import React, { useState, useEffect } from "react";
 import { useUiStore } from "../store/uiStore";
 import { Link, useNavigate } from "react-router-dom";
-import { collection, doc, onSnapshot, updateDoc } from "firebase/firestore";
+import {
+  collection, doc, onSnapshot, updateDoc, query, orderBy, limit,
+  getCountFromServer,
+} from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
 import EmptyState from "../components/EmptyState";
+
+/* How many recent orders the dashboard subscribes to.
+ *
+ * Large enough to contain a full trading day plus any order still in flight
+ * from earlier, small enough that the read stays flat as the business grows. */
+const DASHBOARD_ORDER_WINDOW = 300;
+
+/* Catalogue collections are small by nature, but "small by nature" is not a
+ * guarantee — a cap keeps a runaway import from turning this page into a
+ * full-collection stream. */
+const DASHBOARD_LOOKUP_CAP = 500;
 
 const getStartOfWeek = (d) => {
   const day = d.getDay();
@@ -21,6 +35,11 @@ export const Dashboard = () => {
   const [kitchenOnline, setKitchenOnline] = useState(true);
   const [orders, setOrders] = useState([]);
   const [customers, setCustomers] = useState([]);
+
+  /* Server-side count of customers. Null means the count could not be read —
+   * rendered as a dash, never as zero, because "0 customers" is a statement
+   * an operator would act on and a failed read is not. */
+  const [customerCount, setCustomerCount] = useState(null);
   const [partners, setPartners] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -60,6 +79,7 @@ export const Dashboard = () => {
         { id: "HB260004", orderId: "HB260004", customerName: "Aarav Sharma", customerPhone: "+91 98765 43213", itemsText: "1x Garlic Bread, 1x Pasta", total: 390, status: "Delivered", createdAt: new Date(Date.now() - 3600000 * 24).toISOString(), paymentMethod: "Razorpay", items: [{ name: "Garlic Bread", qty: 1 }, { name: "Pasta", qty: 1 }], statusHistory: [{ status: "Accepted", timestamp: new Date(Date.now() - 3600000 * 25).toISOString() }, { status: "Delivered", timestamp: new Date(Date.now() - 3600000 * 24.3).toISOString() }] },
         { id: "HB260005", orderId: "HB260005", customerName: "Deepa Nair", customerPhone: "+91 98765 43214", itemsText: "2x Margherita Pizza", total: 540, status: "Cancelled", createdAt: new Date(Date.now() - 3600000 * 48).toISOString(), paymentMethod: "COD", items: [{ name: "Margherita Pizza", qty: 2 }], statusHistory: [{ status: "Cancelled", timestamp: new Date(Date.now() - 3600000 * 47).toISOString() }] }
       ]);
+      setCustomerCount(3);
       setCustomers([
         { id: "cust1", name: "Sarah Jenkins", email: "sarah@gmail.com", phone: "+91 98765 43210", createdAt: new Date(Date.now() - 3600000 * 10).toISOString() },
         { id: "cust2", name: "Michael Chen", email: "michael@gmail.com", phone: "+91 98765 43211", createdAt: new Date(Date.now() - 3600000 * 24).toISOString() },
@@ -97,7 +117,27 @@ export const Dashboard = () => {
       console.error("Dashboard Kitchen Error:", err);
     });
 
-    const unsubOrders = onSnapshot(collection(db, "orders"), (snapshot) => {
+    /* ── Bounded, not the whole collection ──────────────────────────────
+     *
+     * This was `onSnapshot(collection(db, "orders"))` — a live subscription to
+     * EVERY order ever placed, re-delivered on every write. At a hundred
+     * thousand orders that is a hundred thousand documents streamed per admin
+     * session, continuously, to compute a handful of counters and show five
+     * recent rows.
+     *
+     * Everything this page derives from orders is recent by definition:
+     * today's count, delivered today, currently-active orders, orders awaiting
+     * assignment, and the five newest. DASHBOARD_ORDER_WINDOW comfortably
+     * covers all of them while keeping the read bounded.
+     *
+     * Ordered so the limit takes the newest rather than an arbitrary slice.
+     * Single-field orderBy needs no composite index.
+     * ─────────────────────────────────────────────────────────────────── */
+    const unsubOrders = onSnapshot(query(
+      collection(db, "orders"),
+      orderBy("createdAt", "desc"),
+      limit(DASHBOARD_ORDER_WINDOW),
+    ), (snapshot) => {
       const list = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
@@ -123,24 +163,38 @@ export const Dashboard = () => {
       setLoading(false);
     });
 
-    const unsubUsers = onSnapshot(collection(db, "users"), (snapshot) => {
-      const list = [];
-      snapshot.forEach(docSnap => {
-        const data = docSnap.data();
-        if (data.isDeleted !== true && (data.role === "Customer" || !data.role)) {
-          list.push({
-            id: docSnap.id,
-            ...data
-          });
-        }
+    /* The customer figure is a *count*, so it is counted rather than fetched.
+     *
+     * This used to stream the entire `users` collection live and take
+     * `.length` of it — ten thousand documents to render one number.
+     * getCountFromServer does the count on the server and returns an integer;
+     * it is billed as a fraction of the reads a full fetch costs and it does
+     * not grow with the customer base.
+     *
+     * One-shot rather than live: a total customer count does not need to tick
+     * in real time, and it refreshes whenever the page is reopened. */
+    /* Counted without a filter, deliberately.
+     *
+     * `where("isDeleted", "!=", true)` looks like the right guard and is a
+     * trap: Firestore inequality filters exclude documents that do not have
+     * the field at all, and most user documents have never carried
+     * `isDeleted`. That query would have returned only the handful of users
+     * explicitly marked not-deleted — a count of near zero on a healthy
+     * database, which is far worse than a slight over-count.
+     *
+     * So this counts the collection. It includes the few admin accounts and
+     * any soft-deleted users, which is a small over-count on a figure used for
+     * orientation rather than reconciliation. */
+    getCountFromServer(collection(db, "users"))
+      .then((snap) => setCustomerCount(snap.data().count))
+      .catch((err) => {
+        // Falls back to a dash rather than a wrong number: a silent zero is
+        // a figure an operator would act on, and a failed read is not.
+        console.error("Dashboard customer count failed:", err);
+        setCustomerCount(null);
       });
-      setCustomers(list);
-    }, (err) => {
-      console.error("Dashboard Users Sync Error:", err);
-      addToast(`Users Sync Error: ${err.message}`, "error");
-    });
 
-    const unsubPartners = onSnapshot(collection(db, "deliveryPartners"), (snapshot) => {
+    const unsubPartners = onSnapshot(query(collection(db, "deliveryPartners"), limit(DASHBOARD_LOOKUP_CAP)), (snapshot) => {
       const list = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
@@ -157,7 +211,7 @@ export const Dashboard = () => {
       addToast(`Partners Sync Error: ${err.message}`, "error");
     });
 
-    const unsubMenuItems = onSnapshot(collection(db, "menuItems"), (snapshot) => {
+    const unsubMenuItems = onSnapshot(query(collection(db, "menuItems"), limit(DASHBOARD_LOOKUP_CAP)), (snapshot) => {
       const list = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
@@ -170,7 +224,7 @@ export const Dashboard = () => {
       console.error("Dashboard Menu Items Sync Error:", err);
     });
 
-    const unsubCategories = onSnapshot(collection(db, "categories"), (snapshot) => {
+    const unsubCategories = onSnapshot(query(collection(db, "categories"), limit(DASHBOARD_LOOKUP_CAP)), (snapshot) => {
       const list = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
@@ -186,7 +240,6 @@ export const Dashboard = () => {
     return () => {
       unsubKitchen();
       unsubOrders();
-      unsubUsers();
       unsubPartners();
       unsubMenuItems();
       unsubCategories();
@@ -368,7 +421,10 @@ export const Dashboard = () => {
 
   const preparingOrdersCount = orders.filter(o => o.status === "Preparing").length;
 
-  const totalCustomersCount = customers.length;
+  /* The counted value when we have it; the mock list otherwise. Never
+   * `customers.length` against real data — that array is no longer populated
+   * from Firestore, and reading it would silently report zero. */
+  const totalCustomersCount = customerCount ?? (customers.length || null);
   
   const onlineDeliveryPartners = partners.filter(p => p.isOnline).length;
   const activeDeliveryPartners = partners.filter(p => p.currentStatus !== "Offline" && p.isOnline).length;
@@ -1101,7 +1157,7 @@ export const Dashboard = () => {
               </div>
               <div className="bg-slate-50 p-2.5 border rounded-lg">
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Total Users</span>
-                <span className="font-black text-slate-800 mt-1 block">{totalCustomersCount}</span>
+                <span className="font-black text-slate-800 mt-1 block">{totalCustomersCount ?? "—"}</span>
               </div>
             </div>
           </div>
@@ -1201,7 +1257,7 @@ export const Dashboard = () => {
                 className="p-3 border border-slate-100 rounded-lg bg-slate-50 hover:bg-[#10b981]/5 hover:border-[#10b981]/30 transition-all text-left flex flex-col justify-between h-20"
               >
                 <span className="material-symbols-outlined text-[#10b981] text-[18px]">restaurant</span>
-                <span className="text-[11px] font-bold text-slate-700">Create Spot Order</span>
+                <span className="text-[11px] font-bold text-slate-700">Create Order</span>
               </button>
             </div>
           </div>
@@ -1223,7 +1279,7 @@ export const Dashboard = () => {
             Recent Orders
           </h3>
           <Link to="/orders" className="text-[#10b981] font-bold text-xs flex items-center gap-1 hover:underline">
-            View All Orders 
+            View All Orders
             <span className="material-symbols-outlined text-[15px]">arrow_forward</span>
           </Link>
         </div>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import AssetImage from "../components/AssetImage";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
 import { SettingsService } from "../services";
@@ -70,6 +71,16 @@ export const Settings = () => {
   // Toggles for system
   const [walletEnabled, setWalletEnabled] = useState(true);
   const [loyaltyEnabled, setLoyaltyEnabled] = useState(true);
+  /* Loyalty rules. Until now the only loyalty control was the master toggle
+     above, and the actual numbers — points per referral, what a point is
+     worth, the redemption threshold, the signup credit — were literals inside
+     functions/index.js that only a redeploy could change. These write to
+     appSettings/general, which `loyaltyConfig()` reads and clamps
+     server-side. */
+  const [loyaltyPointsPerReferral, setLoyaltyPointsPerReferral] = useState(50);
+  const [loyaltyPointValueRupees, setLoyaltyPointValueRupees] = useState(0.5);
+  const [loyaltyRedeemThreshold, setLoyaltyRedeemThreshold] = useState(100);
+  const [loyaltyWelcomeCredit, setLoyaltyWelcomeCredit] = useState(50);
   const [couponEnabled, setCouponEnabled] = useState(true);
 
   /*
@@ -136,6 +147,12 @@ export const Settings = () => {
 
           setWalletEnabled(data.walletEnabled !== undefined ? data.walletEnabled : true);
           setLoyaltyEnabled(data.loyaltyEnabled !== undefined ? data.loyaltyEnabled : true);
+          // Defaults mirror the server constants, so an untouched store shows
+          // the rules it is actually running rather than blanks.
+          setLoyaltyPointsPerReferral(data.loyaltyPointsPerReferral ?? 50);
+          setLoyaltyPointValueRupees(data.loyaltyPointValueRupees ?? 0.5);
+          setLoyaltyRedeemThreshold(data.loyaltyRedeemThreshold ?? 100);
+          setLoyaltyWelcomeCredit(data.loyaltyWelcomeCredit ?? 50);
           setCouponEnabled(data.couponEnabled !== undefined ? data.couponEnabled : true);
 
           setCodEnabled(data.codEnabled !== undefined ? data.codEnabled : true);
@@ -244,6 +261,10 @@ export const Settings = () => {
       rainCharge: Number(rainCharge),
       walletEnabled,
       loyaltyEnabled,
+      loyaltyPointsPerReferral: Number(loyaltyPointsPerReferral),
+      loyaltyPointValueRupees: Number(loyaltyPointValueRupees),
+      loyaltyRedeemThreshold: Number(loyaltyRedeemThreshold),
+      loyaltyWelcomeCredit: Number(loyaltyWelcomeCredit),
       couponEnabled,
       codEnabled,
       // Numbers, not strings. The number inputs hand back strings, and the
@@ -842,6 +863,80 @@ export const Settings = () => {
                     </label>
                   </div>
 
+                  {/* Loyalty rules.
+                      Only shown when the programme is on: editing the value of
+                      a point while the scheme is switched off invites the
+                      belief that turning it back on will apply retroactively,
+                      which it will not. */}
+                  {loyaltyEnabled && (
+                    <div className="rounded border border-[#dce2f3] bg-white p-3">
+                      <p className="font-label-md text-label-md font-semibold text-[#151c27]">Loyalty rules</p>
+                      <p className="mb-3 text-[10px] text-[#555f6f]">
+                        Applied by the server to new earnings and redemptions. Existing balances are not
+                        recalculated.
+                      </p>
+
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-[#555f6f]">
+                            Points per referral
+                          </span>
+                          <input
+                            type="number" min="0" max="5000" step="1"
+                            value={loyaltyPointsPerReferral}
+                            onChange={(e) => setLoyaltyPointsPerReferral(e.target.value)}
+                            className="w-full rounded border border-[#d3daea] px-3 py-2 text-xs outline-none focus:border-[#10b981]"
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-[#555f6f]">
+                            Value of one point (₹)
+                          </span>
+                          <input
+                            type="number" min="0" max="10" step="0.05"
+                            value={loyaltyPointValueRupees}
+                            onChange={(e) => setLoyaltyPointValueRupees(e.target.value)}
+                            className="w-full rounded border border-[#d3daea] px-3 py-2 text-xs outline-none focus:border-[#10b981]"
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-[#555f6f]">
+                            Redemption threshold (points)
+                          </span>
+                          <input
+                            type="number" min="1" max="100000" step="1"
+                            value={loyaltyRedeemThreshold}
+                            onChange={(e) => setLoyaltyRedeemThreshold(e.target.value)}
+                            className="w-full rounded border border-[#d3daea] px-3 py-2 text-xs outline-none focus:border-[#10b981]"
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-[#555f6f]">
+                            Signup wallet credit (₹)
+                          </span>
+                          <input
+                            type="number" min="0" max="1000" step="1"
+                            value={loyaltyWelcomeCredit}
+                            onChange={(e) => setLoyaltyWelcomeCredit(e.target.value)}
+                            className="w-full rounded border border-[#d3daea] px-3 py-2 text-xs outline-none focus:border-[#10b981]"
+                          />
+                        </label>
+                      </div>
+
+                      {/* States the rule in the customer's own terms, so a
+                          mistyped decimal is visible before it is saved. */}
+                      <p className="mt-3 rounded bg-[#f0f3ff] px-3 py-2 text-[11px] text-[#151c27]">
+                        Customers redeem <strong>{loyaltyRedeemThreshold || 0} points</strong> for{" "}
+                        <strong>₹{((Number(loyaltyRedeemThreshold) || 0) * (Number(loyaltyPointValueRupees) || 0)).toFixed(2)}</strong>{" "}
+                        of wallet credit. The server clamps values outside a safe range and falls back to
+                        its defaults.
+                      </p>
+                    </div>
+                  )}
+
                   {/* Coupon Enabled */}
                   <div className="flex items-center justify-between p-3 bg-[#f9f9ff] rounded border">
                     <div>
@@ -1076,9 +1171,15 @@ export const Settings = () => {
 
               {/* Live Preview of Hero Banner */}
               <div className="mb-6 relative rounded-2xl overflow-hidden h-56 border border-slate-200 bg-slate-900 shadow-md">
-                <img
-                  src={heroBackgroundImageUrl || "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1200&q=80"}
-                  alt="Hero Background Preview"
+                {/* A "live preview" that substitutes a stock photo when no
+                    hero image is set is not a preview of anything live — the
+                    admin sees a designed home screen while customers get an
+                    empty banner, and there is no way to tell from this screen
+                    which of the two is happening. */}
+                <AssetImage
+                  src={heroBackgroundImageUrl}
+                  alt="Hero background"
+                  label="No hero image set"
                   className="w-full h-full object-cover opacity-90"
                 />
                 <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/40 to-[#0F172A] flex flex-col justify-between p-6">
@@ -1133,11 +1234,12 @@ export const Settings = () => {
 
               {/* Live Preview of Diet Hero Banner */}
               <div className="mb-6 relative rounded-2xl overflow-hidden h-48 border border-slate-200 bg-slate-900 shadow-md">
-                <img
-                  src={dietHeroBackgroundImageUrl || "https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=1200&q=80"}
-                  alt="Diet Hero Background Preview"
+                <AssetImage
+                  src={dietHeroBackgroundImageUrl}
+                  alt="Diet hero background"
+                  label="No diet hero image set"
                   className="w-full h-full object-cover opacity-90"
-                />
+                  />
                 <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/30 to-[#0F172A] flex flex-col justify-between p-6">
                   <div className="flex items-center justify-between">
                     <span className="text-emerald-400 font-extrabold text-[11px] tracking-wider uppercase bg-emerald-950/80 border border-emerald-500/30 px-3 py-1 rounded-full backdrop-blur-md">

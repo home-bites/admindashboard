@@ -106,6 +106,40 @@ export function stageOf(order) {
 }
 
 /**
+ * True when the order is still live work: placed, and neither delivered nor
+ * cancelled.
+ *
+ * Screens were open-coding this as `status !== 'Delivered' && status !==
+ * 'Cancelled'`, which is wrong on the vocabulary this module exists to
+ * describe. `Completed` means the same as `Delivered` and `Canceled` /
+ * `Rejected` mean the same as `Cancelled`, so all three slipped through the
+ * literal comparison and finished orders stayed on the live radar
+ * indefinitely — visible as an in-flight count that only ever grew.
+ *
+ * Going through `stageOf` makes it right for every spelling, including ones
+ * nobody has written yet: an unrecognised status maps to ORDERS and therefore
+ * counts as active, which is the safe direction to be wrong in. An order
+ * nobody planned for should appear at the top of the queue, not disappear.
+ *
+ * @param {object|string} order  an order document, or a status string
+ */
+export function isActiveOrder(order) {
+  const stage = stageOf(order);
+  return stage !== STAGE.COMPLETED && stage !== STAGE.CANCELLED;
+}
+
+/**
+ * How many of the newest orders a live operational screen subscribes to.
+ *
+ * Active orders are always among the most recent, so a recency window bounds
+ * the read without a status filter — see the note in LiveCommandCenter for
+ * why status is the wrong thing to select on here. 300 is comfortably above
+ * any plausible simultaneous in-flight count; screens flag saturation rather
+ * than silently under-reporting if that ever stops holding.
+ */
+export const ACTIVE_ORDER_WINDOW = 300;
+
+/**
  * True when the order should appear in the kitchen queue — still cooking, or
  * cooked and waiting on the pass. Both are "the food has not left the
  * building yet".

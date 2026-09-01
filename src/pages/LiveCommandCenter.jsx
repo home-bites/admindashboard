@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import * as repos from "../repositories";
 import { useUiStore } from "../store/uiStore";
+import { isActiveOrder, ACTIVE_ORDER_WINDOW } from "../lib/orderStages";
 
 export /**
  * Human-readable age of a rider's last position report.
@@ -26,16 +27,58 @@ const LiveCommandCenter = () => {
   const [loading, setLoading] = useState(true);
   const [selectedRider, setSelectedRider] = useState(null);
 
-  useEffect(() => {
-    const unsubOrders = repos.orderRepository.subscribeToAll((items) => {
-      const active = (items || []).filter(o => o.status !== 'Delivered' && o.status !== 'Cancelled');
-      setOrders(active);
-    });
+  const [ordersError, setOrdersError] = useState(null);
+  const [windowSaturated, setWindowSaturated] = useState(false);
 
-    const unsubRiders = repos.deliveryPartnerRepository.subscribeToAll((items) => {
-      setRiders(items || []);
-      setLoading(false);
-    });
+  useEffect(() => {
+    /*
+     * This page held the most expensive query in the dashboard.
+     *
+     * It was `orderRepository.subscribeToAll(...)` — a live listener over the
+     * entire orders collection — which then filtered down to active orders in
+     * JavaScript. Every order the business had ever taken was streamed to the
+     * browser to render the thirty or so currently in flight, and re-streamed
+     * on every write anywhere in the collection. At the 100k-order scale in
+     * the brief that is six figures of document reads per radar open, and a
+     * tab that never stops receiving.
+     *
+     * The bound is on RECENCY rather than on status, deliberately. Querying
+     * `where("status", "in", [...])` would be tighter, but it requires listing
+     * every stored spelling of every active status — and `lib/orderStages.js`
+     * exists precisely because three clients disagree about those spellings
+     * and one writes "OutForDelivery" without spaces. A status missing from
+     * that list would vanish from the radar silently, which is the one failure
+     * an operations screen must not have. Ordering by `createdAt` is total: no
+     * status can drop out, because status is not what the query selects on.
+     *
+     * An active order is a recent order, so the newest 300 contain all of them
+     * with room to spare. If that ever stops being true the banner below says
+     * so rather than quietly under-reporting.
+     */
+    const unsubOrders = repos.orderRepository.listenRecent(
+      { limitTo: ACTIVE_ORDER_WINDOW },
+      (items, meta) => {
+        setOrders((items || []).filter(isActiveOrder));
+        // Saturation only matters if the whole window is active work — a full
+        // window of mostly-delivered orders is the normal, healthy case.
+        setWindowSaturated(
+          Boolean(meta?.saturated) &&
+            (items || []).filter(isActiveOrder).length > ACTIVE_ORDER_WINDOW * 0.8,
+        );
+        setOrdersError(null);
+      },
+      (err) => setOrdersError(err.message || "Live order feed stopped."),
+    );
+
+    // Riders are a bounded roster — hundreds at most, and the radar needs all
+    // of them — so a full subscription is the right call here.
+    const unsubRiders = repos.deliveryPartnerRepository.subscribeToAll(
+      (items) => {
+        setRiders(items || []);
+        setLoading(false);
+      },
+      () => setLoading(false),
+    );
 
     return () => {
       if (typeof unsubOrders === 'function') unsubOrders();
@@ -45,7 +88,34 @@ const LiveCommandCenter = () => {
 
   return (
     <div className="space-y-6">
-      
+
+      {/* A broken feed must never look like a quiet service. The last known
+          orders stay on screen and this says why they have stopped moving. */}
+      {ordersError && (
+        <div className="flex items-start gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3">
+          <span className="material-symbols-outlined text-[20px] text-rose-500">error</span>
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-rose-700 dark:text-rose-300">Live order feed stopped</p>
+            <p className="mt-0.5 text-xs text-rose-600 dark:text-rose-400">
+              {ordersError} Orders shown may be out of date. Reload to reconnect.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {windowSaturated && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <span className="material-symbols-outlined text-[20px] text-amber-500">warning</span>
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-amber-700 dark:text-amber-300">Radar window is full</p>
+            <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+              Showing the {ACTIVE_ORDER_WINDOW} newest orders and nearly all are still active.
+              There may be older in-flight orders not on this screen — check the Orders page.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

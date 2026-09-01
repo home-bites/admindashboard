@@ -10,6 +10,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase/firebaseConfig";
 import { useUiStore } from "../store/uiStore";
+import ServiceAreaMapPicker from "../components/ServiceAreaMapPicker";
 import EmptyState from "../components/EmptyState";
 import * as LoadingComponents from "../components/LoadingComponents";
 
@@ -486,6 +487,32 @@ export const ServiceAreas = () => {
                     Shown to customers in the &quot;we deliver to …&quot; copy, so use the
                     name a local would recognise.
                   </p>
+                </div>
+
+                {/* Pick the centre on a map instead of typing it.
+                    Writes the same centerLat / centerLng / radiusKm the page
+                    has always saved — the coordinate inputs below remain the
+                    fields of record, and stay usable if Maps is unavailable. */}
+                <div>
+                  <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-2">
+                    Coverage Area
+                  </label>
+                  <ServiceAreaMapPicker
+                    centerLat={form.centerLat}
+                    centerLng={form.centerLng}
+                    radiusKm={form.radiusKm}
+                    otherAreas={areas.filter((a) => a.id !== editId)}
+                    onChange={({ lat, lng }) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        // Five decimals is about a metre — more precision than
+                        // a delivery radius needs and enough that the typed
+                        // value round-trips what the map shows.
+                        centerLat: lat.toFixed(5),
+                        centerLng: lng.toFixed(5),
+                      }))
+                    }
+                  />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

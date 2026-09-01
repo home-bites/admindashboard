@@ -205,7 +205,20 @@ export const Subscriptions = () => {
 
   const { data: subscriptions, loading, error } = useLiveCollection("subscriptionRepository");
   const { data: plans } = useLiveCollection("mealPlanRepository");
-  const { data: customers } = useLiveCollection("userRepository");
+  /*
+   * Customers are fetched by id, not streamed.
+   *
+   * This was `useLiveCollection("userRepository")` — a live subscription to
+   * the entire users collection — whose only purpose is the `customerById`
+   * lookup below, used to show a subscriber's name. At ten thousand customers
+   * that is ten thousand documents streamed and re-streamed on every profile
+   * write anywhere in the business, to render a column of names.
+   *
+   * Only the customers who actually hold a subscription are needed, and that
+   * set is bounded by the subscription list itself. They are read once each
+   * and cached for the life of the page.
+   */
+  const [customerById, setCustomerById] = useState({});
   const { data: appSettings } = useLiveCollection("appSettingsRepository");
 
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -259,10 +272,38 @@ export const Subscriptions = () => {
     () => Object.fromEntries(plans.map((p) => [p.id, p])),
     [plans]
   );
-  const customerById = useMemo(
-    () => Object.fromEntries(customers.map((c) => [c.id, c])),
-    [customers]
-  );
+  useEffect(() => {
+    const wanted = [
+      ...new Set(
+        subscriptions
+          .map((s) => s.userId || s.customerId)
+          .filter(Boolean),
+      ),
+    ].filter((id) => !customerById[id]);
+    if (wanted.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const fetched = await Promise.all(
+        wanted.map((id) =>
+          repos.userRepository.getById(id).catch(() => null),
+        ),
+      );
+      if (cancelled) return;
+      setCustomerById((prev) => {
+        const next = { ...prev };
+        wanted.forEach((id, i) => {
+          // Cache the miss too, so a deleted customer is not re-requested on
+          // every render for the life of the session.
+          next[id] = fetched[i] || { id, _missing: true };
+        });
+        return next;
+      });
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subscriptions]);
 
   const enriched = useMemo(() => {
     return subscriptions.map((s) => {

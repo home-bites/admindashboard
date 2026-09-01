@@ -1,89 +1,216 @@
-import React, { useState, useEffect } from "react";
-import { useUiStore } from "../store/uiStore";
-import { useOrderStore } from "../store/orderStore";
+import React, { useState, useEffect, useMemo } from "react";
+import { where } from "firebase/firestore";
+import { useOrderStore, parseOrderDocDate } from "../store/orderStore";
+import { stageOf, STAGE } from "../lib/orderStages";
+import { orderRepository } from "../repositories";
 import * as LoadingComponents from "../components/LoadingComponents";
 
+/**
+ * Windows the page can report on. `days` drives the actual query.
+ *
+ * The previous version had a Week/Month/Year switch whose handler set state
+ * and raised a toast saying the timeframe had changed — and then nothing read
+ * that state. Every figure on the page was computed from whatever the order
+ * store happened to hold, so all three buttons produced identical numbers
+ * while actively telling the operator they had changed. A control that
+ * reports a change it did not make is worse than a disabled one.
+ */
+const TIMEFRAMES = [
+  { id: "week", label: "7 days", days: 7 },
+  { id: "month", label: "30 days", days: 30 },
+  { id: "quarter", label: "90 days", days: 90 },
+  { id: "year", label: "365 days", days: 365 },
+];
+
+/**
+ * Orders pulled into memory to compute breakdowns for the selected window.
+ *
+ * Headline count and revenue come from server-side aggregation and are exact
+ * at any size. Per-item and per-payment-method breakdowns cannot be done with
+ * an aggregation query, so they are computed over this bounded sample and the
+ * page says so when the sample is not the whole window.
+ */
+const ANALYTICS_SAMPLE_CAP = 2000;
+
+const isDelivered = (o) => stageOf(o) === STAGE.COMPLETED;
+
 export const Analytics = () => {
-  const { addToast } = useUiStore();
   const [timeframe, setTimeframe] = useState("month");
-  const { orders, subscribeOrders, disconnectOrders, loading } = useOrderStore();
+  const { subscribeOrders, disconnectOrders } = useOrderStore();
+
+  const [sample, setSample] = useState([]);
+  const [headline, setHeadline] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [truncated, setTruncated] = useState(false);
 
   useEffect(() => {
     subscribeOrders();
     return () => disconnectOrders();
   }, [subscribeOrders, disconnectOrders]);
 
-  const handleTimeframeChange = (tf) => {
-    setTimeframe(tf);
-    addToast(`Timeframe changed to ${tf}`, "info");
-  };
+  /* ── Load the selected window ─────────────────────────────────────────── */
+  useEffect(() => {
+    let cancelled = false;
+    const days = TIMEFRAMES.find((t) => t.id === timeframe)?.days ?? 30;
+    const since = new Date(Date.now() - days * 86400000).toISOString();
 
-  // --- Real-time Financial Calculations ---
-  const deliveredOrders = orders.filter(o => o.status === "Delivered");
-  
-  // Gross Sales (total customer invoices)
-  const grossSales = deliveredOrders.reduce((sum, o) => sum + Number(o.total || o.totalAmount || 0), 0);
-  
-  // Total Orders count
-  const totalOrders = deliveredOrders.length;
-  
-  // Average Order Value (AOV)
-  const avgOrderValue = totalOrders > 0 ? (grossSales / totalOrders) : 0;
-  
-  // Breakdown
-  const totalDiscounts = deliveredOrders.reduce((sum, o) => sum + Number(o.discountAmount || o.discount || 0), 0);
-  const totalTaxes = deliveredOrders.reduce((sum, o) => sum + Number(o.tax || o.taxAmount || 0), 0);
-  const totalDelivery = deliveredOrders.reduce((sum, o) => sum + Number(o.deliveryFee || o.deliveryCharge || 0), 0);
-  
-  // Net Profit (gross sales minus tax, delivery, discounts)
-  const netProfit = Math.max(0, grossSales - totalDiscounts - totalTaxes - totalDelivery);
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const constraints = [where("createdAt", ">=", since)];
+        const [count, page] = await Promise.all([
+          // Exact, whatever the collection size — not the length of a page.
+          orderRepository.countWhere(constraints),
+          orderRepository.getPage({
+            limitTo: ANALYTICS_SAMPLE_CAP,
+            orderByField: "createdAt",
+            direction: "desc",
+            constraints,
+          }),
+        ]);
+        if (cancelled) return;
+        setHeadline({ ordersInWindow: count });
+        setSample(page.items);
+        setTruncated(page.hasMore);
+      } catch (e) {
+        if (!cancelled) {
+          setError(
+            e?.code === "failed-precondition"
+              ? "This view needs a Firestore index that has not been created yet; the console names it."
+              : e?.message || "Could not load analytics.",
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
 
-  // --- 7-Day Revenue Trend Chart Calculations ---
-  const last7Days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    return d;
-  }).reverse();
+    return () => { cancelled = true; };
+  }, [timeframe]);
 
-  const dailyRevenue = last7Days.map(date => {
-    const dateStr = date.toDateString();
-    return orders
-      .filter(o => o.status === "Delivered" && o.createdAt && new Date(o.createdAt).toDateString() === dateStr)
-      .reduce((sum, o) => sum + Number(o.total || o.totalAmount || 0), 0);
-  });
+  const handleTimeframeChange = (tf) => setTimeframe(tf);
 
-  const maxDailyRevenue = Math.max(...dailyRevenue, 100);
+  /* ── Derived figures, all scoped to the selected window ───────────────── */
+  const m = useMemo(() => {
+    const delivered = sample.filter(isDelivered);
+    const money = (o) => Number(o.total || o.totalAmount || o.grandTotal || 0);
 
-  // --- Payment Methods Split ---
-  const codRevenue = orders.filter(o => o.status === "Delivered" && (o.paymentMethod === "COD" || o.paymentMethod === "Cash")).reduce((sum, o) => sum + Number(o.total || o.totalAmount || 0), 0);
-  const walletRevenue = orders.filter(o => o.status === "Delivered" && o.paymentMethod === "Wallet").reduce((sum, o) => sum + Number(o.total || o.totalAmount || 0), 0);
-  const razorpayRevenue = orders.filter(o => o.status === "Delivered" && o.paymentMethod === "Razorpay").reduce((sum, o) => sum + Number(o.total || o.totalAmount || 0), 0);
-  
-  const totalRev = codRevenue + walletRevenue + razorpayRevenue || 1;
-  const codPct = Math.round((codRevenue / totalRev) * 100);
-  const walletPct = Math.round((walletRevenue / totalRev) * 100);
-  const razorpayPct = Math.round((razorpayRevenue / totalRev) * 100);
+    const grossSales = delivered.reduce((s, o) => s + money(o), 0);
+    const totalOrders = delivered.length;
 
-  // --- Top Selling Items ---
-  const itemCounts = {};
-  orders.forEach(o => {
-    if (o.status === "Delivered" && o.items) {
-      o.items.forEach(item => {
-        const name = item.name;
-        const qty = Number(item.qty || item.quantity || 1);
-        itemCounts[name] = (itemCounts[name] || 0) + qty;
+    const totalDiscounts = delivered.reduce((s, o) => s + Number(o.discountAmount || o.discount || 0), 0);
+    const totalTaxes = delivered.reduce((s, o) => s + Number(o.tax || o.taxAmount || 0), 0);
+    const totalDelivery = delivered.reduce((s, o) => s + Number(o.deliveryFee || o.deliveryCharge || 0), 0);
+
+    /*
+     * Was labelled "Net Profit" and computed as gross − discounts − tax −
+     * delivery. None of those are costs of doing business: tax and delivery
+     * are amounts collected from the customer and passed on. Nothing in this
+     * system records cost of goods, so profit is not a figure this dashboard
+     * can compute, and presenting one would be a fabricated number an owner
+     * might act on. What the arithmetic actually yields is the portion of the
+     * invoice that is food revenue, so that is what it is now called.
+     *
+     * The old version also clamped at zero, hiding the case where discounts
+     * exceeded the food line entirely — exactly the case worth seeing.
+     */
+    const netFoodRevenue = grossSales - totalDiscounts - totalTaxes - totalDelivery;
+
+    // Cancellations, as a share of everything placed in the window.
+    const cancelled = sample.filter((o) => stageOf(o) === STAGE.CANCELLED).length;
+    const cancellationRate = sample.length ? (cancelled / sample.length) * 100 : 0;
+
+    /* Daily revenue across the window (capped at 30 columns for legibility). */
+    const dayCount = Math.min(TIMEFRAMES.find((t) => t.id === timeframe)?.days ?? 30, 30);
+    const days = Array.from({ length: dayCount }, (_, i) => {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      d.setDate(d.getDate() - i);
+      return d;
+    }).reverse();
+
+    const byDay = new Map(days.map((d) => [d.toDateString(), 0]));
+    delivered.forEach((o) => {
+      // `new Date(o.createdAt)` was used here, but createdAt is often a
+      // Firestore Timestamp, for which that yields Invalid Date — so the
+      // trend chart silently read zero for every day. parseOrderDocDate
+      // handles Timestamps, seconds objects, ISO strings and epoch numbers.
+      const key = parseOrderDocDate(o.createdAt || o.timestamp).toDateString();
+      if (byDay.has(key)) byDay.set(key, byDay.get(key) + money(o));
+    });
+    const dailyRevenue = [...byDay.values()];
+
+    /* Payment split. Anything not recognised is counted as Other rather than
+       dropped, so the percentages describe all delivered revenue instead of
+       summing to 100% of an unstated subset. */
+    const buckets = { COD: 0, Wallet: 0, Razorpay: 0, Other: 0 };
+    delivered.forEach((o) => {
+      const pm = String(o.paymentMethod || "").toLowerCase();
+      if (pm === "cod" || pm === "cash") buckets.COD += money(o);
+      else if (pm === "wallet") buckets.Wallet += money(o);
+      else if (pm === "razorpay" || pm === "online") buckets.Razorpay += money(o);
+      else buckets.Other += money(o);
+    });
+    const paymentTotal = Object.values(buckets).reduce((a, b) => a + b, 0);
+    const pct = (v) => (paymentTotal > 0 ? Math.round((v / paymentTotal) * 100) : 0);
+
+    /* Top items. */
+    const itemCounts = {};
+    delivered.forEach((o) => {
+      (o.items || []).forEach((it) => {
+        const name = it.name || "Unnamed item";
+        itemCounts[name] = (itemCounts[name] || 0) + Number(it.qty || it.quantity || 1);
       });
-    }
-  });
+    });
+    const topItems = Object.entries(itemCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-  const topItems = Object.entries(itemCounts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3);
+    return {
+      delivered, grossSales, totalOrders,
+      avgOrderValue: totalOrders > 0 ? grossSales / totalOrders : 0,
+      totalDiscounts, totalTaxes, totalDelivery, netFoodRevenue,
+      cancellationRate, days, dailyRevenue,
+      maxDailyRevenue: Math.max(...dailyRevenue, 100),
+      buckets, paymentTotal, pct, topItems,
+    };
+  }, [sample, timeframe]);
 
+  // Names the rest of the page already renders.
+  const {
+    grossSales, totalOrders, avgOrderValue, totalDiscounts, totalTaxes,
+    totalDelivery, dailyRevenue, maxDailyRevenue, topItems,
+  } = m;
+  const netProfit = m.netFoodRevenue;
+  const codRevenue = m.buckets.COD;
+  const walletRevenue = m.buckets.Wallet;
+  const razorpayRevenue = m.buckets.Razorpay;
+  const codPct = m.pct(codRevenue);
+  const walletPct = m.pct(walletRevenue);
+  const razorpayPct = m.pct(razorpayRevenue);
+  const last7Days = m.days;
   const hasChartData = grossSales > 0;
 
-  if (loading && orders.length === 0) {
+  if (loading && sample.length === 0) {
     return <LoadingComponents.LoadingPage />;
+  }
+
+  if (error) {
+    return (
+      <div className="p-8">
+        <div className="mx-auto max-w-lg rounded-xl border border-rose-200 bg-rose-50 p-6 text-center">
+          <span className="material-symbols-outlined text-[28px] text-rose-500">error</span>
+          <p className="mt-2 text-sm font-bold text-rose-700">Analytics unavailable</p>
+          <p className="mt-1 text-xs text-rose-600">{error}</p>
+          <button
+            onClick={() => setTimeframe((t) => t)}
+            className="mt-4 rounded-lg bg-slate-800 px-4 py-2 text-xs font-bold text-white"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -96,21 +223,45 @@ export const Analytics = () => {
         </div>
         
         {/* Timeframe selector */}
+        {/* Driven from TIMEFRAMES, so a button cannot exist without a window
+            behind it. The literal list here included "day", which no branch
+            handled — selecting it silently fell back to 30 days while showing
+            as active. */}
         <div className="inline-flex rounded-lg border border-[#dce2f3] bg-white p-1 shadow-sm">
-          {["day", "week", "month", "year"].map((tf) => (
+          {TIMEFRAMES.map((tf) => (
             <button
-              key={tf}
-              onClick={() => handleTimeframeChange(tf)}
-              className={`px-4 py-1.5 rounded font-label-sm text-label-sm capitalize transition-all ${
-                timeframe === tf
+              key={tf.id}
+              onClick={() => handleTimeframeChange(tf.id)}
+              aria-pressed={timeframe === tf.id}
+              className={`px-4 py-1.5 rounded font-label-sm text-label-sm transition-all ${
+                timeframe === tf.id
                   ? "bg-[#10b981] text-white shadow-sm font-semibold"
                   : "text-[#555f6f] hover:text-[#151c27]"
               }`}
             >
-              {tf}
+              {tf.label}
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Every figure below is scoped to the selected window, and the sample
+          behind the breakdowns is capped. Both facts belong on screen. */}
+      <div className="flex flex-wrap items-center gap-3 text-xs text-[#555f6f]">
+        <span className="rounded-full border border-[#dce2f3] bg-white px-3 py-1 font-semibold">
+          Last {TIMEFRAMES.find((t) => t.id === timeframe)?.label}
+        </span>
+        {headline && (
+          <span>
+            <strong className="text-[#151c27]">{headline.ordersInWindow.toLocaleString()}</strong> orders placed in this period
+          </span>
+        )}
+        {loading && <span className="italic">Refreshing…</span>}
+        {truncated && (
+          <span className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 font-semibold text-amber-700">
+            Breakdowns sampled from the newest {ANALYTICS_SAMPLE_CAP.toLocaleString()} orders
+          </span>
+        )}
       </div>
 
       {/* KPI Grid */}
@@ -119,18 +270,21 @@ export const Analytics = () => {
         <div className="bg-white border border-[#cbd5e1] rounded-xl p-6 flex flex-col gap-4 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden">
           <div className="absolute top-0 left-0 w-1 h-full bg-[#10b981]"></div>
           <div className="flex justify-between items-start">
-            <p className="font-label-md text-label-md text-[#555f6f] uppercase tracking-wider">Net Profit</p>
+            {/* Renamed from "Net Profit". Nothing here knows cost of goods,
+                so profit is not computable; this is the food-line portion of
+                the invoice after discounts, tax and delivery are removed. */}
+            <p className="font-label-md text-label-md text-[#555f6f] uppercase tracking-wider">Net Food Revenue</p>
             <span className="material-symbols-outlined text-[#10b981] text-[20px]">account_balance</span>
           </div>
           <div>
             <h3 className="font-headline-display text-headline-display text-[#151c27]">₹{netProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
           </div>
           <div className="flex items-center gap-2 mt-auto">
-            <span className="flex items-center gap-1 font-label-sm text-label-sm text-[#006c49] bg-[#006c49]/10 px-2 py-0.5 rounded-full">
-              <span className="material-symbols-outlined text-[14px]">arrow_upward</span>
-              Live Data
+            {/* An upward arrow next to a figure with no comparison period
+                asserts growth this page never measured. */}
+            <span className="font-body-sm text-body-sm text-[#555f6f]">
+              Delivered orders, after discounts, tax and delivery
             </span>
-            <span className="font-body-sm text-body-sm text-[#555f6f]">from delivered orders</span>
           </div>
         </div>
 
@@ -144,11 +298,9 @@ export const Analytics = () => {
             <h3 className="font-headline-md text-headline-md text-[#151c27]">₹{grossSales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
           </div>
           <div className="flex items-center gap-2 mt-auto">
-            <span className="flex items-center gap-1 font-label-sm text-label-sm text-[#006c49] bg-[#006c49]/10 px-2 py-0.5 rounded-full">
-              <span className="material-symbols-outlined text-[14px]">arrow_upward</span>
-              Active
+            <span className="font-body-sm text-body-sm text-[#555f6f]">
+              Total customer spend on delivered orders
             </span>
-            <span className="font-body-sm text-body-sm text-[#555f6f]">total customer spend</span>
           </div>
         </div>
 
@@ -162,10 +314,9 @@ export const Analytics = () => {
             <h3 className="font-headline-md text-headline-md text-[#151c27]">{totalOrders}</h3>
           </div>
           <div className="flex items-center gap-2 mt-auto">
-            <span className="flex items-center gap-1 font-label-sm text-label-sm text-[#006c49] bg-[#ecfdf5] px-2 py-0.5 rounded-full">
-              Real-time
+            <span className="font-body-sm text-body-sm text-[#555f6f]">
+              Delivered in this period
             </span>
-            <span className="font-body-sm text-body-sm text-[#555f6f]">delivered orders count</span>
           </div>
         </div>
 
@@ -223,7 +374,7 @@ export const Analytics = () => {
             </ul>
           </div>
           <div className="p-6 bg-[#f0f3ff] border-t border-[#d3daea] rounded-b-xl flex justify-between items-center">
-            <span className="font-headline-sm text-headline-sm text-[#151c27] font-semibold">Net Profit</span>
+            <span className="font-headline-sm text-headline-sm text-[#151c27] font-semibold">Net Food Revenue</span>
             <span className="font-headline-md text-headline-md text-[#10b981] font-bold">₹{netProfit.toFixed(2)}</span>
           </div>
         </div>

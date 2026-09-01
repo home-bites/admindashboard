@@ -10,8 +10,23 @@ export const TopNavBar = ({ searchPlaceholder = "Search anything... (Press Ctrl 
 
   return (
     <header
-      className={`fixed top-0 right-0 h-16 z-40 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center px-6 transition-all duration-300 ${
-        sidebarCollapsed ? "w-[calc(100%-5rem)]" : "w-[calc(100%-16rem)]"
+      /*
+       * Anchored to both edges rather than sized with a width calculation.
+       *
+       * It was `w-[calc(100%-5rem)]` collapsed and `w-[calc(100%-16rem)]`
+       * expanded — 80px and 256px, against a rail that was actually 68px and
+       * 256px, and is now 72px and 248px. Every one of those numbers had to
+       * be kept in step by hand across three files, and two of them were
+       * already wrong, which is what left a sliver of page visible under the
+       * header edge.
+       *
+       * `left-0 right-0` with a breakpoint-scoped left offset cannot drift:
+       * the header simply starts where the rail ends, and on small screens,
+       * where the rail is a drawer rather than a fixed column, it spans the
+       * full width with room left for the menu button.
+       */
+      className={`fixed top-0 right-0 left-0 z-40 flex h-16 items-center justify-between border-b border-slate-200/80 bg-white/90 pl-16 pr-4 backdrop-blur-md transition-[padding,left] duration-200 dark:border-slate-800/80 dark:bg-slate-900/90 sm:pr-6 lg:pl-6 ${
+        sidebarCollapsed ? "lg:left-[72px]" : "lg:left-[248px]"
       }`}
     >
       {/* Quick Command & Search Trigger */}
