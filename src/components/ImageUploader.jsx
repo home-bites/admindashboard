@@ -7,11 +7,11 @@ export const ImageUploader = ({
   folder = "general",
   label = "Image",
   helpText = "Upload file to Storage or paste external image URL",
-  // Pre-compression ceiling on the picked file. The canvas step downscales to
-  // ~1200px wide JPEG regardless, so the stored object is almost always well
-  // under this; the limit just rejects an oversized original early with a
-  // clear message instead of letting it fail mid-upload.
-  maxSizeMB = 5
+  // Sanity ceiling on the picked file only. The canvas step downscales every
+  // upload to ~1200px-wide JPEG before it leaves the browser (almost always
+  // well under 1MB on disk), so this is just a guard against someone picking a
+  // 40MP RAW by mistake — not a quality limit.
+  maxSizeMB = 15
 }) => {
   const [mode, setMode] = useState(value && !value.includes("firebasestorage") && !value.startsWith("data:") ? "url" : "upload");
   const [pastedUrl, setPastedUrl] = useState(value || "");

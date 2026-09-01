@@ -1208,7 +1208,6 @@ export const Settings = () => {
                 onChange={(url) => setHeroBackgroundImageUrl(url)}
                 folder="settings/hero"
                 label="Upload / Change Home Hero Background Cover Image"
-                maxSizeMB={1}
               />
             </section>
 
@@ -1263,7 +1262,6 @@ export const Settings = () => {
                 onChange={(url) => setDietHeroBackgroundImageUrl(url)}
                 folder="settings/diet_hero"
                 label="Upload / Change Diet Page Hero Background Cover Image"
-                maxSizeMB={1}
               />
             </section>
 
@@ -1341,7 +1339,6 @@ export const Settings = () => {
                 onChange={(url) => setSplashImageUrl(url)}
                 folder="settings/splash"
                 label="Upload / Change Customer App Splash Screen Image"
-                maxSizeMB={1}
               />
 
               {splashImageUrl && (
