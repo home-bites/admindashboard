@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useUiStore } from "../store/uiStore";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  collection, doc, onSnapshot, updateDoc, query, orderBy, limit,
+  collection, doc, onSnapshot, updateDoc, query, limit,
   getCountFromServer,
 } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
@@ -12,7 +12,7 @@ import EmptyState from "../components/EmptyState";
  *
  * Large enough to contain a full trading day plus any order still in flight
  * from earlier, small enough that the read stays flat as the business grows. */
-const DASHBOARD_ORDER_WINDOW = 300;
+const DASHBOARD_ORDER_WINDOW = 500;
 
 /* Catalogue collections are small by nature, but "small by nature" is not a
  * guarantee — a cap keeps a runaway import from turning this page into a
@@ -130,12 +130,14 @@ export const Dashboard = () => {
      * assignment, and the five newest. DASHBOARD_ORDER_WINDOW comfortably
      * covers all of them while keeping the read bounded.
      *
-     * Ordered so the limit takes the newest rather than an arbitrary slice.
-     * Single-field orderBy needs no composite index.
+     * No `orderBy("createdAt")`: this collection does not carry `createdAt` on
+     * every document (older orders use `timestamp`, some a string), and a
+     * Firestore orderBy silently drops every doc missing the field — which is
+     * why the dashboard counters and "recent orders" were showing only two or
+     * three rows. The list is sorted client-side below, by every date shape.
      * ─────────────────────────────────────────────────────────────────── */
     const unsubOrders = onSnapshot(query(
       collection(db, "orders"),
-      orderBy("createdAt", "desc"),
       limit(DASHBOARD_ORDER_WINDOW),
     ), (snapshot) => {
       const list = [];

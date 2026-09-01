@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { OrderService } from "../services";
-import { collection, onSnapshot, query, orderBy, limit } from "firebase/firestore";
+import { collection, onSnapshot, query, limit } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
 
 /**
@@ -167,8 +167,20 @@ export const useOrderStore = create((set, get) => ({
 
     set({ loading: true, error: null });
 
+    // No `orderBy("createdAt")` on the query itself.
+    //
+    // A Firestore orderBy silently drops every document that lacks the field,
+    // and this collection does not write `createdAt` consistently — some orders
+    // carry `timestamp`, some a string, some a real Timestamp. With the orderBy
+    // in place the listener was returning only the handful of docs that happened
+    // to have a `createdAt`, so the Orders and Dashboard pages showed two or
+    // three rows and looked "stuck". The sort below already handles every shape.
+    //
+    // `limit(500)` is a safety ceiling, not a page size. If this kitchen ever
+    // exceeds ~500 live+recent orders, switch to a range query on a
+    // backfilled/normalised timestamp field rather than raising this blindly.
     const unsubscribe = onSnapshot(
-      query(collection(db, "orders"), orderBy("createdAt", "desc"), limit(200)),
+      query(collection(db, "orders"), limit(500)),
       (snapshot) => {
         const orders = [];
         snapshot.forEach((doc) => {
