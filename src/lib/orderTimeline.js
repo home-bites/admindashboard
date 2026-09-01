@@ -41,6 +41,34 @@ function firstDate(order, keys) {
   return null;
 }
 
+/**
+ * The earliest timestamp in the order's own status history.
+ *
+ * Not an invented value: `statusHistory[0]` is a real event the order wrote
+ * for itself the moment it was created ("Pending" / "Payment Pending"). Older
+ * orders — and admin counter orders placed before the payload seeded
+ * `createdAt` — have this even when the top-level `createdAt` field is absent,
+ * so it is an honest fallback for "when was this order placed".
+ */
+function earliestHistoryDate(order) {
+  const hist = Array.isArray(order?.statusHistory) ? order.statusHistory : [];
+  let earliest = null;
+  for (const entry of hist) {
+    const d = toDate(entry?.timestamp || entry?.at || entry?.time);
+    if (d && (!earliest || d < earliest)) earliest = d;
+  }
+  return earliest;
+}
+
+/** When the order was placed, from whichever real record still carries it. */
+export function orderPlacedDate(order) {
+  return (
+    firstDate(order, ["createdAt", "placedAt", "orderedAt", "timestamp"]) ||
+    earliestHistoryDate(order) ||
+    firstDate(order, ["updatedAt"])
+  );
+}
+
 /** How far through the flow this order has actually got. */
 const STAGE_RANK = {
   [STAGE.ORDERS]: 0,
@@ -67,7 +95,7 @@ export function buildTimeline(order) {
     steps.push({ key, label, at, actor, detail, tone });
 
   /* Placed — the one step every order has by definition. */
-  push("placed", "Order placed", firstDate(order, ["createdAt", "placedAt", "orderedAt"]), {
+  push("placed", "Order placed", orderPlacedDate(order), {
     actor: order.placedBy === "admin" ? "Counter (admin)" : "Customer",
   });
 

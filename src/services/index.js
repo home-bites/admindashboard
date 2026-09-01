@@ -570,6 +570,13 @@ export const OrderService = {
         // order appears at once and still sorts correctly against app and
         // website orders. The trade is that it trusts the till's clock.
         createdAt: Timestamp.now(),
+        // Seed the history with the placed event, the same way the customer app
+        // does. Gives every reader a real "order placed" timestamp even if the
+        // top-level createdAt is ever lost, and matches the shape the order
+        // timeline and formatStepTime expect.
+        statusHistory: [
+          { status: orderData.status || "Pending", timestamp: Timestamp.now(), note: "Order placed at counter" },
+        ],
         rider: orderData.rider || "Assigning...",
         deliveryAddress: orderData.address || "Counter Pickup",
         // "Bengaluru" was never a real fallback for a Guntur-only kitchen —

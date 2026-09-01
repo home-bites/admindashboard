@@ -12,6 +12,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase/firebaseConfig";
 import { STAGE, STAGES, stageOf, planTransition } from "../lib/orderStages";
+import { orderPlacedDate } from "../lib/orderTimeline";
 import ActiveFilterBar from "../components/ActiveFilterBar";
 import OrdersToolbar from "../components/orders/OrdersToolbar";
 import OrderRow from "../components/orders/OrderRow";
@@ -978,7 +979,7 @@ export const Orders = () => {
 
   const matchesDate = (order) => {
     if (!dateRange) return true;
-    const d = parseOrderDate(order?.createdAt);
+    const d = orderPlacedDate(order);
     if (!d) return false;
 
     if (dateRange === "today") return d >= startOfDay(0);
@@ -1122,22 +1123,10 @@ export const Orders = () => {
 
   // Calculate elapsed time and priority
   const getOrderPriority = (order) => {
-    if (!order.createdAt) return { label: "Normal", color: "bg-green-50 text-green-700 border-green-200", dot: "bg-green-500" };
-    
-    let createdAtSeconds = 0;
-    if (order.createdAt.seconds !== undefined) {
-      createdAtSeconds = order.createdAt.seconds;
-    } else if (order.createdAt instanceof Date) {
-      createdAtSeconds = Math.floor(order.createdAt.getTime() / 1000);
-    } else if (typeof order.createdAt.toDate === "function") {
-      createdAtSeconds = Math.floor(order.createdAt.toDate().getTime() / 1000);
-    } else if (typeof order.createdAt === "number") {
-      createdAtSeconds = Math.floor(order.createdAt / 1000);
-    }
+    const placed = orderPlacedDate(order);
+    if (!placed) return { label: "Normal", color: "bg-green-50 text-green-700 border-green-200", dot: "bg-green-500" };
 
-    if (!createdAtSeconds) return { label: "Normal", color: "bg-green-50 text-green-700 border-green-200", dot: "bg-green-500" };
-    
-    const elapsedMinutes = Math.floor((Date.now() / 1000 - createdAtSeconds) / 60);
+    const elapsedMinutes = Math.floor((Date.now() - placed.getTime()) / 60000);
     
     if (elapsedMinutes < 5) {
       return { label: "Normal", color: "bg-green-50 text-green-700 border-green-200", dot: "bg-green-500", elapsed: elapsedMinutes };
@@ -1223,7 +1212,7 @@ export const Orders = () => {
   // that window — unlike the History tab, this is not the place that needs
   // its own unbounded query.
   const isToday = (order) => {
-    const d = parseOrderDate(order?.createdAt);
+    const d = orderPlacedDate(order);
     return !!d && istDateKey(d) === istDateKey(new Date());
   };
   const countTodayOf = (stage) => orders.filter((o) => stageOf(o) === stage && isToday(o)).length;
@@ -1270,7 +1259,7 @@ export const Orders = () => {
       o.id,
       `"${(o.customer || "").replace(/"/g, '""')}"`,
       contactOf(o),
-      formatOrderTimeAbsolute(o.createdAt),
+      formatOrderTimeAbsolute(orderPlacedDate(o)),
       `"${(o.itemsText || "").replace(/"/g, '""')}"`,
       o.subtotal || 0,
       o.tax || 0,
@@ -1330,7 +1319,7 @@ export const Orders = () => {
               <td>${o.id}</td>
               <td>${o.customer}</td>
               <td>${contactOf(o)}</td>
-              <td>${formatOrderTimeAbsolute(o.createdAt)}</td>
+              <td>${formatOrderTimeAbsolute(orderPlacedDate(o))}</td>
               <td>${o.itemsText || ""}</td>
               <td>${(o.subtotal || 0).toFixed(2)}</td>
               <td>${(o.tax || 0).toFixed(2)}</td>
@@ -1368,7 +1357,7 @@ export const Orders = () => {
       <tr>
         <td>#${o.id}</td>
         <td>${o.customer}<br/><small>${contactOf(o)}</small></td>
-        <td>${formatOrderTimeAbsolute(o.createdAt)}</td>
+        <td>${formatOrderTimeAbsolute(orderPlacedDate(o))}</td>
         <td>${o.itemsText || ""}</td>
         <td style="text-align: right;">₹${(o.total || 0).toFixed(2)}</td>
         <td>${o.paymentMethod || "Online"}</td>
@@ -1467,9 +1456,7 @@ export const Orders = () => {
       (o.itemsText && o.itemsText.toLowerCase().includes(histSearch.toLowerCase()));
       
     let matchesDate = true;
-    const oDateObj = o.createdAt 
-      ? (o.createdAt.seconds ? new Date(o.createdAt.seconds * 1000) : new Date(o.createdAt))
-      : null;
+    const oDateObj = orderPlacedDate(o);
 
     if (oDateObj) {
       if (histStartDate) {
@@ -2026,7 +2013,7 @@ export const Orders = () => {
                 <tbody className="text-xs font-medium text-slate-700 divide-y divide-slate-100">
                   {historyOrders.map(o => {
                     const isTakeaway = o.address === "Counter Pickup" || (o.deliveryAddress && o.deliveryAddress.addressLine === "Counter Pickup") || o.deliveryMode === "Take Away";
-                    const oDate = formatOrderTime(o.createdAt);
+                    const oDate = formatOrderTime(orderPlacedDate(o));
                     return (
                       <tr key={o.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-4 px-6 font-extrabold text-[#10b981]">#{o.id}</td>
@@ -2111,7 +2098,7 @@ export const Orders = () => {
                 </div>
                 <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
                   <span className="material-symbols-outlined text-[15px]">schedule</span>
-                  {formatOrderTime(selectedOrder.createdAt)}
+                  {formatOrderTime(orderPlacedDate(selectedOrder))}
                 </div>
               </div>
               
@@ -2626,7 +2613,7 @@ export const Orders = () => {
                   <div className="flex justify-between items-center text-xs font-semibold text-slate-600">
                     <div>
                       <div>ORDER: <span className="font-bold text-slate-800">#{selectedOrder.id}</span></div>
-                      <div className="mt-0.5">DATE: {formatOrderTimeAbsolute(selectedOrder.createdAt) || "Not available"}</div>
+                      <div className="mt-0.5">DATE: {formatOrderTimeAbsolute(orderPlacedDate(selectedOrder)) || "Not available"}</div>
                     </div>
                     <div className="text-right">
                       <span className={`px-2.5 py-1 rounded text-xs font-black uppercase border ${
