@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from "react";
 import { STAGE, stageOf, planTransition } from "../../lib/orderStages";
 import {
   labelForOrder, paymentStateOf, PAYMENT_LABEL, toneForStage, toneForPayment,
-  TONE, orderTypeOf, ORDER_TYPE_LABEL, orNothing, money, DASH,
+  TONE, orderTypeOf, ORDER_TYPE_LABEL, orNothing, money, DASH, reviewFlagsOf,
 } from "../../lib/orderPresentation";
 import { buildTimeline, formatStepTime } from "../../lib/orderTimeline";
 import { printKOT, printInvoice, kotNumber } from "../../lib/printing";
@@ -190,6 +190,39 @@ export const OrderDetailsDrawer = ({
           {/* Customer. Phone and address are here — an operator ringing a
               customer about a late order needs them — but they are
               deliberately absent from the KOT. */}
+          {/* Verification findings, above everything else.
+              `onOrderCreatedVerifyTotals` re-prices each order from
+              `menuItems` and `appSettings/general`; what it found was being
+              written to the order and read by nobody. It sits first because
+              it changes how an operator should read the money below it, and
+              it names the discrepancy in rupees rather than saying
+              "needs review" and making someone go looking. */}
+          {reviewFlagsOf(order).length > 0 && (
+            <Section title="Server checks">
+              <ul className="space-y-1.5">
+                {reviewFlagsOf(order).map((flag) => (
+                  <li key={flag} className="flex items-start gap-1.5 text-xs text-amber-900">
+                    <span className="material-symbols-outlined mt-px text-[14px] leading-none text-amber-600">
+                      flag
+                    </span>
+                    <span>{flag}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 border-t border-slate-100 pt-2 text-[11px] leading-relaxed text-slate-500">
+                The order is valid and still needs preparing. This is a pricing
+                discrepancy against the current catalogue &mdash; often a menu
+                edit that landed while the customer was checking out.
+                {typeof order.verifiedTotal === "number"
+                  && ` Server total: ${money(order.verifiedTotal)}.`}
+                {typeof order.verifiedAddonTotal === "number" && order.verifiedAddonTotal > 0
+                  && ` Add-ons per the menu: ${money(order.verifiedAddonTotal)}.`}
+                {typeof order.deliveryDistanceKm === "number"
+                  && ` Measured distance: ${order.deliveryDistanceKm} km.`}
+              </p>
+            </Section>
+          )}
+
           <Section title="Customer">
             <Field label="Name" value={orNothing(order.customer)} />
             <Field label="Phone" value={orNothing(order.phone || order.customerPhone)} mono />

@@ -200,6 +200,63 @@ export const TONE_SOLID = {
   neutral: "bg-slate-700 text-white",
 };
 
+/**
+ * Why the server flagged this order for a human to look at.
+ *
+ * `onOrderCreatedVerifyTotals` re-prices every order from `menuItems` and
+ * `appSettings/general` and records what it found. Until now none of it
+ * surfaced anywhere: an order could be marked `needsReview` because its
+ * delivery charge or an add-on price did not match the catalogue, and the
+ * queue looked exactly like any other order.
+ *
+ * That is the failure worth avoiding — not a missing feature but a signal
+ * written, stored, and never read. The order stays in the queue and is never
+ * cancelled for a verification problem; it just carries a visible mark now.
+ *
+ * Returns [] for a clean order, so callers can render nothing.
+ */
+export function reviewFlagsOf(order) {
+  const o = order || {};
+  const flags = [];
+
+  if (o.totalsVerified === false) {
+    flags.push(o.totalsNote || "Order total could not be verified");
+  }
+  if (typeof o.totalsMismatch === "number" && o.totalsMismatch > 0) {
+    flags.push(`Charged \u20b9${o.totalsMismatch.toFixed(2)} less than the menu price`);
+  }
+  if (o.addonsVerified === false) {
+    flags.push(o.addonNote || "An add-on could not be verified");
+  }
+  if (typeof o.addonPriceMismatch === "number" && o.addonPriceMismatch !== 0) {
+    const g = o.addonPriceMismatch;
+    flags.push(g > 0
+      ? `Add-ons charged \u20b9${g.toFixed(2)} more than the menu`
+      : `Add-ons charged \u20b9${Math.abs(g).toFixed(2)} less than the menu`);
+  }
+  if (typeof o.deliveryChargeMismatch === "number" && o.deliveryChargeMismatch !== 0) {
+    const g = o.deliveryChargeMismatch;
+    flags.push(g > 0
+      ? `Delivery charged \u20b9${g.toFixed(2)} less than the distance rule`
+      : `Delivery charged \u20b9${Math.abs(g).toFixed(2)} more than the distance rule`);
+  }
+  // Not a discrepancy — the order simply carried no coordinates, so the
+  // distance could not be checked. Worth showing, not worth alarming about,
+  // and deliberately not part of `needsReview`.
+  if (o.deliveryChargeVerified === false && !o.deliveryChargeMismatch) {
+    flags.push(o.deliveryChargeNote
+      ? `Delivery charge unverified — ${o.deliveryChargeNote}`
+      : "Delivery charge could not be verified");
+  }
+
+  // `needsReview` is the server's own summary. If it is set and nothing above
+  // explained why, say so rather than showing a badge with no reason.
+  if (o.needsReview === true && flags.length === 0) {
+    flags.push("Flagged for review by the server");
+  }
+  return flags;
+}
+
 export function toneForStage(stage) {
   switch (stage) {
     case STAGE.COMPLETED: return "positive";

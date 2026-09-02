@@ -3,7 +3,7 @@ import { STAGE, stageOf } from "../../lib/orderStages";
 import {
   labelForOrder, paymentStateOf, PAYMENT, PAYMENT_LABEL,
   toneForStage, toneForPayment, TONE,
-  orderTypeOf, ORDER_TYPE_LABEL, orNothing, money,
+  orderTypeOf, ORDER_TYPE_LABEL, orNothing, money, reviewFlagsOf,
 } from "../../lib/orderPresentation";
 import { kotNumber } from "../../lib/printing";
 
@@ -36,6 +36,8 @@ export const OrderRow = ({
   const payment = paymentStateOf(order);
   const type = orderTypeOf(order);
   const items = Array.isArray(order.items) ? order.items : [];
+  // Server-side verification findings. Empty for a clean order.
+  const reviewFlags = reviewFlagsOf(order);
   const units = items.reduce((n, i) => n + (Number(i.quantity ?? i.qty ?? 1) || 1), 0);
 
   /* The one move that makes sense from here. Mirrors the drawer, which
@@ -125,6 +127,23 @@ export const OrderRow = ({
           <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TONE[toneForPayment(payment)]}`}>
             {PAYMENT_LABEL[payment]}
           </span>
+
+          {/* The server checked this order's prices against the catalogue and
+              found something. Shown beside the money because that is what the
+              finding is about, and in `attention` rather than `critical`: the
+              order is valid and must still be cooked — a human just needs to
+              look at what was charged. The reasons are in the title so an
+              operator can see them without opening the drawer. */}
+          {reviewFlags.length > 0 && (
+            <span
+              title={reviewFlags.join("\n")}
+              className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TONE.attention}`}
+            >
+              <span className="material-symbols-outlined text-[12px] leading-none">flag</span>
+              Review
+              {reviewFlags.length > 1 && ` (${reviewFlags.length})`}
+            </span>
+          )}
         </div>
       </div>
 

@@ -79,6 +79,22 @@ export const Settings = () => {
   const [rainCharge, setRainCharge] = useState(0.0); // Rain charge in ₹
 
   /*
+   * Distance-based delivery pricing.
+   *
+   * `deliveryCharge` above is the flat legacy fee. These three describe the
+   * rule that replaces it: a base charge covering the first N km, then a
+   * fixed amount for every started kilometre beyond. 3.1 km and 3.9 km both
+   * cost one extra kilometre; 4.1 km costs two.
+   *
+   * The customer app, the website preview and the server-side re-check all
+   * read these same three fields, so changing one here changes what every
+   * customer is quoted. The defaults are the launch rule: ₹20 / 3 km / ₹8.
+   */
+  const [deliveryBaseCharge, setDeliveryBaseCharge] = useState(20.0);
+  const [deliveryBaseDistanceKm, setDeliveryBaseDistanceKm] = useState(3.0);
+  const [deliveryPerExtraKm, setDeliveryPerExtraKm] = useState(8.0);
+
+  /*
    * Pickup / kitchen coordinates.
    *
    * These were never editable. `centerLatitude`/`centerLongitude` are read by
@@ -168,6 +184,9 @@ export const Settings = () => {
           setMinOrderValue(finiteOr(data.minimumOrderValue, 0));
           setDeliveryCharge(finiteOr(data.deliveryCharge, 30.0));
           setRainCharge(finiteOr(data.rainCharge, 0.0));
+          setDeliveryBaseCharge(finiteOr(data.deliveryBaseCharge, 20.0));
+          setDeliveryBaseDistanceKm(finiteOr(data.deliveryBaseDistanceKm, 3.0));
+          setDeliveryPerExtraKm(finiteOr(data.deliveryPerExtraKm, 8.0));
 
           setWalletEnabled(data.walletEnabled !== undefined ? data.walletEnabled : true);
           setLoyaltyEnabled(data.loyaltyEnabled !== undefined ? data.loyaltyEnabled : true);
@@ -281,6 +300,9 @@ export const Settings = () => {
       minimumOrderValue: numField(minOrderValue, 0),
       deliveryCharge: numField(deliveryCharge, 30),
       rainCharge: numField(rainCharge, 0),
+      deliveryBaseCharge: numField(deliveryBaseCharge, 20),
+      deliveryBaseDistanceKm: numField(deliveryBaseDistanceKm, 3),
+      deliveryPerExtraKm: numField(deliveryPerExtraKm, 8),
       walletEnabled,
       loyaltyEnabled,
       couponEnabled,
@@ -766,6 +788,90 @@ export const Settings = () => {
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#555f6f] font-semibold">₹</span>
                 </div>
                 <p className="text-[11px] text-[#555f6f]">Standard delivery fee added per order.</p>
+              </div>
+
+              {/* ── Distance-based delivery pricing ──────────────────────────
+                  These three fields are the live rule. The customer app, the
+                  website and the server-side price check all read them from
+                  appSettings/general, so a change here reaches every customer
+                  without an app release or a website redeploy. */}
+              <div className="md:col-span-2 pt-2">
+                <h3 className="font-label-sm text-label-sm text-[#151c27] uppercase tracking-wider font-semibold">Distance-based delivery pricing</h3>
+                <p className="text-[11px] text-[#555f6f] mt-1">
+                  The base charge covers everything up to the base distance. Beyond
+                  that, every <em>started</em> kilometre adds the extra charge — so
+                  3.1&nbsp;km and 3.9&nbsp;km both cost one extra kilometre, and
+                  4.1&nbsp;km costs two. Distance is measured from the service centre
+                  set below to the customer&rsquo;s delivery pin.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="font-label-sm text-label-sm text-[#555f6f] uppercase tracking-wider font-semibold">Base Charge (₹)</label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={deliveryBaseCharge}
+                    onChange={(e) => setDeliveryBaseCharge(numField(e.target.value))}
+                    className="w-full border border-[#dce2f3] rounded-lg pl-8 pr-4 py-2.5 font-body-md text-body-md text-[#151c27] bg-[#f9f9ff] focus:border-[#10b981] outline-none"
+                  />
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#555f6f] font-semibold">₹</span>
+                </div>
+                <p className="text-[11px] text-[#555f6f]">Charged on every order, and the whole charge inside the base distance. Default ₹20.</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="font-label-sm text-label-sm text-[#555f6f] uppercase tracking-wider font-semibold">Base Distance (km)</label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={deliveryBaseDistanceKm}
+                    onChange={(e) => setDeliveryBaseDistanceKm(numField(e.target.value))}
+                    className="w-full border border-[#dce2f3] rounded-lg pl-8 pr-4 py-2.5 font-body-md text-body-md text-[#151c27] bg-[#f9f9ff] focus:border-[#10b981] outline-none"
+                  />
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#555f6f] font-semibold">km</span>
+                </div>
+                <p className="text-[11px] text-[#555f6f]">Distance the base charge covers. Default 3 km.</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="font-label-sm text-label-sm text-[#555f6f] uppercase tracking-wider font-semibold">Extra per km (₹)</label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={deliveryPerExtraKm}
+                    onChange={(e) => setDeliveryPerExtraKm(numField(e.target.value))}
+                    className="w-full border border-[#dce2f3] rounded-lg pl-8 pr-4 py-2.5 font-body-md text-body-md text-[#151c27] bg-[#f9f9ff] focus:border-[#10b981] outline-none"
+                  />
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#555f6f] font-semibold">₹</span>
+                </div>
+                <p className="text-[11px] text-[#555f6f]">Added for each started kilometre beyond the base distance. Default ₹8.</p>
+              </div>
+
+              {/* A worked preview, so an admin sees the effect of a change
+                  before saving it rather than discovering it at checkout. */}
+              <div className="md:col-span-2 rounded-lg border border-[#dce2f3] bg-[#f9f9ff] px-4 py-3">
+                <p className="text-[11px] text-[#555f6f] uppercase tracking-wider font-semibold mb-2">Preview</p>
+                <div className="flex flex-wrap gap-x-5 gap-y-1">
+                  {[3, 3.1, 4, 4.1, 5, 6, 8].map((km) => {
+                    const base = numField(deliveryBaseCharge, 20);
+                    const baseKm = numField(deliveryBaseDistanceKm, 3);
+                    const per = numField(deliveryPerExtraKm, 8);
+                    const extra = km <= baseKm
+                      ? 0
+                      : Math.ceil(Number((km - baseKm).toFixed(6)));
+                    const fee = base + extra * per;
+                    return (
+                      <span key={km} className="font-body-md text-body-md text-[#151c27]">
+                        <span className="text-[#555f6f]">{km} km</span> → ₹{Number(fee.toFixed(2))}
+                      </span>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Pickup / Kitchen Location */}

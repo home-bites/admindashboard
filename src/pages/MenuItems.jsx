@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { deleteField } from "firebase/firestore";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
 import { useMenuStore } from "../store/menuStore";
@@ -84,7 +85,7 @@ export const MenuItems = () => {
     setItemNutritionCalories('');
     setItemAllergens('');
     setItemCookingTime('');
-    setItemSpiceLevel('Mild');
+    setItemSpiceLevel('');
     setItemBadges('');
     setItemIsHidden(false);
 
@@ -122,9 +123,53 @@ export const MenuItems = () => {
     setItemTags(item.tags ? item.tags.join(", ") : "");
     setItemAddons(
       item.addons && item.addons.length > 0
-        ? item.addons.map((a) => ({ name: a.name, price: a.price.toString(), isVeg: a.isVeg !== false }))
+        // The whole add-on is carried through, not just the three keys this
+        // form edits. `...a` first means an add-on that also holds an id, a
+        // sort order or an availability flag keeps them — the editor only
+        // overwrites the fields it actually owns.
+        ? item.addons.map((a) => ({
+            ...a,
+            name: a.name ?? "",
+            price: a.price === undefined || a.price === null ? "" : String(a.price),
+            isVeg: a.isVeg !== false,
+          }))
         : [{ name: "", price: "", isVeg: true }]
     );
+
+    /* ── The nine fields this modal used to forget ────────────────────────
+     *
+     * `handleSaveItem` writes twenty-four fields. This function used to
+     * restore thirteen. The other eleven state variables were simply left
+     * holding whatever the *previous* modal session put there — so editing a
+     * dish with ingredients and then editing a second dish copied the first
+     * dish's ingredients onto it, and editing anything at all after a page
+     * load wrote the add-form's blank defaults over whatever was stored.
+     *
+     * The damage was silent and permanent: an admin correcting a typo in a
+     * price destroyed that item's gallery, ingredients, allergens, nutrition,
+     * cooking time, spice level and badges, and the toast said "updated
+     * successfully".
+     *
+     * Anything added to the save payload from here on must be restored here
+     * too. The regression test in functions/__tests__ compares the two lists
+     * and fails when they diverge.
+     */
+    setItemThumbnail(item.thumbnail || "");
+    setItemGallery(Array.isArray(item.gallery) ? item.gallery : []);
+    setItemIngredients(Array.isArray(item.ingredients) ? item.ingredients.join(", ") : "");
+    setItemAllergens(Array.isArray(item.allergens) ? item.allergens.join(", ") : "");
+    setItemBadges(Array.isArray(item.badges) ? item.badges.join(", ") : "");
+    // Blank, not 0, when there is no nutrition recorded. A zero here would be
+    // written back as a real "0 calories" claim about the food.
+    setItemNutritionCalories(
+      typeof item.nutrition?.calories === "number" ? String(item.nutrition.calories) : ""
+    );
+    setItemCookingTime(item.cookingTime || "");
+    // Empty rather than "Mild" when unset, for the same reason: defaulting the
+    // select would turn "nobody recorded this" into a spice claim on save.
+    setItemSpiceLevel(item.spiceLevel || "");
+    setItemIsHidden(item.isHidden === true);
+
     setIsModalOpen(true);
   };
 
@@ -189,9 +234,17 @@ export const MenuItems = () => {
       : [];
 
     // Process addons
+    // `...a` keeps any add-on field this form does not edit — an id, an
+    // availability flag, a sort order. Rebuilding the object from three known
+    // keys would quietly drop the rest on every save.
     const addonsArray = itemAddons
-      .filter((a) => a.name.trim() !== "" && a.price !== "")
-      .map((a) => ({ name: a.name.trim(), price: Number(a.price), isVeg: a.isVeg !== false }));
+      .filter((a) => String(a.name || "").trim() !== "" && a.price !== "")
+      .map((a) => ({
+        ...a,
+        name: String(a.name).trim(),
+        price: Number(a.price),
+        isVeg: a.isVeg !== false,
+      }));
 
     const isVegVal = itemFoodType === "Veg";
     const isEggVal = itemFoodType === "Egg";
@@ -217,16 +270,35 @@ export const MenuItems = () => {
       thumbnail: itemThumbnail,
       gallery: itemGallery,
       ingredients: itemIngredients ? itemIngredients.split(',').map(i => i.trim()).filter(Boolean) : [],
-      nutrition: {
-        calories: Number(itemNutritionCalories || 0)
-      },
       allergens: itemAllergens ? itemAllergens.split(',').map(a => a.trim()).filter(Boolean) : [],
-      cookingTime: itemCookingTime,
-      spiceLevel: itemSpiceLevel,
       badges: itemBadges ? itemBadges.split(',').map(b => b.trim()).filter(Boolean) : [],
       isHidden: itemIsHidden,
-
     };
+
+    /* ── Absent is not zero, and absent is not "Mild" ─────────────────────
+     *
+     * These three were written unconditionally. A dish with no nutrition
+     * recorded got `nutrition: { calories: 0 }` — not a missing value but a
+     * positive claim that the food has no calories, which the customer app
+     * and website would have been right to display. `spiceLevel` got "Mild"
+     * and `cookingTime` got "", inventing one and blanking the other.
+     *
+     * A blank input now means the field is not written at all on create, and
+     * is explicitly removed on update. Removal is the only way to distinguish
+     * "the admin cleared this" from "the admin never set it" in a document
+     * that already holds a value.
+     */
+    const caloriesNum = Number(itemNutritionCalories);
+    const hasCalories = String(itemNutritionCalories).trim() !== ""
+      && Number.isFinite(caloriesNum) && caloriesNum >= 0;
+    if (hasCalories) payload.nutrition = { calories: caloriesNum };
+    else if (editItemId) payload.nutrition = deleteField();
+
+    if (itemSpiceLevel) payload.spiceLevel = itemSpiceLevel;
+    else if (editItemId) payload.spiceLevel = deleteField();
+
+    if (itemCookingTime) payload.cookingTime = itemCookingTime;
+    else if (editItemId) payload.cookingTime = deleteField();
 
     try {
       if (editItemId) {
@@ -667,6 +739,11 @@ export const MenuItems = () => {
                   <div>
                     <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Spice Level</label>
                     <select value={itemSpiceLevel} onChange={(e) => setItemSpiceLevel(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700">
+                      {/* An explicit "not specified" so a dish with no spice
+                          level recorded can stay that way. Without it a value
+                          of "" renders as Mild, and saving would write a spice
+                          claim nobody made. */}
+                      <option value="">Not specified</option>
                       <option value="Mild">Mild</option>
                       <option value="Medium">Medium</option>
                       <option value="Hot">Hot</option>

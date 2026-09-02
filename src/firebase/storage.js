@@ -139,36 +139,46 @@ export const uploadFile = async (file, path, onProgress = null) => {
               onProgress(pct);
             }
           },
-          async (err) => {
-            console.warn("[Storage Engine] Storage upload failed, trying inline fallback:", err.message);
-            const dataUrl = await fileToDataURL(compressed);
-            if (dataUrlBytes(dataUrl) > MAX_INLINE_BYTES) {
-              // Failing here is the point. Silently inlining a photo made the
-              // upload look successful while quietly making every customer's
-              // app slower, with nothing to connect the two.
-              reject(new Error(
-                "Image upload failed and the file is too large to store inline. " +
-                "This usually means Firebase Storage CORS is not configured. " +
-                "Fix Storage, or use an image under 100 KB."
-              ));
-              return;
-            }
-            resolve(dataUrl);
+          (err) => {
+            /* Storage is configured and the write still failed. That is a
+             * configuration fault — rules, CORS, or credentials — and it must
+             * reach the person who can fix it.
+             *
+             * This used to inline anything under 100 KB and resolve as if the
+             * upload had succeeded. The size guard made the *large* failures
+             * loud and the small ones silent, which is the wrong way round: a
+             * small base64 blob still lands in `appSettings/general`, still
+             * ships to every customer inside the settings document, and still
+             * hides the fact that Storage is broken. Uploads under the cap
+             * were the reason a broken Storage path could look healthy for
+             * weeks.
+             *
+             * There is no inline fallback here any more at any size. The
+             * fallback survives only in the branch below, where Storage is not
+             * configured at all and so there is no failure to mask.
+             */
+            console.error("[Storage Engine] Storage upload failed:", err.message);
+            reject(new Error(
+              "Image upload failed: " + err.message + ". The image was NOT saved. " +
+              "This usually means Firebase Storage rules or CORS are not " +
+              "configured for this path. Fix Storage and upload again."
+            ));
           },
           async () => {
             try {
               const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
               resolve(downloadUrl);
             } catch (e) {
-              const dataUrl = await fileToDataURL(compressed);
-              if (dataUrlBytes(dataUrl) > MAX_INLINE_BYTES) {
-                reject(new Error(
-                  "Could not get a download URL and the file is too large to " +
-                  "store inline. Check Firebase Storage configuration."
-                ));
-                return;
-              }
-              resolve(dataUrl);
+              // The bytes are in Storage but the download URL could not be
+              // read. Saving a base64 copy instead would write a second,
+              // inline version of an image that already exists — and hide a
+              // read-permission problem. Same rule as above: no silent inline.
+              console.error("[Storage Engine] getDownloadURL failed:", e.message);
+              reject(new Error(
+                "The image uploaded but its download URL could not be read: " +
+                e.message + ". The image was NOT saved. Check the Firebase " +
+                "Storage read rules for this path."
+              ));
             }
           }
         );
