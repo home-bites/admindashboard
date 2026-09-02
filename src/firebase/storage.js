@@ -81,6 +81,23 @@ export const fileToDataURL = (file) => {
   });
 };
 
+/**
+ * A data URL, but only if it is small enough to belong in a Firestore
+ * document. Otherwise it throws, which is the honest outcome — the caller
+ * shows the message and nothing is saved.
+ */
+const inlineWithinCap = async (blob) => {
+  const dataUrl = await fileToDataURL(blob);
+  if (dataUrlBytes(dataUrl) > MAX_INLINE_BYTES) {
+    throw new Error(
+      "Image upload failed and the file is too large to store inline. " +
+      "Check that Firebase Storage is reachable and that storage.rules " +
+      "permits this path, or use an image under 100 KB."
+    );
+  }
+  return dataUrl;
+};
+
 export const uploadFile = async (file, path, onProgress = null) => {
   if (!file) return "";
 
@@ -123,22 +140,16 @@ export const uploadFile = async (file, path, onProgress = null) => {
             }
           },
           async (err) => {
-            console.warn("[Storage Engine] Storage upload failed, trying inline fallback:", err.code, err.message);
+            console.warn("[Storage Engine] Storage upload failed, trying inline fallback:", err.message);
             const dataUrl = await fileToDataURL(compressed);
             if (dataUrlBytes(dataUrl) > MAX_INLINE_BYTES) {
               // Failing here is the point. Silently inlining a photo made the
               // upload look successful while quietly making every customer's
               // app slower, with nothing to connect the two.
-              const denied =
-                err.code === "storage/unauthorized" ||
-                err.code === "storage/unauthenticated";
               reject(new Error(
-                denied
-                  ? "Image upload was refused by Firebase Storage (permission denied). " +
-                    "Deploy the current storage.rules (`firebase deploy --only storage`) " +
-                    "and make sure you are signed in with an admin/manager account."
-                  : "Image upload failed and the file is too large to store inline. " +
-                    "Check the Firebase Storage bucket configuration, or use an image under 100 KB."
+                "Image upload failed and the file is too large to store inline. " +
+                "This usually means Firebase Storage CORS is not configured. " +
+                "Fix Storage, or use an image under 100 KB."
               ));
               return;
             }
@@ -163,11 +174,31 @@ export const uploadFile = async (file, path, onProgress = null) => {
         );
       });
     } else {
-      return await fileToDataURL(compressed);
+      // No Storage configured at all (local dev without Firebase). Still
+      // capped — an uncapped inline image is the same problem here as anywhere.
+      return await inlineWithinCap(compressed);
     }
   } catch (e) {
-    console.warn("[Storage Engine] Exception during upload, resolving with DataURL:", e.message);
-    return await fileToDataURL(file);
+    /* ── Rethrow. Do NOT resurrect a failed upload as a data URL. ──────────
+     *
+     * This catch used to `return await fileToDataURL(file)` — uncompressed,
+     * and with no size cap. The two handlers above take care to `reject()`
+     * when a file is too large to inline, and every one of those rejections
+     * landed here and was turned straight back into the giant data URL they
+     * had just refused. The 100 KB guard was written and then bypassed one
+     * level up.
+     *
+     * That is how `dietHeroBackgroundImageUrl` came to hold a ~300 KB base64
+     * blob: the Storage write was denied, the guard said no, and this line
+     * said yes anyway. The admin saw a successful upload; the customer app
+     * received an image it had to download inside the settings document.
+     *
+     * `ImageUploader` already catches this and shows "Upload failed: …"
+     * without calling `onChange`, so a genuine failure now reaches the person
+     * who can fix it instead of being written to Firestore.
+     */
+    console.error("[Storage Engine] Upload failed:", e.message);
+    throw e;
   }
 };
 
