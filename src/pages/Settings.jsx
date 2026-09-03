@@ -121,6 +121,10 @@ export const Settings = () => {
   // Toggles for system
   const [walletEnabled, setWalletEnabled] = useState(true);
   const [loyaltyEnabled, setLoyaltyEnabled] = useState(true);
+  const [loyaltyPointsPerReferral, setLoyaltyPointsPerReferral] = useState(50);
+  const [loyaltyPointValueRupees, setLoyaltyPointValueRupees] = useState(1);
+  const [loyaltyRedeemThreshold, setLoyaltyRedeemThreshold] = useState(100);
+  const [loyaltyWelcomeCredit, setLoyaltyWelcomeCredit] = useState(25);
   const [couponEnabled, setCouponEnabled] = useState(true);
 
   /*
@@ -190,6 +194,10 @@ export const Settings = () => {
 
           setWalletEnabled(data.walletEnabled !== undefined ? data.walletEnabled : true);
           setLoyaltyEnabled(data.loyaltyEnabled !== undefined ? data.loyaltyEnabled : true);
+          setLoyaltyPointsPerReferral(finiteOr(data.loyaltyPointsPerReferral, 50));
+          setLoyaltyPointValueRupees(finiteOr(data.loyaltyPointValueRupees, 1));
+          setLoyaltyRedeemThreshold(finiteOr(data.loyaltyRedeemThreshold, 100));
+          setLoyaltyWelcomeCredit(finiteOr(data.loyaltyWelcomeCredit, 25));
           setCouponEnabled(data.couponEnabled !== undefined ? data.couponEnabled : true);
 
           setCodEnabled(data.codEnabled !== undefined ? data.codEnabled : true);
@@ -305,6 +313,10 @@ export const Settings = () => {
       deliveryPerExtraKm: numField(deliveryPerExtraKm, 8),
       walletEnabled,
       loyaltyEnabled,
+      loyaltyPointsPerReferral: numField(loyaltyPointsPerReferral, 50),
+      loyaltyPointValueRupees: numField(loyaltyPointValueRupees, 1),
+      loyaltyRedeemThreshold: numField(loyaltyRedeemThreshold, 100),
+      loyaltyWelcomeCredit: numField(loyaltyWelcomeCredit, 25),
       couponEnabled,
       codEnabled,
       // Numbers, not strings. The number inputs hand back strings, and the
@@ -987,6 +999,47 @@ export const Settings = () => {
                     </label>
                   </div>
 
+                  {loyaltyEnabled && (
+                    <div className="grid grid-cols-2 gap-3 p-3 bg-[#f0f4ff] rounded border border-blue-100">
+                      <div>
+                        <label className="text-[11px] font-semibold text-[#151c27]">Points Per Referral</label>
+                        <input
+                          type="number"
+                          value={loyaltyPointsPerReferral}
+                          onChange={(e) => setLoyaltyPointsPerReferral(e.target.value)}
+                          className="w-full mt-1 p-2 text-xs bg-white border rounded"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-[#151c27]">Point Value (₹)</label>
+                        <input
+                          type="number"
+                          value={loyaltyPointValueRupees}
+                          onChange={(e) => setLoyaltyPointValueRupees(e.target.value)}
+                          className="w-full mt-1 p-2 text-xs bg-white border rounded"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-[#151c27]">Redeem Threshold</label>
+                        <input
+                          type="number"
+                          value={loyaltyRedeemThreshold}
+                          onChange={(e) => setLoyaltyRedeemThreshold(e.target.value)}
+                          className="w-full mt-1 p-2 text-xs bg-white border rounded"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-[#151c27]">Welcome Credit</label>
+                        <input
+                          type="number"
+                          value={loyaltyWelcomeCredit}
+                          onChange={(e) => setLoyaltyWelcomeCredit(e.target.value)}
+                          className="w-full mt-1 p-2 text-xs bg-white border rounded"
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   {/* Coupon Enabled */}
                   <div className="flex items-center justify-between p-3 bg-[#f9f9ff] rounded border">
                     <div>
@@ -1221,11 +1274,17 @@ export const Settings = () => {
 
               {/* Live Preview of Hero Banner */}
               <div className="mb-6 relative rounded-2xl overflow-hidden h-56 border border-slate-200 bg-slate-900 shadow-md">
-                <img
-                  src={heroBackgroundImageUrl || "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1200&q=80"}
-                  alt="Hero Background Preview"
-                  className="w-full h-full object-cover opacity-90"
-                />
+                {heroBackgroundImageUrl ? (
+                  <img
+                    src={heroBackgroundImageUrl}
+                    alt="Hero Background Preview"
+                    className="w-full h-full object-cover opacity-90"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-slate-800 flex items-center justify-center text-slate-500 text-sm">
+                    No custom hero background set (Default theme active)
+                  </div>
+                )}
                 <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/40 to-[#0F172A] flex flex-col justify-between p-6">
                   <div className="flex items-center justify-between">
                     <span className="text-emerald-400 font-extrabold text-[11px] tracking-wider uppercase bg-emerald-950/80 border border-emerald-500/30 px-3 py-1 rounded-full backdrop-blur-md">
@@ -1278,11 +1337,17 @@ export const Settings = () => {
 
               {/* Live Preview of Diet Hero Banner */}
               <div className="mb-6 relative rounded-2xl overflow-hidden h-48 border border-slate-200 bg-slate-900 shadow-md">
-                <img
-                  src={dietHeroBackgroundImageUrl || "https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=1200&q=80"}
-                  alt="Diet Hero Background Preview"
-                  className="w-full h-full object-cover opacity-90"
-                />
+                {dietHeroBackgroundImageUrl ? (
+                  <img
+                    src={dietHeroBackgroundImageUrl}
+                    alt="Diet Hero Background Preview"
+                    className="w-full h-full object-cover opacity-90"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-slate-800 flex items-center justify-center text-slate-500 text-sm">
+                    No custom diet hero background set (Default theme active)
+                  </div>
+                )}
                 <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/30 to-[#0F172A] flex flex-col justify-between p-6">
                   <div className="flex items-center justify-between">
                     <span className="text-emerald-400 font-extrabold text-[11px] tracking-wider uppercase bg-emerald-950/80 border border-emerald-500/30 px-3 py-1 rounded-full backdrop-blur-md">
