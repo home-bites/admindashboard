@@ -112,7 +112,7 @@ export function normaliseOrderDoc(id, o) {
     // instead of quietly relabelling it as a walk-in sale that never happened.
     customer: o.customerName || o.customer
       || (o.placedBy === "admin" ? "Walk-in Customer" : "Not available"),
-    phone: o.customerPhone || o.phone || "Not available",
+    phone: o.customerMobile || o.customerPhone || o.phone || "Not available",
     // No source in this project ever writes a `time` string field — it was
     // silently defaulting every order, of any age, to "Just now". `createdAt`
     // (a real Firestore Timestamp) is the only honest source for when an
