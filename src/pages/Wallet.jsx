@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { app } from "../firebase/firebaseConfig";
 import { useUiStore } from "../store/uiStore";
@@ -8,7 +8,20 @@ import { useDeliveryPartnerStore } from "../store/deliveryPartnerStore";
 import EmptyState from "../components/EmptyState";
 import * as LoadingComponents from "../components/LoadingComponents";
 import { where } from "firebase/firestore";
-import { userRepository, walletTransactionRepository } from "../repositories";
+import {
+  userRepository,
+  walletTransactionRepository,
+  deliveryPartnerRepository,
+} from "../repositories";
+import {
+  DEBIT_TYPES,
+  isDebitRow,
+  signedAmount,
+  directionOf,
+  ledgerTotals,
+  ledgerErrorMessage,
+  accountNameFor,
+} from "../lib/walletLedger";
 
 export const Wallet = () => {
   const { addToast } = useUiStore();
@@ -97,19 +110,43 @@ export const Wallet = () => {
     (async () => {
       setTotalsError(null);
       try {
-        const [earnings, payouts, refunds] = await Promise.all([
-          walletTransactionRepository.sumWhere("amount", [where("type", "==", "Earning")]),
-          walletTransactionRepository.sumWhere("amount", [where("type", "==", "Payout")]),
-          walletTransactionRepository.sumWhere("amount", [where("type", "==", "Refund")]),
+        /*
+         * Two shapes of query, deliberately.
+         *
+         * The unfiltered `sum(amount)` is served by the automatic single-field
+         * index on `amount` and needs nothing deployed. Only the debit sum
+         * needs the composite index `(type ASC, amount ASC)` — which is why
+         * that index, and only that index, was added to
+         * `firestore.indexes.json` for this page.
+         *
+         * The debit spellings are queried one at a time rather than with a
+         * single `in`, because equality is the aggregation filter with the
+         * fewest surprises across SDK versions, and three extra aggregation
+         * queries cost far less than one wrong number on a finance screen.
+         *
+         * These previously asked for `type == "Earning" | "Payout" | "Refund"`.
+         * No writer in the system has ever produced those values: customer
+         * rows are written `credit`/`debit` by `walletLedgerEntry()`, partner
+         * rows `Credit`/`Debit` by the payout and withdrawal triggers. So the
+         * three figures were structurally zero *and* the query needed an index
+         * that did not exist — the card failed before it could display the
+         * wrong answer, which is the only reason nobody acted on a fabricated
+         * balance.
+         */
+        const [total, ...debitParts] = await Promise.all([
+          walletTransactionRepository.sumWhere("amount", []),
+          ...DEBIT_TYPES.map((t) =>
+            walletTransactionRepository.sumWhere("amount", [where("type", "==", t)]),
+          ),
         ]);
         if (cancelled) return;
-        setTotals({
-          earnings: Math.abs(earnings),
-          payouts: Math.abs(payouts),
-          refunds: Math.abs(refunds),
-        });
+        const debited = debitParts.reduce((acc, n) => acc + Math.abs(Number(n) || 0), 0);
+        setTotals(ledgerTotals(total, debited));
       } catch (e) {
-        if (!cancelled) setTotalsError(e?.message || "Could not load ledger totals.");
+        // The operator gets a sentence they can act on; the developer gets the
+        // whole error, index URL included, in the console where it belongs.
+        console.error("[wallet] ledger totals failed:", e);
+        if (!cancelled) setTotalsError(ledgerErrorMessage(e));
       }
     })();
 
@@ -117,6 +154,57 @@ export const Wallet = () => {
     // Recomputed when the visible ledger changes, which is the cheapest
     // available signal that something was written.
   }, [transactions.length]);
+
+  /*
+   * Names for the accounts the ledger rows belong to.
+   *
+   * A row stores `userId` and nothing else identifying, so the table showed a
+   * document id and left the operator to work out whose money had moved —
+   * which on a refund or a dispute is the first thing they need to know.
+   *
+   * Both directories are consulted because the collection is shared: customer
+   * rows point at `users`, rider payout and withdrawal rows at
+   * `deliveryPartners`. Resolution is a key-only `documentId() in [...]` query
+   * per 30 ids, so the whole 200-row window costs a handful of reads rather
+   * than one per row.
+   *
+   * Failure here is deliberately silent. A name is an aid to reading the
+   * table, not part of it — an unresolved id still renders, with the id.
+   */
+  const [directory, setDirectory] = useState(() => new Map());
+  const ledgerAccountIds = useMemo(
+    () => [...new Set(transactions.map((t) => String(t.userId || t.customerId || "")).filter(Boolean))],
+    [transactions],
+  );
+  const ledgerAccountKey = ledgerAccountIds.join(",");
+
+  useEffect(() => {
+    let cancelled = false;
+    if (ledgerAccountIds.length === 0) {
+      setDirectory(new Map());
+      return undefined;
+    }
+
+    (async () => {
+      const [users, partners] = await Promise.all([
+        userRepository.getByIds(ledgerAccountIds),
+        deliveryPartnerRepository.getByIds(ledgerAccountIds),
+      ]);
+      if (cancelled) return;
+      // Customers win a collision: a uid that exists in both collections is a
+      // customer who also rides, and the ledger row that named them was
+      // written against their customer wallet in every path that writes to
+      // `users`.
+      const merged = new Map(partners);
+      for (const [id, rec] of users) merged.set(id, rec);
+      setDirectory(merged);
+    })();
+
+    return () => { cancelled = true; };
+    // Keyed on the id set, not the array identity: a new snapshot that
+    // contains the same accounts must not re-run the lookup.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ledgerAccountKey]);
 
   // All three sources are live. Wallet rows in particular are written by
   // Cloud Functions on refunds and cashback, so the page has to reflect
@@ -137,11 +225,15 @@ export const Wallet = () => {
   ]);
 
   // --- Lifetime figures (server-side aggregation; null until loaded) ---
-  const totalRevenue = totals?.earnings ?? null;
-  const totalPayouts = totals?.payouts ?? null;
-  const totalRefunds = totals?.refunds ?? null;
-  const totalStoreBalance =
-    totals ? totals.earnings - totals.payouts - totals.refunds : null;
+  //
+  // `outstanding` is what the store still owes: every rupee credited into a
+  // customer or rider wallet, less every rupee spent or paid out of one. That
+  // is the only balance this collection can honestly report — it is a wallet
+  // ledger, not a P&L, and the previous "earnings − payouts − refunds"
+  // arithmetic described a set of rows that does not exist in it.
+  const totalCredited = totals?.credited ?? null;
+  const totalDebited = totals?.debited ?? null;
+  const totalStoreBalance = totals ? totals.outstanding : null;
 
   // Pending refunds are recent by nature, so the live window is the right
   // source — unlike the lifetime figures above.
@@ -232,13 +324,32 @@ export const Wallet = () => {
     return <LoadingComponents.LoadingPage />;
   }
 
+  /*
+   * Tab and search.
+   *
+   * The tabs were "Earning / Payout / Refund" compared with
+   * `t.type.toLowerCase() === selectedTab.toLowerCase()`. Against a ledger
+   * holding `credit` and `Credit`, all three returned nothing, every time —
+   * the filter was not slow or approximate, it was inert. They are now the
+   * two directions money can actually travel, decided by `isDebitRow` so the
+   * capitalisation split between the customer and partner writers cannot
+   * reach the UI.
+   *
+   * Search also matches the resolved account name now, which is the thing an
+   * operator actually types when a customer calls about a credit.
+   */
+  const needle = searchQuery.trim().toLowerCase();
   const filteredTxns = transactions.filter((t) => {
+    const name = accountNameFor(t, directory) || "";
     const matchesSearch =
-      String(t.id || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      String(t.description || "").toLowerCase().includes(searchQuery.toLowerCase());
-    
+      needle === "" ||
+      String(t.id || "").toLowerCase().includes(needle) ||
+      String(t.description || "").toLowerCase().includes(needle) ||
+      String(t.userId || t.customerId || "").toLowerCase().includes(needle) ||
+      name.toLowerCase().includes(needle);
+
     if (selectedTab === "All") return matchesSearch;
-    return t.type.toLowerCase() === selectedTab.toLowerCase() && matchesSearch;
+    return directionOf(t) === selectedTab && matchesSearch;
   });
 
   const getStatusBadge = (status) => {
@@ -444,7 +555,7 @@ export const Wallet = () => {
           )}
           {totals && (
             <p className="font-body-sm text-body-sm text-[#555f6f] mt-1">
-              ₹{totalRevenue.toFixed(0)} earned · ₹{totalPayouts.toFixed(0)} paid out · ₹{totalRefunds.toFixed(0)} refunded
+              ₹{totalCredited.toFixed(0)} credited · ₹{totalDebited.toFixed(0)} spent or paid out
             </p>
           )}
         </div>
@@ -491,7 +602,7 @@ export const Wallet = () => {
         {/* Table Header Filter */}
         <div className="p-5 border-b border-[#dce2f3] flex flex-wrap justify-between items-center bg-[#f9f9ff] gap-4 rounded-t-xl">
           <div className="flex items-center gap-2">
-            {["All", "Earning", "Payout", "Refund"].map((tab) => (
+            {["All", "Credit", "Debit"].map((tab) => (
               <button
                 key={tab}
                 onClick={() => setSelectedTab(tab)}
@@ -532,6 +643,7 @@ export const Wallet = () => {
               <thead>
                 <tr className="bg-[#f0f3ff]/40 border-b border-[#dce2f3]">
                   <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold uppercase tracking-wider">Transaction ID</th>
+                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold uppercase tracking-wider">Account</th>
                   <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold uppercase tracking-wider">Type</th>
                   <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold uppercase tracking-wider">Description</th>
                   <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold uppercase tracking-wider">Date &amp; Time</th>
@@ -540,16 +652,36 @@ export const Wallet = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#dce2f3]/30 font-body-sm text-body-sm text-[#151c27]">
-                {filteredTxns.map((txn) => (
+                {filteredTxns.map((txn) => {
+                  const accountId = String(txn.userId || txn.customerId || "");
+                  const accountName = accountNameFor(txn, directory);
+                  const signed = signedAmount(txn);
+                  const debit = isDebitRow(txn);
+                  return (
                   <tr key={txn.id} className="hover:bg-[#f0f3ff]/30 transition-colors">
                     <td className="px-6 py-4 font-label-md font-bold text-[#10b981]">#{txn.id}</td>
+                    {/* The name is the label; the uid stays underneath it,
+                        because that is what a support conversation or a
+                        Firestore lookup is keyed on. An unresolved account
+                        shows the id alone rather than a made-up name. */}
                     <td className="px-6 py-4">
+                      {accountName ? (
+                        <>
+                          <div className="font-label-md font-semibold text-[#151c27]">{accountName}</div>
+                          <div className="text-[10px] text-[#555f6f]/70 font-mono">{accountId}</div>
+                        </>
+                      ) : (
+                        <span className="text-[#555f6f]/70 font-mono text-xs">{accountId || "—"}</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      {/* Coloured by direction, not by the stored string: the
+                          same movement is spelled `credit` on a customer row
+                          and `Credit` on a rider row, and both must read the
+                          same way. The raw value is still what is printed, so
+                          nothing about the document is hidden. */}
                       <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
-                        txn.type === "Earning"
-                          ? "bg-[#ecfdf5] text-[#006c49]"
-                          : txn.type === "Payout"
-                          ? "bg-[#f0f3ff] text-[#121c2a]"
-                          : "bg-[#ffdad6] text-[#ba1a1a]"
+                        debit ? "bg-[#ffdad6] text-[#ba1a1a]" : "bg-[#ecfdf5] text-[#006c49]"
                       }`}>
                         {txn.type}
                       </span>
@@ -558,18 +690,31 @@ export const Wallet = () => {
                     <td className="px-6 py-4 text-[#555f6f]">
                       {txn.date || (txn.createdAt ? (txn.createdAt.toDate ? txn.createdAt.toDate().toLocaleString() : new Date(txn.createdAt).toLocaleString()) : "Just now")}
                     </td>
+                    {/* Signed from `type`, not from the stored number. The
+                        ledger stores a positive magnitude and puts the
+                        direction in `type`, so signing on `amount >= 0` showed
+                        every debit as a green credit — a payment of ₹97.50 out
+                        of a wallet rendered as "+₹97.50". */}
                     <td className="px-6 py-4 text-right font-label-md font-bold">
-                      <span className={(txn.amount !== undefined ? txn.amount : 0) >= 0 ? "text-[#006c49]" : "text-[#ba1a1a]"}>
-                        {(txn.amount !== undefined ? txn.amount : 0) >= 0 ? "+" : "-"}₹{Math.abs(txn.amount !== undefined ? txn.amount : 0).toFixed(2)}
+                      <span className={signed < 0 ? "text-[#ba1a1a]" : "text-[#006c49]"}>
+                        {signed < 0 ? "-" : "+"}₹{Math.abs(signed).toFixed(2)}
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full font-label-sm text-[10px] uppercase tracking-wide border ${getStatusBadge(txn.status)}`}>
-                        {txn.status}
-                      </span>
+                      {/* Most rows carry no `status` — only refund rows ever
+                          did — so an empty badge was rendered on every line.
+                          A dash says "not applicable" without pretending. */}
+                      {txn.status ? (
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full font-label-sm text-[10px] uppercase tracking-wide border ${getStatusBadge(txn.status)}`}>
+                          {txn.status}
+                        </span>
+                      ) : (
+                        <span className="text-[#555f6f]/50">—</span>
+                      )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

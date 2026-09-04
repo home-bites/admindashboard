@@ -14,7 +14,8 @@ import {
   getAggregateFromServer,
   sum as fsSum,
   serverTimestamp,
-  onSnapshot
+  onSnapshot,
+  documentId
 } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
 
@@ -303,6 +304,54 @@ export class BaseRepository {
       updatedBy: currentUserId
     });
     return id;
+  }
+
+  /**
+   * Fetches many documents by id in as few reads as possible.
+   *
+   * The alternative — a `getDoc` per id — is what turns "show the customer's
+   * name on each ledger row" into two hundred reads every time the wallet
+   * page paints. `documentId() in [...]` is a key-only query: it needs no
+   * index and no `where` on a data field, and Firestore caps the disjunction
+   * at 30 values, hence the chunking.
+   *
+   * Missing ids are simply absent from the result. A ledger row can point at
+   * a deleted account, and that must degrade to "no name" rather than to a
+   * rejected promise that takes the whole table down with it — so a failed
+   * chunk is logged and skipped, not thrown.
+   *
+   * @param {string[]} ids
+   * @returns {Promise<Map<string, object>>} id → document (id included)
+   */
+  async getByIds(ids) {
+    this.verifyConfiguration();
+    const unique = [...new Set((ids || []).map((v) => String(v || "")).filter(Boolean))];
+    const out = new Map();
+    if (unique.length === 0) return out;
+
+    if (this.isMockMode()) {
+      for (const row of mockDatabases[this.collectionName] || []) {
+        if (unique.includes(row.id)) out.set(row.id, { ...row });
+      }
+      return out;
+    }
+
+    const CHUNK = 30;
+    const chunks = [];
+    for (let i = 0; i < unique.length; i += CHUNK) chunks.push(unique.slice(i, i + CHUNK));
+
+    await Promise.all(
+      chunks.map(async (chunk) => {
+        try {
+          const snap = await getDocs(query(this.getCollection(), where(documentId(), "in", chunk)));
+          snap.forEach((d) => out.set(d.id, { id: d.id, ...d.data() }));
+        } catch (e) {
+          console.warn(`[${this.collectionName}] getByIds chunk failed:`, e?.message || e);
+        }
+      }),
+    );
+
+    return out;
   }
 
   async findByField(fieldName, value) {

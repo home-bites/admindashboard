@@ -39,6 +39,7 @@ import LiveCommandCenter from "./pages/LiveCommandCenter";
 import DietOffersBanners from "./pages/DietOffersBanners";
 import { MediaLibrary } from "./pages/MediaLibrary";
 import DeliveryDashboard from "./pages/DeliveryDashboard";
+import PushCampaigns from "./pages/PushCampaigns";
 import { useAuthStore } from "./store/authStore";
 
 import { isFirebaseConfigured, auth } from "./firebase/firebaseConfig";
@@ -227,6 +228,16 @@ export const App = () => {
               element={
                 <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
                   <MediaLibrary />
+                </RBACGuard>
+              }
+            />
+
+            {/* Push Campaigns (Super Admin & Admin roles) */}
+            <Route
+              path="push-campaigns"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <PushCampaigns />
                 </RBACGuard>
               }
             />

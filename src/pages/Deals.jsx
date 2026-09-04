@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
 import { useDealStore } from "../store/dealStore";
+import { useMenuStore } from "../store/menuStore";
 import { notificationRepository } from "../repositories";
 import EmptyState from "../components/EmptyState";
 import * as LoadingComponents from "../components/LoadingComponents";
@@ -10,6 +11,7 @@ export const Deals = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
   const { deals, loading, subscribeDeals, disconnectDeals, addDeal, updateDeal, deleteDeal } = useDealStore();
+  const { menuItems, subscribeMenuItems, disconnectMenuItems } = useMenuStore();
 
   // Real, from the loaded deals — not a literal.
   const activeDealCount = deals.filter((d) => d.status === "Active").length;
@@ -22,23 +24,41 @@ export const Deals = () => {
   const [title, setTitle] = useState("");
   const [type, setType] = useState("Buy 1 Get 1");
   const [minOrder, setMinOrder] = useState("");
+  const [startDate, setStartDate] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
   const [status, setStatus] = useState("Active");
+  const [selectedItemIds, setSelectedItemIds] = useState([]);
+  const [itemSearch, setItemSearch] = useState("");
 
-  // Live subscription rather than a one-shot read, and torn down on unmount
-  // so navigating away doesn't leave a Firestore listener running.
+  // Live subscriptions torn down on unmount
   useEffect(() => {
     subscribeDeals();
-    return () => disconnectDeals();
-  }, [subscribeDeals, disconnectDeals]);
+    subscribeMenuItems();
+    return () => {
+      disconnectDeals();
+      disconnectMenuItems();
+    };
+  }, [subscribeDeals, disconnectDeals, subscribeMenuItems, disconnectMenuItems]);
+
+  const availableMenuItems = useMemo(() => {
+    const list = menuItems.filter((i) => i.isDeleted !== true);
+    if (!itemSearch.trim()) return list;
+    const q = itemSearch.toLowerCase().trim();
+    return list.filter(
+      (i) => (i.name || "").toLowerCase().includes(q) || (i.category || "").toLowerCase().includes(q)
+    );
+  }, [menuItems, itemSearch]);
 
   const handleOpenAddModal = () => {
     setEditDealId(null);
     setTitle("");
     setType("Buy 1 Get 1");
     setMinOrder("");
+    setStartDate("");
     setExpiryDate("");
     setStatus("Active");
+    setSelectedItemIds([]);
+    setItemSearch("");
     setIsModalOpen(true);
   };
 
@@ -47,8 +67,16 @@ export const Deals = () => {
     setTitle(deal.title || "");
     setType(deal.type || "Buy 1 Get 1");
     setMinOrder((deal.minimumOrderValue !== undefined ? deal.minimumOrderValue : deal.minOrder || 0).toString());
+    setStartDate(deal.startDate || "");
     setExpiryDate(deal.expiryDate || deal.expiry || "");
     setStatus(deal.status || "Active");
+    const existingIds = Array.isArray(deal.menuItemIds)
+      ? deal.menuItemIds
+      : deal.menuItemId
+      ? [deal.menuItemId]
+      : [];
+    setSelectedItemIds(existingIds);
+    setItemSearch("");
     setIsModalOpen(true);
   };
 
@@ -60,16 +88,23 @@ export const Deals = () => {
     }
 
     const minOrderVal = parseFloat(minOrder);
+    const dealToEdit = editDealId ? deals.find((d) => d.id === editDealId) : null;
 
     const dealPayload = {
       title,
+      name: title,
       type,
       minOrder: minOrderVal,
+      minimumOrderValue: minOrderVal,
+      menuItemIds: selectedItemIds,
+      menuItemId: selectedItemIds[0] || "",
+      startDate: startDate || null,
       expiry: expiryDate || "No Expiry",
+      expiryDate: expiryDate || null,
       expiresAt: expiryDate || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
       status,
       isActive: status === "Active",
-      usage: "0 times"
+      usage: dealToEdit?.usage || "0 times"
     };
 
     try {
@@ -250,6 +285,7 @@ export const Deals = () => {
                   <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Campaign Deal</th>
                   <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Deal Type</th>
                   <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Min. Order</th>
+                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Linked Foods</th>
                   <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Claims Count</th>
                   <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Expiry Date</th>
                   <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Status</th>
@@ -269,21 +305,45 @@ export const Deals = () => {
                       <span className="text-[#555f6f]">₹{(deal.minOrder !== undefined ? deal.minOrder : (deal.minimumOrderValue || 0)).toFixed(2)}</span>
                     </td>
                     <td className="px-6 py-4">
+                      {deal.menuItemIds && deal.menuItemIds.length > 0 ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-label-sm text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                          {deal.menuItemIds.length} item{deal.menuItemIds.length === 1 ? "" : "s"}
+                        </span>
+                      ) : deal.menuItemId ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-label-sm text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                          1 item
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 text-xs italic">All menu</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
                       <span>{deal.usage}</span>
                     </td>
                     <td className="px-6 py-4">
                       <span className="text-[#555f6f]">{deal.expiry}</span>
                     </td>
                     <td className="px-6 py-4">
-                      <span
-                        className={`inline-flex items-center px-2.5 py-1 rounded-full font-label-sm text-[10px] uppercase tracking-wide border ${
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const nextStatus = deal.status === "Active" ? "Inactive" : "Active";
+                          try {
+                            await updateDeal(deal.id, { status: nextStatus, isActive: nextStatus === "Active" }, user);
+                            addToast(`Deal marked as ${nextStatus}`, "info");
+                          } catch (err) {
+                            addToast(`Failed to update status: ${err.message}`, "error");
+                          }
+                        }}
+                        className={`inline-flex items-center px-2.5 py-1 rounded-full font-label-sm text-[10px] uppercase tracking-wide border transition cursor-pointer hover:opacity-80 ${
                           deal.status === "Active"
                             ? "bg-[#ecfdf5] text-[#006c49] border-[#10b981]"
                             : "bg-[#ffdad6] text-[#93000a] border-[#ba1a1a]"
                         }`}
+                        title="Click to toggle active/inactive"
                       >
                         {deal.status}
-                      </span>
+                      </button>
                     </td>
                     <td className="px-6 py-4 text-right">
                       <button
@@ -358,18 +418,30 @@ export const Deals = () => {
                   </select>
                 </div>
 
+                <div>
+                  <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
+                    Min. Order (₹) <span className="text-[#ba1a1a]">*</span>
+                  </label>
+                  <input
+                    value={minOrder}
+                    onChange={(e) => setMinOrder(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm text-[#151c27]"
+                    placeholder="0.00"
+                    required
+                    type="number"
+                  />
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                      Min. Order (₹) <span className="text-[#ba1a1a]">*</span>
+                      Start Date
                     </label>
                     <input
-                      value={minOrder}
-                      onChange={(e) => setMinOrder(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm text-[#151c27]"
-                      placeholder="0.00"
-                      required
-                      type="number"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-[#555f6f] text-body-sm"
+                      type="date"
                     />
                   </div>
                   <div>
@@ -382,6 +454,82 @@ export const Deals = () => {
                       className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-[#555f6f] text-body-sm"
                       type="date"
                     />
+                  </div>
+                </div>
+
+                {/* Multi-Item Food Selector */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-label-md text-label-md text-[#151c27] font-semibold">
+                      Applicable Food / Menu Items
+                    </label>
+                    <span className="text-xs text-[#555f6f]">
+                      {selectedItemIds.length} item{selectedItemIds.length === 1 ? "" : "s"} selected
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="relative">
+                      <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+                        search
+                      </span>
+                      <input
+                        type="text"
+                        placeholder="Search menu items to link..."
+                        value={itemSearch}
+                        onChange={(e) => setItemSearch(e.target.value)}
+                        className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#f9f9ff] border border-[#d3daea] rounded outline-none focus:border-[#10b981]"
+                      />
+                    </div>
+
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        if (id && !selectedItemIds.includes(id)) {
+                          setSelectedItemIds([...selectedItemIds, id]);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm text-[#151c27]"
+                    >
+                      <option value="">+ Click to link a dish to this offer...</option>
+                      {availableMenuItems
+                        .filter((item) => !selectedItemIds.includes(item.id))
+                        .map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name} {item.price ? `(₹${item.price})` : ""} {item.foodType ? `[${item.foodType}]` : ""}
+                          </option>
+                        ))}
+                    </select>
+
+                    {/* Selected Item Pills */}
+                    {selectedItemIds.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5 p-2 bg-[#f9f9ff] rounded-lg border border-[#d3daea] max-h-32 overflow-y-auto">
+                        {selectedItemIds.map((id) => {
+                          const item = menuItems.find((m) => m.id === id);
+                          const name = item ? item.name : id;
+                          return (
+                            <span
+                              key={id}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200"
+                            >
+                              <span>{name}</span>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedItemIds(selectedItemIds.filter((i) => i !== id))}
+                                className="w-4 h-4 rounded-full hover:bg-emerald-200 flex items-center justify-center text-emerald-700 font-bold ml-0.5"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-400 italic">
+                        No dishes selected yet. (Linked items will dynamically show an offer badge on the customer app)
+                      </p>
+                    )}
                   </div>
                 </div>
 

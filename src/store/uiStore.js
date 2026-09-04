@@ -30,9 +30,19 @@ export const useUiStore = create(
       setLastVisitedPage: (page) => set({ lastVisitedPage: page }),
 
       // Toast Notification System
-      addToast: (message, type = "info", duration = 4000) => {
-        const id = Date.now().toString();
-        const toast = { id, message, type };
+      addToast: (messageOrObj, type = "info", duration = 4000) => {
+        const id = Date.now().toString() + Math.random().toString(36).substring(2, 5);
+        let msg = messageOrObj;
+        let toastType = type;
+        let toastTitle = "";
+
+        if (messageOrObj && typeof messageOrObj === "object") {
+          msg = messageOrObj.message || messageOrObj.title || JSON.stringify(messageOrObj);
+          toastType = messageOrObj.type || type;
+          toastTitle = messageOrObj.title && messageOrObj.message ? messageOrObj.title : "";
+        }
+
+        const toast = { id, title: toastTitle, message: String(msg || ""), type: toastType };
         
         set((state) => ({ toasts: [...state.toasts, toast] }));
 

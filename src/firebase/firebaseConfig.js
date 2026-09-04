@@ -71,10 +71,12 @@ if (isFirebaseConfigured) {
         console.warn("Firebase Analytics failed to initialize:", e.message);
       }
 
-      try {
-        messaging = getMessaging(app);
-      } catch (e) {
-        console.warn("Firebase Messaging could not be initialized in this browser environment:", e.message);
+      if ("serviceWorker" in navigator) {
+        try {
+          messaging = getMessaging(app);
+        } catch (e) {
+          console.warn("Firebase Messaging could not be initialized in this browser environment:", e.message);
+        }
       }
 
       try {

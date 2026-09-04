@@ -4,6 +4,7 @@ import { db } from "../firebase/firebaseConfig";
 import { useUiStore } from "../store/uiStore";
 import { uploadFile } from "../firebase/storage";
 import { ImageUploader } from "../components/ImageUploader";
+import DestinationSelector, { parseDestination, buildRedirectUrl } from "../components/DestinationSelector";
 
 /**
  * Promotional cards shown under the hero banner on the app's home screen.
@@ -27,7 +28,9 @@ const EMPTY = {
   accentColor: "#0F2C25",
   couponCode: "",
   ctaLabel: "",
-  redirectUrl: "",
+  destinationType: "offers",
+  destinationId: "",
+  redirectUrl: "offers",
   displayOrder: 0,
   isActive: true,
 };
@@ -81,10 +84,17 @@ export default function PromoCards() {
     }
     setSaving(true);
     try {
+      const destType = form.destinationType || "offers";
+      const destId = (form.destinationId || "").trim();
+      const redirectUrl = form.redirectUrl || buildRedirectUrl(destType, destId);
+
       const payload = {
         ...form,
         title: form.title.trim(),
         couponCode: form.couponCode.trim().toUpperCase(),
+        destinationType: destType,
+        destinationId: destId,
+        redirectUrl: redirectUrl,
         displayOrder: Number(form.displayOrder) || 0,
         isDeleted: false,
         updatedAt: new Date().toISOString(),
@@ -201,17 +211,13 @@ export default function PromoCards() {
             </Field>
           </div>
 
-          <Field
-            label="Opens"
-            hint="Blank opens the Offers page. Or use category:ID, dish:ID, coupon:CODE."
-          >
-            <input
-              className={inputCls}
-              value={form.redirectUrl}
-              onChange={(e) => setForm({ ...form, redirectUrl: e.target.value })}
-              placeholder="category:cat_biryanis"
-            />
-          </Field>
+          <DestinationSelector
+            destinationType={form.destinationType || "offers"}
+            destinationId={form.destinationId || ""}
+            onChange={({ destinationType, destinationId, redirectUrl }) =>
+              setForm((f) => ({ ...f, destinationType, destinationId, redirectUrl }))
+            }
+          />
 
           <Field label="Colour">
             <div className="flex flex-wrap gap-2">
@@ -314,9 +320,23 @@ export default function PromoCards() {
               className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4"
             >
               <PromoPreview card={card} />
+              <div className="flex items-center gap-1.5 mt-2.5 text-[11px] font-semibold text-slate-500">
+                <span className="material-symbols-outlined text-xs text-emerald-600">near_me</span>
+                <span>Opens: <strong className="text-slate-700 dark:text-slate-200 capitalize">{card.destinationType || (card.redirectUrl ? card.redirectUrl.split(':')[0] : "offers")}</strong>{card.destinationId ? ` (${card.destinationId})` : card.redirectUrl && card.redirectUrl.includes(':') ? ` (${card.redirectUrl.split(':')[1]})` : ""}</span>
+              </div>
               <div className="flex items-center gap-2 mt-3">
                 <button
-                  onClick={() => { setEditingId(card.id); setForm({ ...EMPTY, ...card }); }}
+                  onClick={() => {
+                    const dest = parseDestination(card.destinationType, card.destinationId, card.redirectUrl);
+                    setEditingId(card.id);
+                    setForm({
+                      ...EMPTY,
+                      ...card,
+                      destinationType: dest.destinationType,
+                      destinationId: dest.destinationId,
+                      redirectUrl: card.redirectUrl || buildRedirectUrl(dest.destinationType, dest.destinationId),
+                    });
+                  }}
                   className="px-3 py-1.5 text-xs font-bold rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200"
                 >
                   Edit

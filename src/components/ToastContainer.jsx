@@ -49,7 +49,12 @@ export const ToastContainer = () => {
               {styles.icon}
             </span>
             <div className="flex-1 font-body-sm text-body-sm leading-normal">
-              {toast.message}
+              {toast.title && <div className="font-bold text-xs mb-0.5">{toast.title}</div>}
+              <div>
+                {typeof toast.message === "string"
+                  ? toast.message
+                  : (toast.message?.message || toast.message?.title || String(toast.message || ""))}
+              </div>
             </div>
             <button
               onClick={() => removeToast(toast.id)}
