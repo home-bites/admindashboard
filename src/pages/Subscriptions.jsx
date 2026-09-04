@@ -430,6 +430,146 @@ export const Subscriptions = () => {
     }
   }
 
+  /* ── subscription editing and plan management ─────────────────────────
+   *
+   * Admins can adjust the customer's plan (upgrade/downgrade), extend duration
+   * / end date, adjust covered slots, and add operational notes. Every change
+   * captures a before/after snapshot in `adminHistory` on the document and
+   * writes an audit log, preserving full historical and financial traceability.
+   */
+  const [editingSub, setEditingSub] = useState(null);
+  const [editForm, setEditForm] = useState({
+    planId: "",
+    planTitle: "",
+    subscriptionType: "diet",
+    endDate: "",
+    durationDays: 7,
+    coveredSlots: ["breakfast", "lunch", "snacks", "dinner"],
+    mealsPerDay: 3,
+    specialInstructions: "",
+    reason: "",
+  });
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  const toIsoDateString = (v) => {
+    const d = toDate(v);
+    if (!d) return "";
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
+  const addDaysToDateString = (dateStr, days) => {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    d.setDate(d.getDate() + days);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
+  const openEditModal = (sub) => {
+    const plan = planById[sub.planId] || {};
+    setEditingSub(sub);
+    setEditForm({
+      planId: sub.planId || "",
+      planTitle: sub._planTitle || plan.title || "",
+      subscriptionType: sub.subscriptionType || plan.subscriptionType || "diet",
+      endDate: toIsoDateString(sub.endDate),
+      durationDays: sub.durationDays || plan.durationDays || 7,
+      coveredSlots: Array.isArray(sub.coveredSlots) && sub.coveredSlots.length > 0 
+        ? [...sub.coveredSlots] 
+        : (Array.isArray(plan.coveredSlots) ? [...plan.coveredSlots] : ["breakfast", "lunch", "snacks", "dinner"]),
+      mealsPerDay: sub.mealsPerDay || plan.mealsPerDay || 3,
+      specialInstructions: sub.specialInstructions || "",
+      reason: "",
+    });
+  };
+
+  const handleSaveSubscriptionEdit = async () => {
+    if (!editingSub) return;
+    if (!editForm.reason.trim()) {
+      addToast("Please provide an audit reason for modifying this subscription.", "error");
+      return;
+    }
+    if (!editForm.endDate) {
+      addToast("Please select a valid end date.", "error");
+      return;
+    }
+    if (!editForm.coveredSlots || editForm.coveredSlots.length === 0) {
+      addToast("At least one meal slot must be selected.", "error");
+      return;
+    }
+
+    setIsSavingEdit(true);
+    try {
+      const currentHistory = Array.isArray(editingSub.adminHistory) ? editingSub.adminHistory : [];
+      const historyEntry = {
+        timestamp: new Date().toISOString(),
+        adminUid: user?.uid || "admin",
+        adminEmail: user?.email || "admin",
+        reason: editForm.reason.trim(),
+        previousState: {
+          planId: editingSub.planId || null,
+          planTitle: editingSub._planTitle || null,
+          endDate: editingSub.endDate || null,
+          durationDays: editingSub.durationDays || null,
+          coveredSlots: editingSub.coveredSlots || null,
+          mealsPerDay: editingSub.mealsPerDay || null,
+        },
+        newState: {
+          planId: editForm.planId,
+          planTitle: editForm.planTitle,
+          subscriptionType: editForm.subscriptionType,
+          endDate: editForm.endDate,
+          durationDays: Number(editForm.durationDays) || editingSub.durationDays || 7,
+          coveredSlots: editForm.coveredSlots,
+          mealsPerDay: Number(editForm.mealsPerDay) || 3,
+          specialInstructions: editForm.specialInstructions.trim(),
+        }
+      };
+
+      await repos.subscriptionRepository.update(editingSub.id, {
+        planId: editForm.planId,
+        planTitle: editForm.planTitle,
+        subscriptionType: editForm.subscriptionType,
+        endDate: editForm.endDate,
+        durationDays: Number(editForm.durationDays) || editingSub.durationDays || 7,
+        coveredSlots: editForm.coveredSlots,
+        mealsPerDay: Number(editForm.mealsPerDay) || 3,
+        specialInstructions: editForm.specialInstructions.trim(),
+        adminHistory: [...currentHistory, historyEntry],
+        updatedAt: new Date().toISOString(),
+        updatedBy: user?.uid || "admin",
+      });
+
+      await repos.auditLogRepository.logAction(
+        user?.uid || "system",
+        "subscriptions",
+        "SUBSCRIPTION_ADMIN_EDIT",
+        {
+          subscriptionId: editingSub.id,
+          customer: editingSub._customerName,
+          previousPlan: editingSub._planTitle,
+          newPlan: editForm.planTitle,
+          previousEndDate: editingSub.endDate,
+          newEndDate: editForm.endDate,
+          reason: editForm.reason.trim(),
+        }
+      );
+
+      addToast("Subscription updated successfully.", "success");
+      setEditingSub(null);
+    } catch (err) {
+      addToast(`Failed to update subscription: ${err.message}`, "error");
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+
   /* ── bulk selection and deletion ───────────────────────────────────────
    *
    * `BaseRepository.delete` is a soft delete: it sets `isDeleted: true` and
@@ -744,6 +884,14 @@ export const Subscriptions = () => {
                         <td className="px-5 py-4">
                           <div className="flex items-center justify-end gap-2">
                             <button
+                              onClick={() => openEditModal(s)}
+                              className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1 transition-colors"
+                              title="Edit plan, duration, and benefits"
+                            >
+                              <span className="material-symbols-outlined text-[15px]">edit</span>
+                              Edit
+                            </button>
+                            <button
                               onClick={() => toggleExpand(s.id)}
                               className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:border-emerald-400"
                             >
@@ -822,8 +970,257 @@ export const Subscriptions = () => {
           </div>
         </div>
       )}
+      {/* Edit Subscription Modal */}
+      {editingSub && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl p-6 border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in-95 duration-150 my-8">
+            <div className="flex justify-between items-start mb-5 pb-4 border-b border-slate-200 dark:border-slate-800">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-black text-slate-900 dark:text-white">
+                    Edit Subscription
+                  </h3>
+                  <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold">
+                    #{editingSub.id}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Customer: <span className="font-bold text-slate-700 dark:text-slate-300">{editingSub._customerName}</span> ({editingSub._customerPhone})
+                </p>
+              </div>
+              <button
+                onClick={() => setEditingSub(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                <span className="material-symbols-outlined text-xl">close</span>
+              </button>
+            </div>
+
+            <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+              {/* Plan Selection (Upgrade / Downgrade) */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                  Subscription Plan (Upgrade / Downgrade)
+                </label>
+                <select
+                  value={editForm.planId}
+                  onChange={(e) => {
+                    const selId = e.target.value;
+                    const p = planById[selId] || {};
+                    setEditForm((prev) => ({
+                      ...prev,
+                      planId: selId,
+                      planTitle: p.title || prev.planTitle,
+                      subscriptionType: p.subscriptionType || prev.subscriptionType || "diet",
+                      durationDays: p.durationDays || prev.durationDays || 7,
+                      coveredSlots: Array.isArray(p.coveredSlots) && p.coveredSlots.length > 0 ? p.coveredSlots : prev.coveredSlots,
+                      mealsPerDay: p.mealsPerDay || prev.mealsPerDay || 3,
+                    }));
+                  }}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-semibold outline-none focus:border-emerald-500 text-slate-800 dark:text-slate-100"
+                >
+                  <option value="">Custom / Retain Current ({editForm.planTitle})</option>
+                  {plans.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.title} · {p.subscriptionType || "diet"} · {p.durationDays || 7}d · ₹{p.discountedPrice || p.price || 0}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Currently selected: <span className="font-semibold text-slate-600 dark:text-slate-300">{editForm.planTitle}</span> ({editForm.subscriptionType})
+                </p>
+              </div>
+
+              {/* End Date & Extension */}
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Expiration Date &amp; Duration Extension
+                  </label>
+                  <span className="text-xs text-slate-400">
+                    Original: {fmtDate(editingSub.endDate)}
+                  </span>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+                  <input
+                    type="date"
+                    value={editForm.endDate}
+                    onChange={(e) => setEditForm({ ...editForm, endDate: e.target.value })}
+                    className="w-full sm:w-48 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-semibold outline-none focus:border-emerald-500"
+                  />
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs font-bold text-slate-400 mr-1">Quick Extend:</span>
+                    {[7, 14, 30].map((days) => (
+                      <button
+                        key={days}
+                        type="button"
+                        onClick={() => {
+                          const base = editForm.endDate || toIsoDateString(new Date());
+                          setEditForm((prev) => ({
+                            ...prev,
+                            endDate: addDaysToDateString(base, days),
+                            durationDays: (Number(prev.durationDays) || 0) + days,
+                          }));
+                        }}
+                        className="px-2.5 py-1 text-xs font-bold rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 transition-colors"
+                      >
+                        +{days} Days
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Extending the end date seamlessly updates active duration and prevents premature expiration in the renewal engine.
+                </p>
+              </div>
+
+              {/* Covered Slots */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
+                  Covered Meal Slots
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {Object.entries(SLOT_LABEL).map(([slotKey, label]) => {
+                    const isChecked = editForm.coveredSlots.includes(slotKey);
+                    return (
+                      <label
+                        key={slotKey}
+                        className={`flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-colors ${
+                          isChecked
+                            ? "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-300 dark:border-emerald-700 text-emerald-900 dark:text-emerald-200"
+                            : "bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setEditForm((prev) => ({ ...prev, coveredSlots: [...prev.coveredSlots, slotKey] }));
+                            } else {
+                              setEditForm((prev) => ({ ...prev, coveredSlots: prev.coveredSlots.filter((k) => k !== slotKey) }));
+                            }
+                          }}
+                          className="w-4 h-4 rounded accent-emerald-500"
+                        />
+                        <span className="text-xs font-bold">{label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Meals Per Day & Special Instructions */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                    Meals Per Day
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="6"
+                    value={editForm.mealsPerDay}
+                    onChange={(e) => setEditForm({ ...editForm, mealsPerDay: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-semibold outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                    Special Instructions / Notes
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.specialInstructions}
+                    onChange={(e) => setEditForm({ ...editForm, specialInstructions: e.target.value })}
+                    placeholder="e.g. Less spicy, diabetic-friendly..."
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* Audit Reason (Mandatory) */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400 mb-1 flex items-center gap-1">
+                  <span className="material-symbols-outlined text-sm">edit_note</span>
+                  Reason for Modification (Mandatory Audit Requirement)
+                </label>
+                <input
+                  type="text"
+                  value={editForm.reason}
+                  onChange={(e) => setEditForm({ ...editForm, reason: e.target.value })}
+                  placeholder="e.g. Customer upgraded to Premium plan, compensated 7 days for holiday"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-950/20 text-sm outline-none focus:border-amber-500 font-medium"
+                />
+              </div>
+
+              {/* History / Audit Trail of Previous Changes */}
+              {Array.isArray(editingSub.adminHistory) && editingSub.adminHistory.length > 0 && (
+                <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+                    Previous Modification History ({editingSub.adminHistory.length})
+                  </p>
+                  <div className="space-y-2 max-h-32 overflow-y-auto">
+                    {editingSub.adminHistory.slice().reverse().map((h, i) => (
+                      <div key={i} className="text-xs border-b border-slate-200 dark:border-slate-700 pb-1.5 last:border-0">
+                        <div className="flex justify-between text-[10px] text-slate-400">
+                          <span>{fmtDate(h.timestamp)} {toDate(h.timestamp)?.toLocaleTimeString()}</span>
+                          <span className="font-mono">{h.adminEmail || h.adminUid}</span>
+                        </div>
+                        <p className="font-semibold text-slate-700 dark:text-slate-200 mt-0.5">
+                          {h.reason || "Admin update"}
+                        </p>
+                        {h.previousState?.planTitle !== h.newState?.planTitle && (
+                          <span className="text-[10px] text-emerald-600 block">
+                            Plan: {h.previousState?.planTitle} → {h.newState?.planTitle}
+                          </span>
+                        )}
+                        {h.previousState?.endDate !== h.newState?.endDate && (
+                          <span className="text-[10px] text-blue-600 block">
+                            End Date: {fmtDate(h.previousState?.endDate)} → {fmtDate(h.newState?.endDate)}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-200 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingSub(null)}
+                disabled={isSavingEdit}
+                className="px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveSubscriptionEdit}
+                disabled={isSavingEdit}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm disabled:opacity-50"
+              >
+                {isSavingEdit ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-sm">save</span>
+                    Save Changes
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
 export default Subscriptions;
+

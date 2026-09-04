@@ -45,6 +45,39 @@ export const Wallet = () => {
   const [customers, setCustomers] = useState([]);
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
 
+  // Admin display-only Clear/Hide History preference.
+  // Persists the operator's display preference across refreshes without touching
+  // Firestore documents, balances, refunds, debits, credits, or audits.
+  const [isHistoryHidden, setIsHistoryHidden] = useState(() => {
+    try {
+      return localStorage.getItem("admin_wallet_display_hidden") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [showClearConfirmModal, setShowClearConfirmModal] = useState(false);
+
+  const handleClearHistory = () => {
+    setIsHistoryHidden(true);
+    try {
+      localStorage.setItem("admin_wallet_display_hidden", "true");
+    } catch (e) {
+      console.warn("Could not save wallet display preference:", e);
+    }
+    setShowClearConfirmModal(false);
+    addToast("Transaction history hidden from Admin view. Database records and customer balances remain untouched.", "info");
+  };
+
+  const handleRestoreHistory = () => {
+    setIsHistoryHidden(false);
+    try {
+      localStorage.removeItem("admin_wallet_display_hidden");
+    } catch (e) {
+      console.warn("Could not remove wallet display preference:", e);
+    }
+    addToast("Transaction history display restored.", "success");
+  };
+
   /*
    * Customer lookup for the credit dialog.
    *
@@ -369,6 +402,25 @@ export const Wallet = () => {
           </p>
         </div>
         <div className="flex gap-2">
+          {isHistoryHidden ? (
+            <button 
+              onClick={handleRestoreHistory}
+              className="px-4 py-2 bg-emerald-50 border border-emerald-300 text-emerald-700 font-label-md text-label-md rounded-lg flex items-center gap-2 hover:bg-emerald-100 transition-colors shadow-sm"
+              title="Restore hidden transaction history in Admin view"
+            >
+              <span className="material-symbols-outlined text-[18px]">visibility</span>
+              Show History
+            </button>
+          ) : (
+            <button 
+              onClick={() => setShowClearConfirmModal(true)}
+              className="px-4 py-2 bg-white border border-[#d3daea] text-[#151c27] font-label-md text-label-md rounded-lg flex items-center gap-2 hover:bg-red-50 hover:text-red-700 hover:border-red-300 transition-colors shadow-sm"
+              title="Clear transaction history display from this Admin view"
+            >
+              <span className="material-symbols-outlined text-[18px]">history_toggle_off</span>
+              Clear History
+            </button>
+          )}
           <button 
             onClick={() => addToast("CSV export placeholder", "info")}
             className="px-4 py-2 bg-white border border-[#d3daea] text-[#151c27] font-label-md text-label-md rounded-lg flex items-center gap-2 hover:bg-[#f0f3ff] transition-colors shadow-sm"
@@ -389,6 +441,64 @@ export const Wallet = () => {
               to it, so removing this leaves no capability behind. */}
         </div>
       </div>
+
+      {/* Clear History Confirmation Modal */}
+      {showClearConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="p-2.5 bg-amber-50 text-amber-600 rounded-xl border border-amber-200">
+                <span className="material-symbols-outlined text-2xl">visibility_off</span>
+              </div>
+              <div className="flex-1">
+                <h3 className="font-headline-sm text-base font-bold text-slate-900">
+                  Clear Transaction Display History?
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Admin Dashboard UI display filter
+                </p>
+              </div>
+              <button 
+                onClick={() => setShowClearConfirmModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <span className="material-symbols-outlined text-xl">close</span>
+              </button>
+            </div>
+
+            <div className="bg-amber-50/70 border border-amber-200/80 rounded-lg p-3.5 mb-5 text-xs text-amber-900 space-y-2">
+              <p className="font-semibold flex items-center gap-1.5 text-amber-800">
+                <span className="material-symbols-outlined text-base">info</span>
+                Display-Only Action:
+              </p>
+              <ul className="list-disc pl-5 space-y-1 text-[11px] text-amber-800/90 leading-relaxed">
+                <li>This will <strong>ONLY</strong> clear/hide the transaction history from your Admin Dashboard display.</li>
+                <li>It will <strong>NOT</strong> delete or modify any Firestore database documents.</li>
+                <li>It will <strong>NOT</strong> change customer wallet balances.</li>
+                <li>It will <strong>NOT</strong> affect customer wallet history in the Customer App.</li>
+                <li>It will <strong>NOT</strong> affect wallet refunds, debits, credits, or financial accounting/audit records.</li>
+                <li>You can restore the display at any time by clicking <strong>Show History</strong>.</li>
+              </ul>
+            </div>
+
+            <div className="flex justify-end gap-2.5">
+              <button
+                onClick={() => setShowClearConfirmModal(false)}
+                className="px-4 py-2 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleClearHistory}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
+              >
+                <span className="material-symbols-outlined text-sm">visibility_off</span>
+                Clear Display History
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Credit Wallet Modal */}
       {showCreditModal && (
@@ -617,19 +727,60 @@ export const Wallet = () => {
             ))}
           </div>
           
-          <div className="relative">
-            <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[#555f6f]/60 text-sm">search</span>
-            <input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-8 pr-3 py-1.5 border border-[#d3daea] rounded-lg text-xs font-body-sm w-48 focus:outline-none focus:border-[#10b981]"
-              placeholder="Search transactions..."
-              type="text"
-            />
+          <div className="flex items-center gap-3">
+            {isHistoryHidden ? (
+              <button
+                onClick={handleRestoreHistory}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-300 hover:bg-emerald-100 flex items-center gap-1.5 transition-colors"
+                title="Restore hidden transaction history"
+              >
+                <span className="material-symbols-outlined text-sm">visibility</span>
+                Show History
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowClearConfirmModal(true)}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white text-slate-600 border border-slate-300 hover:bg-red-50 hover:text-red-700 hover:border-red-300 flex items-center gap-1.5 transition-colors"
+                title="Hide transaction history from display"
+              >
+                <span className="material-symbols-outlined text-sm">visibility_off</span>
+                Clear History
+              </button>
+            )}
+
+            <div className="relative">
+              <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[#555f6f]/60 text-sm">search</span>
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 pr-3 py-1.5 border border-[#d3daea] rounded-lg text-xs font-body-sm w-48 focus:outline-none focus:border-[#10b981]"
+                placeholder="Search transactions..."
+                type="text"
+                disabled={isHistoryHidden}
+              />
+            </div>
           </div>
         </div>
 
-        {filteredTxns.length === 0 ? (
+        {isHistoryHidden ? (
+          <div className="p-12 text-center bg-slate-50/60 rounded-b-xl border-t border-[#dce2f3]/50">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-slate-100 text-slate-500 mb-3">
+              <span className="material-symbols-outlined text-3xl">visibility_off</span>
+            </div>
+            <h4 className="text-base font-bold text-slate-800 mb-1">Transaction History Display Hidden</h4>
+            <p className="text-xs text-slate-500 max-w-lg mx-auto mb-4 leading-relaxed">
+              Transaction history is currently hidden from this Admin Dashboard view only.
+              All Firestore database records, customer wallet balances, refunds, and financial audit trails remain completely untouched, active, and secure.
+            </p>
+            <button
+              onClick={handleRestoreHistory}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-label-md text-xs rounded-lg inline-flex items-center gap-2 transition-colors shadow-sm"
+            >
+              <span className="material-symbols-outlined text-base">visibility</span>
+              Show / Restore History
+            </button>
+          </div>
+        ) : filteredTxns.length === 0 ? (
           <div className="p-8">
             <EmptyState
               icon="account_balance_wallet"
