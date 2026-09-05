@@ -177,6 +177,13 @@ export const MenuItems = () => {
     const file = e.target.files[0];
     if (!file) return;
 
+    const MAX_ITEM_IMAGE_BYTES = 5 * 1024 * 1024;
+    if (file.size > MAX_ITEM_IMAGE_BYTES) {
+      addToast("Item image must be 5 MB or smaller.", "error");
+      e.target.value = "";
+      return;
+    }
+
     setUploading(true);
     try {
       const url = await uploadFile(file, `menuItems/${Date.now()}_${file.name}`);

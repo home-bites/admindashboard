@@ -109,6 +109,14 @@ export const uploadFile = async (file, path, onProgress = null) => {
   try {
     const compressed = await compressImage(file);
 
+    // Hard client guard enforcing the 5 MB Storage policy before upload begins
+    const MAX_STORAGE_BYTES = 5 * 1024 * 1024;
+    if (compressed && compressed.size > MAX_STORAGE_BYTES) {
+      throw new Error(
+        `File size (${(compressed.size / 1024 / 1024).toFixed(1)} MB) exceeds the 5 MB limit. Pick a smaller file or compress it first.`
+      );
+    }
+
     if (isFirebaseConfigured && storage) {
       const storageRef = ref(storage, path);
 
