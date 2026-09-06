@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { httpsCallable } from "firebase/functions";
+import { functions } from "../firebase/firebaseConfig";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
 import { uploadFile } from "../firebase/storage";
@@ -90,6 +91,8 @@ export default function PushCampaigns() {
   const [sendMode, setSendMode] = useState("now"); // 'now' | 'schedule'
   const [scheduledAt, setScheduledAt] = useState("");
   const [overrideQuietHours, setOverrideQuietHours] = useState(false);
+  const [showClearModal, setShowClearModal] = useState(false);
+  const [clearingHistory, setClearingHistory] = useState(false);
 
   // Clock & Quiet Hours calculation (IST = UTC + 5:30)
   const [currentIst, setCurrentIst] = useState({ timeStr: "", isQuiet: false, hour: 12 });
@@ -140,38 +143,38 @@ export default function PushCampaigns() {
   };
 
   // Fetch campaigns
-  const fetchCampaigns = async (silent = true) => {
+  const fetchCampaigns = async (silent = false) => {
     setLoading(true);
-    // 1. Immediately hydrate from local storage
+    // 1. Immediately hydrate from local storage for fast UI paint
     const local = loadLocalCampaigns();
     setCampaigns(local);
 
-    // 2. Only query Cloud Function callable when explicitly requested (e.g. Refresh click)
-    // to prevent unwanted CORS preflight errors in console while functions are pending deployment.
-    if (!silent) {
-      try {
-        const fn = httpsCallable(getFunctions(), "listEngagementCampaigns");
-        const res = await fn();
-        if (res.data && res.data.campaigns) {
-          const remote = res.data.campaigns;
-          const merged = [...remote];
-          for (const loc of local) {
-            if (!remote.some((r) => r.id === loc.id)) {
-              merged.push(loc);
-            }
+    // 2. Query Cloud Function callable to sync real remote campaign records and live stats
+    try {
+      const fn = httpsCallable(functions, "listEngagementCampaigns");
+      const res = await fn();
+      if (res.data && res.data.campaigns) {
+        const remote = res.data.campaigns;
+        const merged = [...remote];
+        for (const loc of local) {
+          if (!remote.some((r) => r.id === loc.id)) {
+            merged.push(loc);
           }
-          setCampaigns(merged);
-          localStorage.setItem(LOCAL_CAMPAIGNS_KEY, JSON.stringify(merged));
         }
-      } catch (err) {
-        addToast("Cloud Functions are pending deployment. Displaying local campaigns.", "info");
+        setCampaigns(merged);
+        localStorage.setItem(LOCAL_CAMPAIGNS_KEY, JSON.stringify(merged));
       }
+    } catch (err) {
+      if (!silent) {
+        console.warn("Could not sync remote campaigns:", err);
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   useEffect(() => {
-    // Hydrate locally on mount without firing remote preflights
+    // Hydrate locally and sync remote campaigns on mount
     fetchCampaigns(true);
   }, []);
 
@@ -271,19 +274,35 @@ export default function PushCampaigns() {
       imageUrl: imageUrl.trim() || null,
       sendNow,
       overrideQuietHours: overrideQuietHours || (sendNow && currentIst.isQuiet),
+      overrideCooldown: true, // Explicit admin trigger overrides 18-hour marketing cooldown
       scheduledAt: !sendNow && sendMode === "schedule" && scheduledAt ? new Date(scheduledAt).getTime() : null,
     };
 
     try {
-      const fn = httpsCallable(getFunctions(), "createEngagementCampaign");
+      const fn = httpsCallable(functions, "createEngagementCampaign");
       const res = await fn(payload);
       if (res.data?.ok) {
-        addToast(
-          sendNow
-            ? `Push sent to eligible recipients (${res.data.execution?.stats?.sent || 0} delivered)`
-            : (payload.scheduledAt ? "Campaign scheduled successfully." : "Campaign saved successfully."),
-          "success"
-        );
+        const sent = res.data.execution?.stats?.sent || 0;
+        const suppressed = res.data.execution?.stats?.suppressed || 0;
+        const reasons = res.data.execution?.stats?.suppressedReasons || {};
+        if (sendNow) {
+          if (sent > 0) {
+            addToast(`Push delivered to ${sent} eligible customer${sent > 1 ? "s" : ""}!`, "success");
+          } else {
+            const reasonStr = [
+              reasons.cooldown ? `${reasons.cooldown} in cooldown` : null,
+              reasons.missingToken ? `${reasons.missingToken} no token` : null,
+              reasons.quietHours ? "quiet hours" : null,
+              reasons.activeOrder ? `${reasons.activeOrder} active orders` : null,
+            ].filter(Boolean).join(", ");
+            addToast(
+              `Push campaign created, but 0 delivered (${suppressed} suppressed${reasonStr ? `: ${reasonStr}` : ""}).`,
+              "warning"
+            );
+          }
+        } else {
+          addToast(payload.scheduledAt ? "Campaign scheduled successfully." : "Campaign saved successfully.", "success");
+        }
         fetchCampaigns(false);
       } else {
         throw new Error(res.data?.execution?.error || "Failed to process campaign");
@@ -341,7 +360,7 @@ export default function PushCampaigns() {
     try {
       if (isLocal) {
         // Local draft being published to production Cloud Functions
-        const fn = httpsCallable(getFunctions(), "createEngagementCampaign");
+        const fn = httpsCallable(functions, "createEngagementCampaign");
         const campObj = typeof campaign === "object" ? campaign : loadLocalCampaigns().find((c) => c.id === campaignId);
         if (!campObj) throw new Error("Campaign data not found");
         const res = await fn({
@@ -355,21 +374,34 @@ export default function PushCampaigns() {
           imageUrl: campObj.imageUrl || null,
           sendNow: true,
           overrideQuietHours: true,
+          overrideCooldown: true,
         });
         if (res.data?.ok) {
           const existing = loadLocalCampaigns().filter((c) => c.id !== campaignId);
           localStorage.setItem(LOCAL_CAMPAIGNS_KEY, JSON.stringify(existing));
-          addToast(`Delivered to ${res.data.execution?.stats?.sent || 0} customers.`, "success");
+          const sent = res.data.execution?.stats?.sent || 0;
+          const suppressed = res.data.execution?.stats?.suppressed || 0;
+          if (sent > 0) {
+            addToast(`Delivered to ${sent} customer${sent > 1 ? "s" : ""}.`, "success");
+          } else {
+            addToast(`Completed with 0 deliveries (${suppressed} suppressed).`, "warning");
+          }
           fetchCampaigns(false);
           return;
         } else {
           throw new Error(res.data?.execution?.error || "Send failed");
         }
       } else {
-        const fn = httpsCallable(getFunctions(), "sendEngagementCampaign");
-        const res = await fn({ campaignId, overrideQuietHours: true });
+        const fn = httpsCallable(functions, "sendEngagementCampaign");
+        const res = await fn({ campaignId, overrideQuietHours: true, overrideCooldown: true });
         if (res.data?.ok) {
-          addToast(`Delivered to ${res.data.execution?.stats?.sent || 0} customers.`, "success");
+          const sent = res.data.execution?.stats?.sent || 0;
+          const suppressed = res.data.execution?.stats?.suppressed || 0;
+          if (sent > 0) {
+            addToast(`Delivered to ${sent} customer${sent > 1 ? "s" : ""}.`, "success");
+          } else {
+            addToast(`Completed with 0 deliveries (${suppressed} suppressed).`, "warning");
+          }
           fetchCampaigns(false);
         } else {
           throw new Error(res.data?.execution?.error || "Send failed");
@@ -388,12 +420,32 @@ export default function PushCampaigns() {
     setCampaigns(updated);
 
     try {
-      const fn = httpsCallable(getFunctions(), "cancelScheduledCampaign");
+      const fn = httpsCallable(functions, "cancelScheduledCampaign");
       await fn({ campaignId });
     } catch {
       // Ignored if backend functions are pending deployment
     }
     addToast("Campaign marked as cancelled.", "info");
+  };
+
+  const handleClearNotificationHistory = async () => {
+    setClearingHistory(true);
+    try {
+      const fn = httpsCallable(functions, "clearNotificationHistory");
+      const res = await fn();
+      if (res.data?.ok) {
+        addToast(`Notification history cleared (${res.data.deletedCount || 0} records removed).`, "success");
+        setShowClearModal(false);
+        await fetchCampaigns(false);
+      } else {
+        addToast(res.data?.message || "Failed to clear notification history.", "error");
+      }
+    } catch (err) {
+      console.error("Clear notification history error:", err);
+      addToast(err.message || "Failed to clear notification history.", "error");
+    } finally {
+      setClearingHistory(false);
+    }
   };
 
   return (
@@ -829,13 +881,23 @@ export default function PushCampaigns() {
             <h2 className="font-black text-lg text-slate-900">Campaign History & Delivery Analytics</h2>
             <p className="text-xs font-medium text-slate-500">Track sent, scheduled, and suppressed push notifications</p>
           </div>
-          <button
-            onClick={() => fetchCampaigns(false)}
-            className="px-3.5 py-1.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
-          >
-            <span className="material-symbols-outlined text-sm">refresh</span>
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowClearModal(true)}
+              className="px-3.5 py-1.5 rounded-xl border border-rose-200 text-xs font-bold text-rose-700 hover:bg-rose-50 flex items-center gap-1.5 transition shadow-sm"
+            >
+              <span className="material-symbols-outlined text-sm">delete_sweep</span>
+              Clear Notification History
+            </button>
+            <button
+              onClick={() => fetchCampaigns(false)}
+              className="px-3.5 py-1.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 transition"
+            >
+              <span className="material-symbols-outlined text-sm">refresh</span>
+              Refresh
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -943,6 +1005,51 @@ export default function PushCampaigns() {
           </table>
         </div>
       </div>
+
+      {/* Clear Notification History Confirmation Modal */}
+      {showClearModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center">
+                <span className="material-symbols-outlined text-2xl">warning</span>
+              </div>
+              <h3 className="font-black text-lg text-slate-900">Clear Notification History?</h3>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed font-medium">
+              Clear all notification history? This removes notification records from the Admin notification history view. Campaign analytics and configuration will remain.
+            </p>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                disabled={clearingHistory}
+                onClick={() => setShowClearModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={clearingHistory}
+                onClick={handleClearNotificationHistory}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm disabled:opacity-50"
+              >
+                {clearingHistory ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                    <span>Clearing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-sm">delete_sweep</span>
+                    <span>Clear History</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

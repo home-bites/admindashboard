@@ -120,8 +120,27 @@ export function paymentStateOf(order) {
   if (String(order.paymentStatus || "").toLowerCase() === "refunded") return PAYMENT.REFUNDED;
   if (needsRefund(order)) return PAYMENT.REFUND_REQUIRED;
   if (isPaymentFailedOrder(order)) return PAYMENT.FAILED;
-  if (isSettledOrder(order)) return PAYMENT.PAID;
+
+  const statusStr = String(order.paymentStatus || "").toLowerCase();
+  const orderStage = String(order.status || "").toLowerCase().replace(/[\s_]/g, "");
+  const method = String(order.paymentMethod || "").toUpperCase();
+
+  if (statusStr === "paid") return PAYMENT.PAID;
+  if (method === "WALLET") return PAYMENT.PAID;
+  if (method === "COD" || method === "CASH") {
+    if (orderStage === "delivered" || orderStage === "completed") return PAYMENT.PAID;
+    return PAYMENT.PENDING;
+  }
   return PAYMENT.PENDING;
+}
+
+export function labelForPayment(order) {
+  const state = paymentStateOf(order);
+  const method = String(order?.paymentMethod || "").toUpperCase();
+  if ((method === "COD" || method === "CASH") && state === PAYMENT.PENDING) {
+    return "Pay on delivery (unpaid)";
+  }
+  return PAYMENT_LABEL[state] || "Pending";
 }
 
 /**
@@ -130,9 +149,13 @@ export function paymentStateOf(order) {
  * A cancelled unpaid order never will — it is abandoned, not outstanding —
  * so it is excluded, which is what stops the chase queue filling with rows
  * nobody can action.
+ * COD orders are also excluded from the chase queue as payment is due at delivery.
  */
-export const isOutstanding = (order) =>
-  paymentStateOf(order) === PAYMENT.PENDING && !isDeadOrder(order);
+export const isOutstanding = (order) => {
+  const method = String(order?.paymentMethod || "").toUpperCase();
+  if (method === "COD" || method === "CASH") return false;
+  return paymentStateOf(order) === PAYMENT.PENDING && !isDeadOrder(order);
+};
 
 /* ══════════════════════════════════════════════════════════════════════════
  * Order type
@@ -292,7 +315,7 @@ export const orNothing = (v) => {
   if (!s) return DASH;
   // The order normaliser writes these when a field is genuinely absent;
   // rendering the sentinel text verbatim would present it as a customer name.
-  if (s === "Not available" || s === "Not assigned") return DASH;
+  if (s === "Not available" || s === "Not assigned" || s.toLowerCase() === "n/a") return DASH;
   return s;
 };
 

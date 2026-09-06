@@ -18,7 +18,7 @@ import OrdersToolbar from "../components/orders/OrdersToolbar";
 import OrderRow from "../components/orders/OrderRow";
 import OrderDetailsDrawer from "../components/orders/OrderDetailsDrawer";
 import ErrorState from "../components/ErrorState";
-import { printKOT, printInvoice } from "../lib/printing";
+import { printKOT, printInvoice, getNutrientLines } from "../lib/printing";
 import {
   STATUS_TABS, PAYMENT, paymentStateOf, isOutstanding,
   orderTypeOf, ORDER_TYPE_LABEL,
@@ -1426,7 +1426,7 @@ export const Orders = () => {
 
   const handleCardPrint = (e, order) => {
     e.stopPropagation();
-    reportPrint(printKOT(order, { typeLabel: ORDER_TYPE_LABEL[orderTypeOf(order)] }));
+    reportPrint(printKOT(order, { typeLabel: ORDER_TYPE_LABEL[orderTypeOf(order)], menuItems }));
   };
 
   const getOrderCookingInstructions = (order) => {
@@ -2061,7 +2061,7 @@ export const Orders = () => {
                             Details
                           </button>
                           <button
-                            onClick={() => reportPrint(printKOT(o, { typeLabel: ORDER_TYPE_LABEL[orderTypeOf(o)] }))}
+                            onClick={() => reportPrint(printKOT(o, { typeLabel: ORDER_TYPE_LABEL[orderTypeOf(o)], menuItems }))}
                             className="px-2.5 py-1 text-[11px] font-bold bg-[#10b981] hover:bg-[#059669] text-white rounded-lg transition-colors shadow-xs"
                           >
                             Print
@@ -2369,6 +2369,19 @@ export const Orders = () => {
                                   Add-ons: {item.selectedAddons.join(", ")}
                                 </div>
                               )}
+
+                              {/* Nutrition info (Calories, Protein, Carbs, Fat) */}
+                              {(() => {
+                                const nutrients = getNutrientLines(item, menuItems);
+                                if (nutrients.length === 0) return null;
+                                return (
+                                  <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-emerald-600 font-bold mt-0.5">
+                                    {nutrients.map((n, idx) => (
+                                      <span key={idx}>{n}</span>
+                                    ))}
+                                  </div>
+                                );
+                              })()}
                               
                               {/* Item Level Instruction notes */}
                               {item.notes && (
@@ -2432,7 +2445,9 @@ export const Orders = () => {
                       Delivery Location
                     </span>
                     <div className="text-slate-700 font-semibold leading-relaxed text-xs">
-                      {selectedOrder.address || "Counter Pickup"}
+                      {(selectedOrder.address && selectedOrder.address !== "Not available" && selectedOrder.address !== "N/A")
+                        ? selectedOrder.address
+                        : (selectedOrder.deliveryAddress?.addressLine || (isTakeaway ? "Counter Pickup" : "Not available"))}
                     </div>
                     
                     {selectedOrder.deliveryAddress && selectedOrder.deliveryAddress.latitude && (
@@ -2653,6 +2668,17 @@ export const Orders = () => {
                                 Add-ons: {item.selectedAddons.join(", ")}
                               </div>
                             )}
+                            {(() => {
+                              const nutrients = getNutrientLines(item, menuItems);
+                              if (nutrients.length === 0) return null;
+                              return (
+                                <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] text-emerald-700 font-bold pl-7 mt-0.5">
+                                  {nutrients.map((n, idx) => (
+                                    <span key={idx}>{n}</span>
+                                  ))}
+                                </div>
+                              );
+                            })()}
                             {item.notes && (
                               <div className="text-[11px] text-rose-700 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded font-bold ml-7 mt-1.5 w-fit">
                                 NOTE: "{item.notes}"
@@ -2691,7 +2717,7 @@ export const Orders = () => {
                   {/* Print Button inside KOT tab */}
                   <div className="no-print pt-4 border-t border-dashed border-slate-200 mt-2">
                     <button
-                      onClick={() => reportPrint(printKOT(selectedOrder, { typeLabel: ORDER_TYPE_LABEL[orderTypeOf(selectedOrder)] }))}
+                      onClick={() => reportPrint(printKOT(selectedOrder, { typeLabel: ORDER_TYPE_LABEL[orderTypeOf(selectedOrder)], menuItems }))}
                       className="w-full bg-slate-800 hover:bg-slate-900 text-white py-2.5 rounded-lg font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm"
                     >
                       <span className="material-symbols-outlined text-[16px]">print</span>

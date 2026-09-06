@@ -86,11 +86,29 @@ export const parseOrderDocDate = (val) => {
   return new Date(0);
 };
 
-const formatAddress = (addr) => {
-  if (!addr) return "N/A";
-  if (typeof addr === "string") return addr;
-  const parts = [addr.flatNo, addr.area, addr.landmark, addr.city, addr.pinCode].filter(Boolean);
-  return parts.length > 0 ? parts.join(", ") : "N/A";
+export const formatAddress = (addr) => {
+  if (!addr) return "Not available";
+  if (typeof addr === "string") {
+    const s = addr.trim();
+    return s && s.toLowerCase() !== "n/a" ? s : "Not available";
+  }
+  if (addr.addressLine && String(addr.addressLine).trim()) {
+    const line = String(addr.addressLine).trim();
+    if (addr.landmark && !line.toLowerCase().includes(String(addr.landmark).toLowerCase())) {
+      return `${line} (Near ${addr.landmark})`;
+    }
+    return line;
+  }
+  if (addr.address && String(addr.address).trim()) return String(addr.address).trim();
+  if (addr.formattedAddress && String(addr.formattedAddress).trim()) return String(addr.formattedAddress).trim();
+  const parts = [
+    addr.houseNumber || addr.flatNo,
+    addr.street || addr.area,
+    addr.landmark ? `Near ${addr.landmark}` : null,
+    addr.city,
+    addr.pinCode || addr.pincode
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(", ") : "Not available";
 };
 
 /**

@@ -6,6 +6,7 @@ import { getMessaging } from "firebase/messaging";
 import { getRemoteConfig } from "firebase/remote-config";
 import { getAnalytics } from "firebase/analytics";
 import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
+import { getFunctions } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyB3L_bSiYBsJ8vG5Fg0Xi7-so6M0XAmkew",
@@ -32,11 +33,13 @@ let messaging = null;
 let remoteConfig = null;
 let appCheck = null;
 let crashlytics = null; 
+let functions = null;
 
 if (isFirebaseConfigured) {
   try {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
     auth = getAuth(app);
+    functions = getFunctions(app, "us-central1");
 
     // Firestore streams live updates over a long-lived WebChannel connection.
     // Chrome opens that over QUIC when it can, and some networks — corporate
@@ -131,5 +134,6 @@ export {
   remoteConfig,
   appCheck,
   crashlytics,
+  functions,
   isFirebaseConfigured
 };

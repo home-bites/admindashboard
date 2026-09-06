@@ -1,11 +1,11 @@
 import React, { useEffect, useRef } from "react";
 import { STAGE, stageOf, planTransition } from "../../lib/orderStages";
 import {
-  labelForOrder, paymentStateOf, PAYMENT_LABEL, toneForStage, toneForPayment,
+  labelForOrder, paymentStateOf, labelForPayment, PAYMENT_LABEL, toneForStage, toneForPayment,
   TONE, orderTypeOf, ORDER_TYPE_LABEL, orNothing, money, DASH, reviewFlagsOf,
 } from "../../lib/orderPresentation";
 import { buildTimeline, formatStepTime } from "../../lib/orderTimeline";
-import { printKOT, printInvoice, kotNumber } from "../../lib/printing";
+import { printKOT, printInvoice, kotNumber, getNutrientLines } from "../../lib/printing";
 import AssetImage from "../AssetImage";
 
 /**
@@ -148,7 +148,7 @@ export const OrderDetailsDrawer = ({
                   {labelForOrder(order)}
                 </span>
                 <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${TONE[toneForPayment(payment)]}`}>
-                  {PAYMENT_LABEL[payment]}
+                  {labelForPayment(order)}
                 </span>
               </div>
               <p className="mt-1 truncate text-xs text-slate-500">
@@ -169,14 +169,14 @@ export const OrderDetailsDrawer = ({
 
           <div className="mt-3 flex flex-wrap gap-2">
             <button
-              onClick={() => report(printKOT(order, { typeLabel: ORDER_TYPE_LABEL[type] }))}
+              onClick={() => report(printKOT(order, { typeLabel: ORDER_TYPE_LABEL[type], menuItems }))}
               className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white outline-none transition-colors hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-slate-400"
             >
               <span className="material-symbols-outlined text-[15px]">receipt_long</span>
               Print KOT
             </button>
             <button
-              onClick={() => report(printInvoice(order, { typeLabel: ORDER_TYPE_LABEL[type] }))}
+              onClick={() => report(printInvoice(order, { typeLabel: ORDER_TYPE_LABEL[type], menuItems }))}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 outline-none transition-colors hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-slate-400"
             >
               <span className="material-symbols-outlined text-[15px]">print</span>
@@ -264,6 +264,17 @@ export const OrderDetailsDrawer = ({
                         {addons.length > 0 && (
                           <p className="text-[11px] text-slate-500">+ {addons.join(", ")}</p>
                         )}
+                        {(() => {
+                          const nutrients = getNutrientLines(item, menuItems);
+                          if (nutrients.length === 0) return null;
+                          return (
+                            <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] font-semibold text-emerald-600 mt-0.5">
+                              {nutrients.map((n, idx) => (
+                                <span key={idx}>{n}</span>
+                              ))}
+                            </div>
+                          );
+                        })()}
                         {note && (
                           <p className="mt-1 rounded border-l-2 border-amber-400 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800">
                             {note}
@@ -352,6 +363,44 @@ export const OrderDetailsDrawer = ({
 
           {/* Delivery */}
           <Section title="Delivery">
+            <Field
+              label="Delivery Type"
+              value={ORDER_TYPE_LABEL[type] || (type === "pickup" ? "Pickup" : "Home Delivery")}
+            />
+            {type !== "pickup" && (
+              <>
+                <Field
+                  label="Address"
+                  value={
+                    (order.address && order.address !== "Not available" && order.address !== "N/A")
+                      ? order.address
+                      : (order.deliveryAddress?.addressLine || DASH)
+                  }
+                />
+                {order.deliveryAddress?.landmark && (
+                  <Field label="Landmark" value={order.deliveryAddress.landmark} />
+                )}
+                {order.deliveryAddress?.latitude && order.deliveryAddress?.longitude && (
+                  <div className="pt-1 text-right">
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${order.deliveryAddress.latitude},${order.deliveryAddress.longitude}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 hover:text-emerald-700 hover:underline"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">map</span>
+                      View on Google Maps
+                    </a>
+                  </div>
+                )}
+                {(order.deliveryInstructions || order.note) && (
+                  <Field
+                    label="Instructions"
+                    value={order.deliveryInstructions || order.note}
+                  />
+                )}
+              </>
+            )}
             <Field label="Rider" value={orNothing(order.assignedPartnerName || order.rider)} />
             {order.verificationCode && stage !== STAGE.COMPLETED && (
               <Field label="Delivery OTP" value={order.verificationCode} mono />

@@ -331,6 +331,14 @@ export const Wallet = () => {
     }
 
     setIsCrediting(true);
+    // One key per credit intent. If the SDK or the network delivers this same
+    // request twice, both carry this key and the Cloud Function credits once;
+    // a manual retry after an error is a genuinely new intent and gets a new
+    // key (and is already prevented mid-flight by `isCrediting`).
+    const idempotencyKey =
+      (typeof crypto !== "undefined" && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `credit_${creditTarget.id}_${amt}_${Date.now()}`;
     try {
       const functions = getFunctions(app);
       const creditFn = httpsCallable(functions, "adminCreditCustomerWallet");
@@ -341,6 +349,7 @@ export const Wallet = () => {
         phone: creditTarget.phone || "",
         amount: amt,
         note: creditForm.note,
+        idempotencyKey,
       });
       addToast(result.data.message || "Wallet credited successfully.", "success");
       setShowCreditModal(false);

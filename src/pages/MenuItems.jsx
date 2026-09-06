@@ -40,6 +40,9 @@ export const MenuItems = () => {
   const [itemGallery, setItemGallery] = useState([]);
   const [itemIngredients, setItemIngredients] = useState('');
   const [itemNutritionCalories, setItemNutritionCalories] = useState('');
+  const [itemNutritionProtein, setItemNutritionProtein] = useState('');
+  const [itemNutritionCarbs, setItemNutritionCarbs] = useState('');
+  const [itemNutritionFat, setItemNutritionFat] = useState('');
   const [itemAllergens, setItemAllergens] = useState('');
   const [itemCookingTime, setItemCookingTime] = useState('');
   const [itemSpiceLevel, setItemSpiceLevel] = useState('Mild');
@@ -83,6 +86,9 @@ export const MenuItems = () => {
     setItemGallery([]);
     setItemIngredients('');
     setItemNutritionCalories('');
+    setItemNutritionProtein('');
+    setItemNutritionCarbs('');
+    setItemNutritionFat('');
     setItemAllergens('');
     setItemCookingTime('');
     setItemSpiceLevel('');
@@ -159,10 +165,17 @@ export const MenuItems = () => {
     setItemIngredients(Array.isArray(item.ingredients) ? item.ingredients.join(", ") : "");
     setItemAllergens(Array.isArray(item.allergens) ? item.allergens.join(", ") : "");
     setItemBadges(Array.isArray(item.badges) ? item.badges.join(", ") : "");
-    // Blank, not 0, when there is no nutrition recorded. A zero here would be
-    // written back as a real "0 calories" claim about the food.
     setItemNutritionCalories(
       typeof item.nutrition?.calories === "number" ? String(item.nutrition.calories) : ""
+    );
+    setItemNutritionProtein(
+      typeof item.nutrition?.protein === "number" ? String(item.nutrition.protein) : (item.nutrition?.protein ? String(item.nutrition.protein) : "")
+    );
+    setItemNutritionCarbs(
+      typeof item.nutrition?.carbs === "number" ? String(item.nutrition.carbs) : (item.nutrition?.carbs ? String(item.nutrition.carbs) : "")
+    );
+    setItemNutritionFat(
+      typeof item.nutrition?.fat === "number" ? String(item.nutrition.fat) : (item.nutrition?.fat ? String(item.nutrition.fat) : "")
     );
     setItemCookingTime(item.cookingTime || "");
     // Empty rather than "Mild" when unset, for the same reason: defaulting the
@@ -296,9 +309,22 @@ export const MenuItems = () => {
      * that already holds a value.
      */
     const caloriesNum = Number(itemNutritionCalories);
-    const hasCalories = String(itemNutritionCalories).trim() !== ""
-      && Number.isFinite(caloriesNum) && caloriesNum >= 0;
-    if (hasCalories) payload.nutrition = { calories: caloriesNum };
+    const proteinNum = Number(itemNutritionProtein);
+    const carbsNum = Number(itemNutritionCarbs);
+    const fatNum = Number(itemNutritionFat);
+
+    const validCal = String(itemNutritionCalories).trim() !== "" && Number.isFinite(caloriesNum) && caloriesNum >= 0;
+    const validPro = String(itemNutritionProtein).trim() !== "" && Number.isFinite(proteinNum) && proteinNum >= 0;
+    const validCarb = String(itemNutritionCarbs).trim() !== "" && Number.isFinite(carbsNum) && carbsNum >= 0;
+    const validFat = String(itemNutritionFat).trim() !== "" && Number.isFinite(fatNum) && fatNum >= 0;
+
+    const hasCalories = validCal || validPro || validCarb || validFat;
+    if (hasCalories) payload.nutrition = {
+      ...(validCal ? { calories: caloriesNum } : {}),
+      ...(validPro ? { protein: proteinNum } : {}),
+      ...(validCarb ? { carbs: carbsNum } : {}),
+      ...(validFat ? { fat: fatNum } : {}),
+    };
     else if (editItemId) payload.nutrition = deleteField();
 
     if (itemSpiceLevel) payload.spiceLevel = itemSpiceLevel;
@@ -734,11 +760,25 @@ export const MenuItems = () => {
                     <input value={itemAllergens} onChange={(e) => setItemAllergens(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. Peanuts, Dairy" type="text" />
                   </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <div>
-                    <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Nutrition (Calories)</label>
+                    <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Calories (kcal)</label>
                     <input value={itemNutritionCalories} onChange={(e) => setItemNutritionCalories(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. 250" type="number" />
                   </div>
+                  <div>
+                    <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Protein (g)</label>
+                    <input value={itemNutritionProtein} onChange={(e) => setItemNutritionProtein(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. 22" type="number" />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Carbs (g)</label>
+                    <input value={itemNutritionCarbs} onChange={(e) => setItemNutritionCarbs(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. 35" type="number" />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Fat (g)</label>
+                    <input value={itemNutritionFat} onChange={(e) => setItemNutritionFat(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. 10" type="number" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block font-bold text-xs text-slate-500 uppercase tracking-wider mb-1.5">Cooking Time</label>
                     <input value={itemCookingTime} onChange={(e) => setItemCookingTime(e.target.value)} className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded-lg focus:outline-none focus:border-[#10b981] font-semibold text-xs text-slate-700" placeholder="e.g. 20 mins" type="text" />

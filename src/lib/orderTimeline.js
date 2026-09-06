@@ -103,7 +103,7 @@ export function buildTimeline(order) {
      order that died because the money never arrived should say so here rather
      than simply appearing as "Cancelled" with no explanation. */
   if (payment === PAYMENT.PAID) {
-    push("paid", "Payment received", firstDate(order, ["paidAt", "paymentAt", "paymentCapturedAt"]), {
+    push("paid", "Payment received", firstDate(order, ["paidAt", "paymentAt", "paymentCapturedAt", "deliveredAt", "completedAt"]), {
       detail: order.paymentMethod || null,
     });
   } else if (payment === PAYMENT.FAILED) {
@@ -119,10 +119,16 @@ export function buildTimeline(order) {
   } else if (payment === PAYMENT.REFUNDED) {
     push("refunded", "Refunded", firstDate(order, ["refundedAt"]));
   } else if (!cancelled) {
-    push("awaiting_payment", "Awaiting payment", null, {
-      detail: order.paymentMethod || null,
-      tone: "current",
-    });
+    const isCod = String(order.paymentMethod || "").toUpperCase() === "COD" || String(order.paymentMethod || "").toUpperCase() === "CASH";
+    push(
+      isCod ? "cod_pending" : "awaiting_payment",
+      isCod ? "Cash on delivery (unpaid)" : "Awaiting payment",
+      null,
+      {
+        detail: isCod ? "Payment due at delivery" : (order.paymentMethod || null),
+        tone: "current",
+      }
+    );
   }
 
   /* Kitchen flow. Each step is emitted only if the order has reached it. */

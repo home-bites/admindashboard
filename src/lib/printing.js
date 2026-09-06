@@ -104,6 +104,56 @@ const variantOf = (item) => item?.variant || item?.selectedVariant || item?.size
 const noteOf = (item) => item?.notes || item?.specialInstructions || item?.instructions || "";
 
 /**
+ * Extracts and formats all available macronutrient details:
+ * Calories (kcal), Protein (g), Carbs (g), and Fat (g).
+ * Supports both embedded item nutrition and catalogue fallback.
+ */
+export function getNutrientLines(item, menuItems = []) {
+  const nutrition = item?.nutrition && typeof item.nutrition === "object" ? item.nutrition : {};
+  let catalogItem = null;
+  if (Array.isArray(menuItems) && menuItems.length > 0) {
+    catalogItem = menuItems.find(
+      (m) => m.id === (item?.menuItemId || item?.id) || m.name?.toLowerCase().trim() === item?.name?.toLowerCase().trim()
+    );
+  }
+  const catalogNutrition = catalogItem?.nutrition && typeof catalogItem.nutrition === "object" ? catalogItem.nutrition : {};
+
+  const getVal = (keys) => {
+    for (const k of keys) {
+      if (item?.[k] != null && String(item[k]).trim() !== "") return String(item[k]).trim();
+      if (nutrition?.[k] != null && String(nutrition[k]).trim() !== "") return String(nutrition[k]).trim();
+      if (catalogItem?.[k] != null && String(catalogItem[k]).trim() !== "") return String(catalogItem[k]).trim();
+      if (catalogNutrition?.[k] != null && String(catalogNutrition[k]).trim() !== "") return String(catalogNutrition[k]).trim();
+    }
+    return null;
+  };
+
+  const cal = getVal(["calories", "calorie", "energy", "kcal"]);
+  const pro = getVal(["protein", "proteinGrams"]);
+  const carb = getVal(["carbs", "carbohydrates", "carbohydrate"]);
+  const fat = getVal(["fat", "fats"]);
+
+  const lines = [];
+  if (cal) {
+    const val = cal.toLowerCase().endsWith("kcal") ? cal : cal + " kcal";
+    lines.push("Calories: " + val);
+  }
+  if (pro) {
+    const val = pro.toLowerCase().endsWith("g") ? pro : pro + "g";
+    lines.push("Protein: " + val);
+  }
+  if (carb) {
+    const val = carb.toLowerCase().endsWith("g") ? carb : carb + "g";
+    lines.push("Carbs: " + val);
+  }
+  if (fat) {
+    const val = fat.toLowerCase().endsWith("g") ? fat : fat + "g";
+    lines.push("Fat: " + val);
+  }
+  return lines;
+}
+
+/**
  * Preparation priority.
  *
  * Derived, not invented: an order already waiting beyond the kitchen's normal
@@ -227,7 +277,7 @@ const BASE_STYLES = `
 
 /**
  * @param {object} order
- * @param {{typeLabel?: string}} [opts] presentation-layer order type
+ * @param {{typeLabel?: string, menuItems?: Array}} [opts] presentation-layer order type
  * @returns {{ok: boolean, reason?: string}}
  */
 export function printKOT(order, opts = {}) {
@@ -248,6 +298,7 @@ export function printKOT(order, opts = {}) {
       const variant = variantOf(item);
       const addons = addonsOf(item);
       const note = noteOf(item);
+      const nutrients = getNutrientLines(item, opts.menuItems);
       return `
         <div class="item">
           <div class="q">${esc(qtyOf(item))}&times;</div>
@@ -255,6 +306,7 @@ export function printKOT(order, opts = {}) {
             <div class="n">${esc(item.name || "Unnamed item")}</div>
             ${variant ? `<div class="meta">Variant: <strong>${esc(variant)}</strong></div>` : ""}
             ${addons.length ? `<div class="meta addon">+ ${esc(addons.join(", "))}</div>` : ""}
+            ${nutrients.length ? `<div class="meta" style="font-weight:700; color:#047857; margin-top:0.6mm; font-size:11px; line-height:1.35;">${esc(nutrients.join(" · "))}</div>` : ""}
             ${note ? `<div class="note">${esc(note)}</div>` : ""}
           </div>
         </div>`;
@@ -356,6 +408,7 @@ export function printInvoice(order, opts = {}) {
       const unit = Number(item.price || 0);
       const variant = variantOf(item);
       const addons = addonsOf(item);
+      const nutrients = getNutrientLines(item, opts.menuItems);
       return `
         <div class="item">
           <div class="q" style="font-size:14px;">${esc(q)}&times;</div>
@@ -363,6 +416,7 @@ export function printInvoice(order, opts = {}) {
             <div class="n" style="font-size:13px;">${esc(item.name || "Unnamed item")}</div>
             ${variant ? `<div class="meta">${esc(variant)}</div>` : ""}
             ${addons.length ? `<div class="meta">+ ${esc(addons.join(", "))}</div>` : ""}
+            ${nutrients.length ? `<div class="meta" style="font-weight:600; color:#047857; margin-top:0.5mm; font-size:10.5px;">${esc(nutrients.join(" · "))}</div>` : ""}
             <div class="meta">₹${esc(money(unit))} each</div>
           </div>
           <div class="amt">₹${esc(money(unit * q))}</div>
@@ -370,7 +424,10 @@ export function printInvoice(order, opts = {}) {
     })
     .join("");
 
-  const addr = order.address || order.deliveryAddress?.addressLine || "";
+  const rawAddr = (order.address && order.address !== "Not available" && order.address !== "N/A")
+    ? order.address
+    : (order.deliveryAddress?.addressLine || "");
+  const addr = (rawAddr && rawAddr !== "Not available" && rawAddr !== "N/A") ? rawAddr : "";
 
   const body = `
     <div class="brand">
