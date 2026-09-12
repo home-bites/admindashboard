@@ -186,9 +186,10 @@ export const Settings = () => {
           // minimum as 0 — the website's useAppSettings, the app's
           // AppSettings.fallback, and the server — and 0 means "no minimum".
           setMinOrderValue(finiteOr(data.minimumOrderValue, 0));
-          setDeliveryCharge(finiteOr(data.deliveryCharge, 30.0));
+          const loadedDeliveryBase = finiteOr(data.deliveryBaseCharge, finiteOr(data.deliveryCharge, 20.0));
+          setDeliveryCharge(loadedDeliveryBase);
           setRainCharge(finiteOr(data.rainCharge, 0.0));
-          setDeliveryBaseCharge(finiteOr(data.deliveryBaseCharge, 20.0));
+          setDeliveryBaseCharge(finiteOr(data.deliveryBaseCharge, loadedDeliveryBase));
           setDeliveryBaseDistanceKm(finiteOr(data.deliveryBaseDistanceKm, 3.0));
           setDeliveryPerExtraKm(finiteOr(data.deliveryPerExtraKm, 8.0));
 
@@ -793,8 +794,14 @@ export const Settings = () => {
                 <div className="relative">
                   <input
                     type="number"
+                    min="0"
+                    step="0.5"
                     value={deliveryCharge}
-                    onChange={(e) => setDeliveryCharge(numField(e.target.value))}
+                    onChange={(e) => {
+                      const v = numField(e.target.value);
+                      setDeliveryCharge(v);
+                      setDeliveryBaseCharge(v);
+                    }}
                     className="w-full border border-[#dce2f3] rounded-lg pl-8 pr-4 py-2.5 font-body-md text-body-md text-[#151c27] bg-[#f9f9ff] focus:border-[#10b981] outline-none"
                   />
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#555f6f] font-semibold">₹</span>
@@ -826,7 +833,11 @@ export const Settings = () => {
                     min="0"
                     step="0.5"
                     value={deliveryBaseCharge}
-                    onChange={(e) => setDeliveryBaseCharge(numField(e.target.value))}
+                    onChange={(e) => {
+                      const v = numField(e.target.value);
+                      setDeliveryBaseCharge(v);
+                      setDeliveryCharge(v);
+                    }}
                     className="w-full border border-[#dce2f3] rounded-lg pl-8 pr-4 py-2.5 font-body-md text-body-md text-[#151c27] bg-[#f9f9ff] focus:border-[#10b981] outline-none"
                   />
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#555f6f] font-semibold">₹</span>
