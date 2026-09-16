@@ -230,13 +230,13 @@ export const MealPlans = () => {
         durationDays: plan.durationDays || 7,
         price: plan.price || 0,
         discountedPrice: plan.discountedPrice || plan.price || 0,
-        caloriesPerDay: plan.caloriesPerDay || plan.calories || 1800,
-        calories: plan.calories || plan.caloriesPerDay || 1800,
-        protein: plan.protein || 120,
-        carbs: plan.carbs || 180,
-        fats: plan.fats || 45,
-        fiber: plan.fiber || 30,
-        mealsPerDay: plan.mealsPerDay || 3,
+        caloriesPerDay: plan.caloriesPerDay != null && plan.caloriesPerDay !== "" ? plan.caloriesPerDay : (plan.calories != null && plan.calories !== "" ? plan.calories : 0),
+        calories: plan.calories != null && plan.calories !== "" ? plan.calories : (plan.caloriesPerDay != null && plan.caloriesPerDay !== "" ? plan.caloriesPerDay : 0),
+        protein: plan.protein != null && plan.protein !== "" ? plan.protein : 0,
+        carbs: plan.carbs != null && plan.carbs !== "" ? plan.carbs : 0,
+        fats: plan.fats != null && plan.fats !== "" ? plan.fats : 0,
+        fiber: plan.fiber != null && plan.fiber !== "" ? plan.fiber : 0,
+        mealsPerDay: plan.mealsPerDay != null && plan.mealsPerDay !== "" ? plan.mealsPerDay : 3,
         breakfastMenu: plan.breakfastMenu || "",
         lunchMenu: plan.lunchMenu || "",
         dinnerMenu: plan.dinnerMenu || "",
@@ -263,6 +263,26 @@ export const MealPlans = () => {
     e.preventDefault();
     try {
       const cleanedSlots = cleanSlotMeals(formData.slotMeals);
+      const priceNum = parseFloat(formData.price) || 0;
+      const rawDiscounted = formData.discountedPrice !== undefined && formData.discountedPrice !== "" ? parseFloat(formData.discountedPrice) : priceNum;
+      const discountedPriceNum = isNaN(rawDiscounted) ? priceNum : rawDiscounted;
+      const discountText = (priceNum > 0 && discountedPriceNum > 0 && discountedPriceNum < priceNum)
+        ? `${Math.round(((priceNum - discountedPriceNum) / priceNum) * 100)}% OFF`
+        : "";
+
+      const parseFieldInt = (val, fallback = 0) => {
+        if (val === "" || val == null) return fallback;
+        const n = parseInt(val, 10);
+        return isNaN(n) ? fallback : n;
+      };
+
+      const caloriesVal = parseFieldInt(
+        formData.caloriesPerDay !== "" && formData.caloriesPerDay != null
+          ? formData.caloriesPerDay
+          : formData.calories,
+        0
+      );
+
       const payload = {
         ...formData,
         subscriptionType: String(formData.subscriptionType || "diet").toLowerCase(),
@@ -272,16 +292,17 @@ export const MealPlans = () => {
         // Display strings regenerated from the typed rows so the card text and
         // the actual selectable dishes can never disagree.
         ...summariseSlots(cleanedSlots),
-        price: parseFloat(formData.price),
-        discountedPrice: parseFloat(formData.discountedPrice || formData.price),
-        caloriesPerDay: parseInt(formData.caloriesPerDay || formData.calories),
-        calories: parseInt(formData.calories || formData.caloriesPerDay),
-        protein: parseInt(formData.protein),
-        carbs: parseInt(formData.carbs),
-        fats: parseInt(formData.fats),
-        fiber: parseInt(formData.fiber),
-        mealsPerDay: parseInt(formData.mealsPerDay),
-        maxSubscribers: parseInt(formData.maxSubscribers),
+        price: priceNum,
+        discountedPrice: discountedPriceNum,
+        discount: discountText,
+        caloriesPerDay: caloriesVal,
+        calories: caloriesVal,
+        protein: parseFieldInt(formData.protein, 0),
+        carbs: parseFieldInt(formData.carbs, 0),
+        fats: parseFieldInt(formData.fats, 0),
+        fiber: parseFieldInt(formData.fiber, 0),
+        mealsPerDay: parseFieldInt(formData.mealsPerDay, 3),
+        maxSubscribers: parseFieldInt(formData.maxSubscribers, 100),
       };
 
       if (editingPlan) {
@@ -364,6 +385,11 @@ export const MealPlans = () => {
                     <span className={`px-2.5 py-1 text-white text-[10px] font-bold rounded-lg ${plan.foodType === 'Veg' ? 'bg-emerald-600' : plan.foodType === 'Non-Veg' ? 'bg-rose-600' : 'bg-amber-600'}`}>
                       {plan.foodType || 'Veg'}
                     </span>
+                    {plan.discountedPrice > 0 && plan.price > plan.discountedPrice && (
+                      <span className="px-2.5 py-1 bg-amber-500 text-white text-[10px] font-bold rounded-lg">
+                        {Math.round(((plan.price - plan.discountedPrice) / plan.price) * 100)}% OFF
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -377,19 +403,29 @@ export const MealPlans = () => {
                   <div className="grid grid-cols-4 gap-1 p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl text-center">
                     <div>
                       <span className="block text-[8px] font-bold text-slate-400 uppercase">Cals</span>
-                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200">{plan.caloriesPerDay || plan.calories || 1800}</span>
+                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                        {plan.caloriesPerDay != null && plan.caloriesPerDay !== ""
+                          ? plan.caloriesPerDay
+                          : (plan.calories != null && plan.calories !== "" ? plan.calories : 0)}
+                      </span>
                     </div>
                     <div>
                       <span className="block text-[8px] font-bold text-slate-400 uppercase">Protein</span>
-                      <span className="text-xs font-bold text-emerald-600">{plan.protein || 120}g</span>
+                      <span className="text-xs font-bold text-emerald-600">
+                        {(plan.protein != null && plan.protein !== "") ? plan.protein : 0}g
+                      </span>
                     </div>
                     <div>
                       <span className="block text-[8px] font-bold text-slate-400 uppercase">Carbs</span>
-                      <span className="text-xs font-bold text-amber-600">{plan.carbs || 160}g</span>
+                      <span className="text-xs font-bold text-amber-600">
+                        {(plan.carbs != null && plan.carbs !== "") ? plan.carbs : 0}g
+                      </span>
                     </div>
                     <div>
                       <span className="block text-[8px] font-bold text-slate-400 uppercase">Meals</span>
-                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200">{plan.mealsPerDay || 3}/day</span>
+                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                        {(plan.mealsPerDay != null && plan.mealsPerDay !== "") ? plan.mealsPerDay : 3}/day
+                      </span>
                     </div>
                   </div>
 
@@ -404,9 +440,16 @@ export const MealPlans = () => {
 
               <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-900/50">
                 <div>
-                  <span className="text-lg font-black text-slate-900 dark:text-white">₹{plan.discountedPrice || plan.price}</span>
-                  {plan.price > plan.discountedPrice && (
-                    <span className="text-xs text-slate-400 line-through ml-2">₹{plan.price}</span>
+                  <span className="text-lg font-black text-slate-900 dark:text-white">
+                    ₹{plan.discountedPrice > 0 && plan.discountedPrice < plan.price ? plan.discountedPrice : plan.price}
+                  </span>
+                  {plan.discountedPrice > 0 && plan.price > plan.discountedPrice && (
+                    <>
+                      <span className="text-xs text-slate-400 line-through ml-2">₹{plan.price}</span>
+                      <span className="text-xs font-bold text-amber-600 dark:text-amber-400 ml-2">
+                        {Math.round(((plan.price - plan.discountedPrice) / plan.price) * 100)}% OFF
+                      </span>
+                    </>
                   )}
                   <span className="text-[10px] text-slate-400 block">Slot: {plan.deliveryTiming || "07:30 AM - 08:30 AM"}</span>
                 </div>
@@ -572,6 +615,8 @@ export const MealPlans = () => {
                     <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">Calories (kcal)</label>
                     <input
                       type="number"
+                      min="0"
+                      placeholder="0"
                       value={formData.caloriesPerDay}
                       onChange={(e) => setFormData({ ...formData, caloriesPerDay: e.target.value, calories: e.target.value })}
                       className="w-full mt-1 px-2 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
@@ -581,6 +626,8 @@ export const MealPlans = () => {
                     <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">Protein (g)</label>
                     <input
                       type="number"
+                      min="0"
+                      placeholder="0"
                       value={formData.protein}
                       onChange={(e) => setFormData({ ...formData, protein: e.target.value })}
                       className="w-full mt-1 px-2 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
@@ -590,6 +637,8 @@ export const MealPlans = () => {
                     <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">Carbs (g)</label>
                     <input
                       type="number"
+                      min="0"
+                      placeholder="0"
                       value={formData.carbs}
                       onChange={(e) => setFormData({ ...formData, carbs: e.target.value })}
                       className="w-full mt-1 px-2 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
@@ -599,6 +648,8 @@ export const MealPlans = () => {
                     <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">Fats (g)</label>
                     <input
                       type="number"
+                      min="0"
+                      placeholder="0"
                       value={formData.fats}
                       onChange={(e) => setFormData({ ...formData, fats: e.target.value })}
                       className="w-full mt-1 px-2 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
@@ -608,6 +659,8 @@ export const MealPlans = () => {
                     <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">Fiber (g)</label>
                     <input
                       type="number"
+                      min="0"
+                      placeholder="0"
                       value={formData.fiber}
                       onChange={(e) => setFormData({ ...formData, fiber: e.target.value })}
                       className="w-full mt-1 px-2 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
