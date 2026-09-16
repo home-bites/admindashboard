@@ -610,7 +610,7 @@ export const MealPlans = () => {
               {/* Nutritional Information */}
               <div className="space-y-3 pt-2">
                 <h3 className="text-xs font-bold uppercase text-emerald-600 dark:text-emerald-400 tracking-wider">3. Daily Nutritional Summary</h3>
-                <div className="grid grid-cols-5 gap-2">
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                   <div>
                     <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">Calories (kcal)</label>
                     <input
@@ -663,6 +663,17 @@ export const MealPlans = () => {
                       placeholder="0"
                       value={formData.fiber}
                       onChange={(e) => setFormData({ ...formData, fiber: e.target.value })}
+                      className="w-full mt-1 px-2 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">Meals (/day)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="3"
+                      value={formData.mealsPerDay}
+                      onChange={(e) => setFormData({ ...formData, mealsPerDay: e.target.value })}
                       className="w-full mt-1 px-2 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
                     />
                   </div>
@@ -728,7 +739,7 @@ export const MealPlans = () => {
                       <button
                         type="button"
                         key={t.id}
-                        onClick={() => setFormData({ ...formData, coveredSlots: t.slots })}
+                        onClick={() => setFormData({ ...formData, coveredSlots: t.slots, mealsPerDay: t.slots.length })}
                         className={`text-center px-2 py-2 rounded-xl border-2 transition ${
                           active
                             ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20"
