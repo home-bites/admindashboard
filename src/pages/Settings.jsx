@@ -120,6 +120,7 @@ export const Settings = () => {
   
   // Toggles for system
   const [walletEnabled, setWalletEnabled] = useState(true);
+  const [walletMinSpendableBalance, setWalletMinSpendableBalance] = useState(200);
   const [loyaltyEnabled, setLoyaltyEnabled] = useState(true);
   const [loyaltyPointsPerReferral, setLoyaltyPointsPerReferral] = useState(50);
   const [loyaltyPointValueRupees, setLoyaltyPointValueRupees] = useState(1);
@@ -194,6 +195,7 @@ export const Settings = () => {
           setDeliveryPerExtraKm(finiteOr(data.deliveryPerExtraKm, 8.0));
 
           setWalletEnabled(data.walletEnabled !== undefined ? data.walletEnabled : true);
+          setWalletMinSpendableBalance(finiteOr(data.walletMinSpendableBalance, 200));
           setLoyaltyEnabled(data.loyaltyEnabled !== undefined ? data.loyaltyEnabled : true);
           setLoyaltyPointsPerReferral(finiteOr(data.loyaltyPointsPerReferral, 50));
           setLoyaltyPointValueRupees(finiteOr(data.loyaltyPointValueRupees, 1));
@@ -313,6 +315,7 @@ export const Settings = () => {
       deliveryBaseDistanceKm: numField(deliveryBaseDistanceKm, 3),
       deliveryPerExtraKm: numField(deliveryPerExtraKm, 8),
       walletEnabled,
+      walletMinSpendableBalance: numField(walletMinSpendableBalance, 200),
       loyaltyEnabled,
       loyaltyPointsPerReferral: numField(loyaltyPointsPerReferral, 50),
       loyaltyPointValueRupees: numField(loyaltyPointValueRupees, 1),
@@ -992,6 +995,31 @@ export const Settings = () => {
                       <div className="w-9 h-5 bg-[#d3daea] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#10b981]"></div>
                     </label>
                   </div>
+
+                  {walletEnabled && (
+                    <div className="p-3 bg-[#f0fdf4] rounded border border-emerald-100">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#151c27]">
+                          Minimum Wallet Spendable Balance (₹)
+                        </label>
+                        <p className="text-[10px] text-[#555f6f] mb-1.5">
+                          Customers must have at least this wallet balance before they can use their wallet for orders. Defaults to ₹200.
+                        </p>
+                        <div className="flex items-center gap-2 max-w-xs">
+                          <span className="text-xs font-bold text-gray-500">₹</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={walletMinSpendableBalance}
+                            onChange={(e) => setWalletMinSpendableBalance(e.target.value)}
+                            className="w-full p-2 text-xs bg-white border rounded focus:ring-1 focus:ring-emerald-500 outline-none"
+                            placeholder="200"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Loyalty Enabled */}
                   <div className="flex items-center justify-between p-3 bg-[#f9f9ff] rounded border">
