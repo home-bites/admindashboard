@@ -92,17 +92,19 @@ export const CANNED_REPLIES = [
 ];
 
 const mapFirestoreTicketToUi = (ticket) => {
-  const customerName = ticket.customerName || (ticket.userId ? `User #${ticket.userId.substring(0, 6)}` : 'Customer');
-  const customerInitials = customerName.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
+  const customerName = ticket.customerName || (ticket.userId ? `Customer #${ticket.userId.substring(0, 6)}` : 'Customer');
+  const customerInitials = customerName.startsWith('Customer #') || customerName.startsWith('User #')
+    ? 'C'
+    : customerName.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
 
   let timeStr = "Just now";
   if (ticket.createdAt) {
     if (ticket.createdAt.toDate) {
-      timeStr = ticket.createdAt.toDate().toLocaleDateString();
+      timeStr = ticket.createdAt.toDate().toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     } else if (ticket.createdAt.seconds) {
-      timeStr = new Date(ticket.createdAt.seconds * 1000).toLocaleDateString();
+      timeStr = new Date(ticket.createdAt.seconds * 1000).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     } else {
-      timeStr = new Date(ticket.createdAt).toLocaleDateString();
+      timeStr = new Date(ticket.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
   }
 
@@ -138,25 +140,29 @@ const mapFirestoreTicketToUi = (ticket) => {
       }
     }
     messages.push({
-      sender: r.senderName || (r.senderRole === 'Customer' ? 'Customer' : 'Admin'),
-      role: r.senderRole?.toLowerCase() || 'customer',
+      sender: r.senderName || (r.senderRole === 'Customer' ? customerName : 'Support Agent'),
+      role: r.senderRole?.toLowerCase() || (r.senderName === 'System Alert' ? 'system' : 'customer'),
       text: r.message,
       time: msgTime
     });
   });
 
+  const customerMeta = ticket.customerPhone || ticket.userPhone
+    ? `Phone: ${ticket.customerPhone || ticket.userPhone}`
+    : (ticket.orderId ? `Order #${ticket.orderId}` : `App Customer`);
+
   return {
     ...ticket,
     id: ticket.id,
-    title: ticket.subject || ticket.title || "No Subject",
+    title: ticket.subject || ticket.title || "Support Request",
     description: ticket.message || ticket.description || "No Message",
     status: ticket.status || 'Open',
     priority: ticket.priority || 'Medium',
     time: timeStr,
     customerName,
     customerInitials,
-    customerMeta: `User: ${ticket.userId || 'Unknown'}`,
-    orderId: ticket.orderId || 'None',
+    customerMeta,
+    orderId: ticket.orderId && ticket.orderId !== "None" ? ticket.orderId : null,
     assignedTo: ticket.assignedTo || '',
     messages
   };
@@ -244,6 +250,14 @@ export const CustomerSupport = () => {
   ];
 
   const [activeCannedTab, setActiveCannedTab] = useState("all");
+  const [showTemplatesModal, setShowTemplatesModal] = useState(false);
+  const chatEndRef = useRef(null);
+
+  useEffect(() => {
+    if (drawerOpen) {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [drawerOpen, selectedTicket?.messages?.length]);
 
   const fetchTicketsList = async () => {
     try {
@@ -715,36 +729,61 @@ export const CustomerSupport = () => {
 
       {/* Ticket Drawer Panel */}
       <div
-        className={`fixed inset-y-0 right-0 w-[450px] bg-white border-l border-[#dce2f3] shadow-2xl z-50 transform transition-transform duration-300 ease-in-out flex flex-col ${
+        className={`fixed inset-y-0 right-0 w-full sm:w-[580px] md:w-[620px] bg-slate-50 border-l border-slate-200/80 shadow-2xl z-50 transform transition-transform duration-300 ease-in-out flex flex-col ${
           drawerOpen ? "translate-x-0" : "translate-x-full"
         }`}
       >
         {selectedTicket && (
           <>
             {/* Drawer Header */}
-            <div className="px-6 py-4 border-b border-[#dce2f3] flex justify-between items-start bg-white">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-label-sm text-label-sm text-[#10b981] px-2 py-0.5 bg-[#ffdbd0] rounded">
-                    #{selectedTicket.id}
+            <div className="px-6 py-4 bg-white border-b border-slate-200 flex items-center justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <span className="font-mono text-[11px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-200/70">
+                    #{selectedTicket.id?.substring(0, 8)}
                   </span>
                   <span
-                    className={`px-2 py-0.5 font-label-sm text-[10px] rounded-full uppercase tracking-wider ${
+                    className={`px-2.5 py-0.5 text-[10px] font-bold rounded-full uppercase tracking-wider flex items-center gap-1 ${
                       selectedTicket.priority === "High"
-                        ? "bg-[#ffdad6] text-[#93000a]"
-                        : "bg-[#e7eefe] text-[#121c2a]"
+                        ? "bg-rose-50 text-rose-700 border border-rose-200"
+                        : selectedTicket.priority === "Medium"
+                        ? "bg-amber-50 text-amber-700 border border-amber-200"
+                        : "bg-blue-50 text-blue-700 border border-blue-200"
                     }`}
                   >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        selectedTicket.priority === "High"
+                          ? "bg-rose-500"
+                          : selectedTicket.priority === "Medium"
+                          ? "bg-amber-500"
+                          : "bg-blue-500"
+                      }`}
+                    />
                     {selectedTicket.priority} Priority
                   </span>
+                  <span
+                    className={`px-2.5 py-0.5 text-[10px] font-bold rounded-full uppercase tracking-wider ${
+                      selectedTicket.status === "Open"
+                        ? "bg-rose-100 text-rose-800"
+                        : selectedTicket.status === "In Progress"
+                        ? "bg-amber-100 text-amber-800"
+                        : "bg-emerald-100 text-emerald-800"
+                    }`}
+                  >
+                    {selectedTicket.status}
+                  </span>
                 </div>
-                <h2 className="font-headline-md text-[20px] font-semibold text-[#151c27]">{selectedTicket.title}</h2>
+                <h2 className="text-base sm:text-lg font-bold text-slate-900 truncate" title={selectedTicket.title}>
+                  {selectedTicket.title}
+                </h2>
               </div>
-              <div className="flex items-center gap-2">
+
+              <div className="flex items-center gap-2 flex-shrink-0">
                 {selectedTicket.status !== "Resolved" ? (
                   <button
                     onClick={() => handleResolveTicket(selectedTicket)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-[#10b981] hover:bg-[#059669] text-white rounded-lg font-bold text-xs shadow-sm transition"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl font-bold text-xs shadow-sm transition"
                     title="Mark ticket as Resolved and close"
                   >
                     <span className="material-symbols-outlined text-[16px]">check_circle</span>
@@ -753,7 +792,7 @@ export const CustomerSupport = () => {
                 ) : (
                   <button
                     onClick={() => handleReopenTicket(selectedTicket)}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg font-bold text-xs shadow-sm transition"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-xl font-bold text-xs shadow-sm transition"
                     title="Reopen ticket for further assistance"
                   >
                     <span className="material-symbols-outlined text-[16px]">restart_alt</span>
@@ -761,190 +800,304 @@ export const CustomerSupport = () => {
                   </button>
                 )}
                 <button
-                  className="w-8 h-8 rounded-full hover:bg-[#f0f3ff] flex items-center justify-center text-[#555f6f] transition-colors"
+                  className="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-700 transition"
                   onClick={handleCloseDrawer}
                   title="Close Drawer"
                 >
-                  <span className="material-symbols-outlined">close</span>
+                  <span className="material-symbols-outlined text-xl">close</span>
                 </button>
               </div>
             </div>
 
             {/* Customer Context Bar */}
-            <div className="px-6 py-3 border-b border-[#dce2f3] bg-[#f0f3ff] flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-[#d6e0f3] flex items-center justify-center font-bold text-[#596373]">
-                  {selectedTicket.customerInitials}
+            <div className="px-6 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-bold text-xs shadow-2xs flex-shrink-0">
+                  {selectedTicket.customerInitials || "C"}
                 </div>
-                <div>
-                  <h3 className="font-label-md text-label-md text-[#151c27] font-semibold">{selectedTicket.customerName}</h3>
-                  <p className="font-body-sm text-[12px] text-[#555f6f]">{selectedTicket.customerMeta}</p>
+                <div className="min-w-0">
+                  <div className="font-bold text-slate-900 truncate">
+                    {selectedTicket.customerName}
+                  </div>
+                  <div className="text-[11px] text-slate-500 truncate flex items-center gap-1">
+                    <span>{selectedTicket.customerMeta}</span>
+                    {selectedTicket.time && <span>• {selectedTicket.time}</span>}
+                  </div>
                 </div>
               </div>
-              <div className="text-[#10b981] font-semibold text-xs border border-[#10b981]/20 px-3 py-1 rounded bg-white">
-                Order #{selectedTicket.orderId}
-              </div>
+
+              {selectedTicket.orderId && selectedTicket.orderId !== "None" && (
+                <div className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-emerald-200 text-emerald-800 font-bold rounded-lg shadow-2xs text-[11px] flex-shrink-0">
+                  <span className="material-symbols-outlined text-[14px] text-emerald-600">receipt_long</span>
+                  Order #{selectedTicket.orderId}
+                </div>
+              )}
             </div>
 
             {/* Conversation History */}
-            <div className="flex-grow overflow-y-auto p-6 bg-white flex flex-col gap-6">
+            <div className="flex-1 overflow-y-auto p-5 sm:p-6 bg-slate-50/70 space-y-4">
               <div className="flex justify-center">
-                <span className="bg-[#f0f3ff] px-3 py-1 rounded-full font-body-sm text-[11px] text-[#555f6f]">
-                  Ticket opened via App • {selectedTicket.time}
+                <span className="bg-slate-200/60 text-slate-600 px-3 py-1 rounded-full text-[11px] font-medium shadow-2xs">
+                  Ticket opened • {selectedTicket.time}
                 </span>
               </div>
 
-              {selectedTicket.messages?.map((msg, index) => (
-                <div
-                  key={index}
-                  className={`flex gap-3 max-w-[85%] ${msg.role === "admin" ? "ml-auto flex-row-reverse" : ""}`}
-                >
-                  <div
-                    className={`w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-[10px] font-bold mt-1 ${
-                      msg.role === "admin"
-                        ? "bg-[#ffdbd0] text-[#10b981]"
-                        : msg.role === "bot"
-                        ? "bg-[#f0f3ff] text-[#10b981]"
-                        : "bg-[#d6e0f3] text-[#596373]"
-                    }`}
-                  >
-                    {msg.role === "bot" ? (
-                      <span className="material-symbols-outlined text-[16px]">smart_toy</span>
-                    ) : (
-                      msg.sender.split(" ").map((n) => n[0]).join("")
-                    )}
-                  </div>
-                  <div className={`flex flex-col gap-1 ${msg.role === "admin" ? "items-end" : ""}`}>
-                    <div className="flex items-baseline gap-2">
-                      <span className="font-label-md text-sm text-[#151c27] font-semibold">{msg.sender}</span>
-                      <span className="font-body-sm text-[11px] text-[#555f6f]">{msg.time}</span>
+              {selectedTicket.messages?.map((msg, index) => {
+                const isAdmin = msg.role === "admin";
+                const isBot = msg.role === "bot";
+                const isSystem = msg.role === "system" || msg.sender === "System Alert";
+
+                if (isSystem) {
+                  return (
+                    <div key={index} className="flex justify-center my-2">
+                      <div className="px-3.5 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-full text-[11px] font-medium flex items-center gap-1.5 shadow-2xs">
+                        <span className="material-symbols-outlined text-[15px] text-emerald-600">verified</span>
+                        <span>{msg.text}</span>
+                        {msg.time && <span className="text-emerald-500 text-[10px]">• {msg.time}</span>}
+                      </div>
                     </div>
+                  );
+                }
+
+                return (
+                  <div
+                    key={index}
+                    className={`flex items-end gap-2.5 max-w-[85%] ${isAdmin ? "ml-auto flex-row-reverse" : ""}`}
+                  >
                     <div
-                      className={`p-3 rounded-2xl text-body-sm text-[#151c27] border ${
-                        msg.role === "admin"
-                          ? "bg-[#ffdbd0]/30 border-[#ffdbd0] rounded-tr-sm"
-                          : "bg-[#f0f3ff] border-[#dce2f3]/30 rounded-tl-sm"
+                      className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-[10px] font-bold shadow-2xs ${
+                        isAdmin
+                          ? "bg-emerald-600 text-white"
+                          : isBot
+                          ? "bg-indigo-100 text-indigo-700"
+                          : "bg-white text-slate-700 border border-slate-200"
                       }`}
                     >
-                      {msg.text}
+                      {isBot ? (
+                        <span className="material-symbols-outlined text-[14px]">smart_toy</span>
+                      ) : isAdmin ? (
+                        <span className="material-symbols-outlined text-[14px]">support_agent</span>
+                      ) : (
+                        msg.sender.split(" ").map((n) => n[0]).join("").substring(0, 2)
+                      )}
+                    </div>
+
+                    <div className={`flex flex-col gap-1 ${isAdmin ? "items-end" : "items-start"}`}>
+                      <div className="flex items-center gap-1.5 px-1">
+                        <span className="text-[11px] font-semibold text-slate-700">
+                          {isAdmin ? "Admin Support" : msg.sender}
+                        </span>
+                        {msg.time && (
+                          <span className="text-[10px] text-slate-400">{msg.time}</span>
+                        )}
+                      </div>
+                      <div
+                        className={`p-3.5 rounded-2xl text-sm leading-relaxed shadow-xs ${
+                          isAdmin
+                            ? "bg-emerald-600 text-white rounded-br-xs"
+                            : "bg-white text-slate-800 border border-slate-200/90 rounded-bl-xs"
+                        }`}
+                      >
+                        {msg.text}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
+              <div ref={chatEndRef} />
             </div>
 
             {/* Action Area */}
             {selectedTicket.status !== "Resolved" ? (
-              <div className="border-t border-[#dce2f3] bg-[#f9f9ff] p-4 flex flex-col gap-3">
-                {/* Quick Actions Bar with Resolved button */}
-                <div className="flex gap-2 overflow-x-auto pb-1 items-center">
+              <div className="border-t border-slate-200 bg-white p-3 sm:p-4 space-y-3 shadow-lg relative">
+                {/* Compact Action Strip */}
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowTemplatesModal(!showTemplatesModal)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-2xs border ${
+                        showTemplatesModal
+                          ? "bg-emerald-600 text-white border-emerald-600"
+                          : "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200"
+                      }`}
+                      title="Open Pre-designed Canned Replies"
+                    >
+                      <span className="material-symbols-outlined text-[16px] text-amber-500">bolt</span>
+                      <span>Quick Replies</span>
+                      <span className="px-1.5 py-0.2 bg-emerald-200/60 text-emerald-900 text-[10px] rounded-full font-black">
+                        14
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => handleQuickAction("refund")}
+                      className="whitespace-nowrap px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition flex items-center gap-1"
+                      title="Issue Partial Refund for Order"
+                    >
+                      <span className="material-symbols-outlined text-[14px] text-emerald-600">payments</span>
+                      <span>Refund ₹375</span>
+                    </button>
+                    <button
+                      onClick={() => handleQuickAction("redeliver")}
+                      className="whitespace-nowrap px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition flex items-center gap-1"
+                      title="Schedule Redelivery"
+                    >
+                      <span className="material-symbols-outlined text-[14px] text-blue-600">local_shipping</span>
+                      <span>Redeliver</span>
+                    </button>
+                    <button
+                      onClick={() => handleQuickAction("credit")}
+                      className="whitespace-nowrap px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition flex items-center gap-1"
+                      title="Credit Customer Wallet ₹100"
+                    >
+                      <span className="material-symbols-outlined text-[14px] text-amber-600">wallet</span>
+                      <span>Credit ₹100</span>
+                    </button>
+                  </div>
+
                   <button
                     onClick={() => handleResolveTicket(selectedTicket)}
-                    className="whitespace-nowrap px-3 py-1.5 bg-[#ecfdf5] border border-[#10b981] text-[#006c49] hover:bg-[#10b981] hover:text-white rounded-full font-label-sm text-[11px] font-bold transition-all flex items-center gap-1 shadow-sm"
+                    className="whitespace-nowrap px-3 py-1.5 bg-emerald-50 hover:bg-emerald-600 hover:text-white border border-emerald-300 text-emerald-800 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-2xs ml-auto"
+                    title="Mark ticket resolved and notify customer"
                   >
-                    <span className="material-symbols-outlined text-[15px]">check_circle</span> Mark Resolved & Close
-                  </button>
-                  <button
-                    onClick={() => handleQuickAction("refund")}
-                    className="whitespace-nowrap px-3 py-1.5 bg-white border border-[#dce2f3] rounded-full font-label-sm text-[11px] text-[#151c27] hover:border-[#10b981] hover:text-[#10b981] transition-colors flex items-center gap-1 shadow-sm"
-                  >
-                    <span className="material-symbols-outlined text-[14px]">payments</span> Partial Refund (₹375.00)
-                  </button>
-                  <button
-                    onClick={() => handleQuickAction("redeliver")}
-                    className="whitespace-nowrap px-3 py-1.5 bg-white border border-[#dce2f3] rounded-full font-label-sm text-[11px] text-[#151c27] hover:border-[#10b981] hover:text-[#10b981] transition-colors flex items-center gap-1 shadow-sm"
-                  >
-                    <span className="material-symbols-outlined text-[14px]">local_shipping</span> Redeliver Item
-                  </button>
-                  <button
-                    onClick={() => handleQuickAction("credit")}
-                    className="whitespace-nowrap px-3 py-1.5 bg-white border border-[#dce2f3] rounded-full font-label-sm text-[11px] text-[#151c27] hover:border-[#10b981] hover:text-[#10b981] transition-all shadow-sm"
-                  >
-                    Apologize & Credit
+                    <span className="material-symbols-outlined text-[15px]">check_circle</span>
+                    <span>Mark Resolved</span>
                   </button>
                 </div>
 
-                {/* Pre-designed Quick Reply Messages */}
-                <div className="bg-white p-3 rounded-xl border border-[#dce2f3] shadow-xs">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[15px] text-[#10b981]">quickreply</span>
-                      Pre-designed Quick Replies
-                    </span>
-                    <div className="flex gap-1">
-                      {[
-                        { id: "all", label: "All" },
-                        { id: "Payment & Wallet", label: "Payment" },
-                        { id: "Delivery & Delay", label: "Delivery" },
-                        { id: "Order Inquiries", label: "Orders" },
-                        { id: "Closure & Assistance", label: "Closure" },
-                      ].map((tab) => (
+                {/* Quick Horizontal Single-Row Popular Chips (takes only ~28px) */}
+                <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 no-scrollbar">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex-shrink-0 flex items-center gap-0.5">
+                    <span className="material-symbols-outlined text-[12px]">auto_awesome</span> Quick:
+                  </span>
+                  {[
+                    { label: "💳 Razorpay delay", text: "If your issue is not resolved kindly share the transaction screenshot and present wallet screenshot, along with your name to 8184877798 whatsapp. Due to razorpay server down, some of the payments are not credited timely." },
+                    { label: "✅ Wallet credited", text: "We have verified your payment and credited the amount to your HomeBites wallet. Please check your wallet balance in the app." },
+                    { label: "🌧️ Rain delay", text: "Sorry for the inconvenience you faced! Delivery is slightly delayed due to severe rain / bad weather. Our delivery partner is carefully on the way." },
+                    { label: "🛵 Out for delivery", text: "Your order is out for delivery! The rider has collected your meal and is on the way. You can track live location in the app." },
+                    { label: "📋 Request Order ID", text: "Please send your Order ID so our support team can check the order status immediately." },
+                    { label: "✨ Issue resolved", text: "Your issue has been resolved. Please let us know if you need any further assistance. Thank you for choosing HomeBites!" }
+                  ].map((chip, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setReplyText(chip.text)}
+                      className="whitespace-nowrap px-2.5 py-1 bg-slate-100 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 text-slate-700 hover:text-emerald-800 rounded-full text-[11px] font-medium transition flex-shrink-0"
+                      title={chip.text}
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Quick Replies Expanded Popover / Panel */}
+                {showTemplatesModal && (
+                  <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5 shadow-md animate-in fade-in zoom-in-95 duration-150">
+                    <div className="flex items-center justify-between pb-1 border-b border-slate-200">
+                      <div className="flex items-center gap-1.5 font-bold text-xs text-slate-800">
+                        <span className="material-symbols-outlined text-amber-500 text-[16px]">quickreply</span>
+                        <span>Pre-designed Canned Templates</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <div className="flex gap-1">
+                          {[
+                            { id: "all", label: "All" },
+                            { id: "Payment & Wallet", label: "Payment" },
+                            { id: "Delivery & Delay", label: "Delivery" },
+                            { id: "Order Inquiries", label: "Orders" },
+                            { id: "Closure & Assistance", label: "Closure" },
+                          ].map((tab) => (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              onClick={() => setActiveCannedTab(tab.id)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold transition ${
+                                activeCannedTab === tab.id
+                                  ? "bg-emerald-600 text-white"
+                                  : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
+                              }`}
+                            >
+                              {tab.label}
+                            </button>
+                          ))}
+                        </div>
                         <button
-                          key={tab.id}
                           type="button"
-                          onClick={() => setActiveCannedTab(tab.id)}
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold transition ${
-                            activeCannedTab === tab.id
-                              ? "bg-[#10b981] text-white"
-                              : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                          }`}
+                          onClick={() => setShowTemplatesModal(false)}
+                          className="w-6 h-6 rounded-full hover:bg-slate-200 flex items-center justify-center text-slate-500 transition ml-2"
                         >
-                          {tab.label}
+                          <span className="material-symbols-outlined text-[16px]">close</span>
                         </button>
-                      ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
+                      {CANNED_REPLIES.filter(
+                        (cat) => activeCannedTab === "all" || cat.category === activeCannedTab
+                      )
+                        .flatMap((cat) => cat.items)
+                        .map((item, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => {
+                              setReplyText(item.text);
+                              setShowTemplatesModal(false);
+                            }}
+                            className="text-left p-2 bg-white hover:bg-emerald-50/70 border border-slate-200 hover:border-emerald-300 rounded-xl transition group shadow-2xs flex flex-col gap-0.5"
+                          >
+                            <div className="text-[11px] font-bold text-slate-800 group-hover:text-emerald-800 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              {item.label}
+                            </div>
+                            <div className="text-[10px] text-slate-500 line-clamp-1">
+                              {item.text}
+                            </div>
+                          </button>
+                        ))}
                     </div>
                   </div>
+                )}
 
-                  <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto pr-1">
-                    {CANNED_REPLIES.filter(
-                      (cat) => activeCannedTab === "all" || cat.category === activeCannedTab
-                    )
-                      .flatMap((cat) => cat.items)
-                      .map((item, idx) => (
-                        <button
-                          key={idx}
-                          type="button"
-                          onClick={() => setReplyText(item.text)}
-                          className="text-left px-2.5 py-1 bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-[#10b981] text-slate-700 hover:text-emerald-800 rounded-lg text-[11px] font-medium transition flex items-center gap-1 group shadow-xs"
-                          title={item.text}
-                        >
-                          <span className="material-symbols-outlined text-[12px] text-slate-400 group-hover:text-[#10b981]">
-                            add
-                          </span>
-                          <span>{item.label}</span>
-                        </button>
-                      ))}
-                  </div>
-                </div>
-
-                {/* Reply Input */}
-                <div className="relative">
+                {/* Modern Chat Input Box */}
+                <div className="bg-slate-50 border border-slate-200 focus-within:border-emerald-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-emerald-500/15 rounded-2xl p-2.5 transition">
                   <textarea
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
-                    className="w-full bg-white border border-[#dce2f3] rounded-lg p-3 text-body-sm focus:outline-none focus:border-[#10b981] focus:ring-2 focus:ring-[#10b981]/10 transition-shadow resize-none pr-24"
-                    placeholder={`Type your reply to ${selectedTicket.customerName}...`}
-                    rows="3"
+                    onKeyDown={(e) => {
+                      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                        e.preventDefault();
+                        handleSendReply();
+                      }
+                    }}
+                    className="w-full bg-transparent text-sm focus:outline-none resize-none text-slate-900 placeholder-slate-400"
+                    placeholder={`Type your reply to ${selectedTicket.customerName}... (Ctrl+Enter to send)`}
+                    rows="2"
                   />
-                  <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-200/60 mt-1">
+                    <span className="text-[10px] text-slate-400">
+                      Press <kbd className="px-1 py-0.5 bg-slate-200 rounded text-[9px] font-mono font-bold">Ctrl+Enter</kbd> to send
+                    </span>
                     <button
                       onClick={handleSendReply}
-                      className="bg-[#10b981] text-white px-4 py-1.5 rounded-md font-label-md text-label-md hover:bg-[#059669] transition-colors shadow-sm flex items-center gap-1"
+                      disabled={!replyText.trim()}
+                      className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-bold text-xs transition flex items-center gap-1.5 shadow-sm active:scale-95"
                     >
-                      Send <span className="material-symbols-outlined text-[16px]">send</span>
+                      <span>Send</span>
+                      <span className="material-symbols-outlined text-[15px]">send</span>
                     </button>
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="border-t border-[#dce2f3] bg-[#ecfdf5] p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-[#006c49]">
+              <div className="border-t border-slate-200 bg-emerald-50/80 p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-emerald-900">
                 <div className="flex items-center gap-2 font-bold text-sm">
                   <span className="material-symbols-outlined text-emerald-600">check_circle</span>
                   <span>Ticket is Resolved ({selectedTicket.resolution || "Resolved"})</span>
                 </div>
                 <button
                   onClick={() => handleReopenTicket(selectedTicket)}
-                  className="px-3 py-1.5 bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100 rounded-lg text-xs font-bold transition shadow-xs flex items-center gap-1"
+                  className="px-3.5 py-1.5 bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100 rounded-xl text-xs font-bold transition shadow-2xs flex items-center gap-1.5"
                 >
                   <span className="material-symbols-outlined text-[15px]">restart_alt</span>
                   Reopen Ticket
