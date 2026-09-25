@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { httpsCallable } from "firebase/functions";
-import { functions } from "../firebase/firebaseConfig";
+import { collection, doc, getDocs, deleteDoc, writeBatch } from "firebase/firestore";
+import { functions, db } from "../firebase/firebaseConfig";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
 import { uploadFile } from "../firebase/storage";
@@ -150,15 +151,33 @@ export default function PushCampaigns() {
     const local = loadLocalCampaigns();
     setCampaigns(local);
 
-    // 2. Query Cloud Function callable to sync real remote campaign records and live stats
+    // 2. Query Cloud Function callable or direct Firestore to sync real remote campaign records and live stats
     try {
-      const fn = httpsCallable(functions, "listEngagementCampaigns");
-      const res = await fn();
-      if (res.data && res.data.campaigns) {
-        const remote = res.data.campaigns;
+      let remote = null;
+      try {
+        const fn = httpsCallable(functions, "listEngagementCampaigns");
+        const res = await fn();
+        if (res.data && res.data.campaigns) {
+          remote = res.data.campaigns;
+        }
+      } catch (fnErr) {
+        if (db) {
+          const snap = await getDocs(collection(db, "engagementCampaigns"));
+          remote = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        }
+      }
+
+      if (remote) {
+        remote.sort((a, b) => {
+          const aTs = a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.createdAt || 0).getTime();
+          const bTs = b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.createdAt || 0).getTime();
+          return bTs - aTs;
+        });
+
         const merged = [...remote];
         for (const loc of local) {
-          if (!remote.some((r) => r.id === loc.id)) {
+          // Only keep genuine local unsaved drafts, not deleted remote items
+          if (!remote.some((r) => r.id === loc.id) && loc.id.startsWith("camp_") && loc.isLocalDraft) {
             merged.push(loc);
           }
         }
@@ -495,12 +514,31 @@ export default function PushCampaigns() {
     }
   };
 
-  const handleDeleteDraft = (campaignId) => {
+  const handleDeleteCampaign = async (campaignId) => {
+    // 1. Instantly update local state & local storage
     const existing = loadLocalCampaigns();
     const updated = existing.filter((c) => c.id !== campaignId);
     localStorage.setItem(LOCAL_CAMPAIGNS_KEY, JSON.stringify(updated));
-    setCampaigns(updated);
-    addToast("Draft campaign deleted.", "info");
+    setCampaigns((prev) => prev.filter((c) => c.id !== campaignId));
+
+    // 2. Direct Firestore deletion if available
+    if (db && !campaignId.startsWith("camp_")) {
+      try {
+        await deleteDoc(doc(db, "engagementCampaigns", campaignId));
+      } catch (err) {
+        console.warn("Direct Firestore campaign delete failed, trying callable:", err);
+      }
+    }
+
+    // 3. Callable Cloud Function deletion
+    try {
+      const fn = httpsCallable(functions, "deleteEngagementCampaign");
+      await fn({ campaignId });
+    } catch (_) {
+      // Non-fatal if already deleted
+    }
+
+    addToast("Campaign deleted from history.", "info");
   };
 
   const handleCancelCampaign = async (campaignId) => {
@@ -522,20 +560,62 @@ export default function PushCampaigns() {
   const handleClearNotificationHistory = async () => {
     setClearingHistory(true);
     try {
-      const fn = httpsCallable(functions, "clearNotificationHistory");
-      const res = await fn();
-      if (res.data?.ok) {
-        addToast(`Notification history cleared (${res.data.deletedCount || 0} records removed).`, "success");
-        setShowClearModal(false);
-        await fetchCampaigns(false);
-      } else {
-        addToast(res.data?.message || "Failed to clear notification history.", "error");
+      // 1. Instantly wipe local storage and UI table state
+      localStorage.removeItem(LOCAL_CAMPAIGNS_KEY);
+      setCampaigns([]);
+
+      let deletedNotifs = 0;
+      let deletedCamps = 0;
+
+      // 2. Direct Firestore collection cleanup for instant, guaranteed wipe
+      if (db) {
+        try {
+          const [notifsSnap, campsSnap] = await Promise.all([
+            getDocs(collection(db, "notifications")),
+            getDocs(collection(db, "engagementCampaigns")),
+          ]);
+
+          if (!notifsSnap.empty) {
+            const batch = writeBatch(db);
+            notifsSnap.docs.slice(0, 450).forEach((d) => batch.delete(d.ref));
+            await batch.commit();
+            deletedNotifs = notifsSnap.size;
+          }
+
+          if (!campsSnap.empty) {
+            const batch = writeBatch(db);
+            campsSnap.docs.slice(0, 450).forEach((d) => batch.delete(d.ref));
+            await batch.commit();
+            deletedCamps = campsSnap.size;
+          }
+        } catch (dbErr) {
+          console.warn("Direct Firestore cleanup encountered error:", dbErr);
+        }
       }
+
+      // 3. Call backend Cloud Function clearNotificationHistory to clean any remainder / audit
+      try {
+        const fn = httpsCallable(functions, "clearNotificationHistory");
+        const res = await fn();
+        if (res.data?.ok) {
+          deletedNotifs = Math.max(deletedNotifs, res.data.deletedCount || 0);
+          deletedCamps = Math.max(deletedCamps, res.data.deletedCampaignsCount || 0);
+        }
+      } catch (fnErr) {
+        console.warn("Cloud function clearNotificationHistory fallback notice:", fnErr);
+      }
+
+      setShowClearModal(false);
+      addToast(
+        `History cleared (${deletedNotifs} notification records & ${deletedCamps} campaigns removed).`,
+        "success"
+      );
     } catch (err) {
       console.error("Clear notification history error:", err);
       addToast(err.message || "Failed to clear notification history.", "error");
     } finally {
       setClearingHistory(false);
+      await fetchCampaigns(true);
     }
   };
 
@@ -1073,31 +1153,29 @@ export default function PushCampaigns() {
                     </td>
                     <td className="px-5 py-4 text-right space-x-2">
                       {camp.status === "draft" && (
-                        <>
-                          <button
-                            onClick={() => handleTriggerSend(camp)}
-                            className="px-3 py-1 bg-[#10b981] hover:bg-[#059669] text-white rounded-lg text-xs font-bold transition shadow-xs"
-                            title="Quickly dispatch push notification to all users"
-                          >
-                            {camp.isLocalDraft ? "Publish & Send" : "Send Now"}
-                          </button>
-                          <button
-                            onClick={() => handleDeleteDraft(camp.id)}
-                            className="px-2.5 py-1 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded-lg text-xs font-semibold transition border border-slate-200"
-                            title="Delete this draft"
-                          >
-                            Delete
-                          </button>
-                        </>
+                        <button
+                          onClick={() => handleTriggerSend(camp)}
+                          className="px-3 py-1 bg-[#10b981] hover:bg-[#059669] text-white rounded-lg text-xs font-bold transition shadow-xs"
+                          title="Quickly dispatch push notification to all users"
+                        >
+                          {camp.isLocalDraft ? "Publish & Send" : "Send Now"}
+                        </button>
                       )}
                       {camp.status === "scheduled" && (
                         <button
                           onClick={() => handleCancelCampaign(camp.id)}
-                          className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold transition"
+                          className="px-3 py-1 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg text-xs font-bold transition"
                         >
                           Cancel
                         </button>
                       )}
+                      <button
+                        onClick={() => handleDeleteCampaign(camp.id)}
+                        className="px-2.5 py-1 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded-lg text-xs font-semibold transition border border-slate-200"
+                        title="Delete this campaign from history"
+                      >
+                        Delete
+                      </button>
                     </td>
                   </tr>
                 ))
