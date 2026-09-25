@@ -307,6 +307,7 @@ export const Customers = () => {
   const [walletNote, setWalletNote] = useState("");
   const [walletActionType, setWalletActionType] = useState("credit"); // 'credit' | 'debit' | 'set'
   const [isProcessingWallet, setIsProcessingWallet] = useState(false);
+  const [isConsolidating, setIsConsolidating] = useState(false);
 
   // Edit Modal States
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -699,6 +700,11 @@ export const Customers = () => {
 
     setIsProcessingWallet(true);
     const targetUid = walletTargetCustomer.id;
+    const linkedRecords =
+      walletTargetCustomer.records && walletTargetCustomer.records.length > 0
+        ? walletTargetCustomer.records
+        : [{ id: targetUid, walletBalance: walletTargetCustomer.walletBalance || 0 }];
+    const linkedUids = linkedRecords.map((r) => r.id);
 
     try {
       if (isMockMode) {
@@ -708,7 +714,11 @@ export const Customers = () => {
         else if (walletActionType === "set") newBalance = amt;
 
         setRawCustomers((prev) =>
-          prev.map((c) => (c.id === targetUid ? { ...c, walletBalance: newBalance } : c))
+          prev.map((c) => {
+            if (c.id === targetUid) return { ...c, walletBalance: newBalance };
+            if (linkedUids.includes(c.id)) return { ...c, walletBalance: 0 };
+            return c;
+          })
         );
         addToast(`Wallet updated to ₹${newBalance.toFixed(2)}`, "success");
         setIsWalletModalOpen(false);
@@ -731,35 +741,128 @@ export const Customers = () => {
           idempotencyKey,
         });
 
-        addToast(res.data?.message || `Successfully credited ₹${amt} to wallet!`, "success");
-      } else {
-        // Direct debit or set balance under admin privilege
-        const userRef = doc(db, "users", targetUid);
-        await runTransaction(db, async (tx) => {
-          const userSnap = await tx.get(userRef);
-          if (!userSnap.exists()) throw new Error("Customer profile not found");
-          const curBal = Number(userSnap.data().walletBalance || 0);
-          const finalBal =
-            walletActionType === "debit" ? Math.max(0, curBal - amt) : amt;
+        addToast(res.data?.message || `Successfully credited ₹${amt} to primary wallet!`, "success");
+      } else if (walletActionType === "debit") {
+        // Multi-Account Aware Debit: debits across all linked duplicate accounts sequentially
+        const userRefs = linkedRecords.map((r) => doc(db, "users", r.id));
 
-          tx.update(userRef, {
-            walletBalance: finalBal,
+        await runTransaction(db, async (tx) => {
+          // 1. All reads first (strictly required by Firestore runTransaction)
+          const snaps = await Promise.all(userRefs.map((ref) => tx.get(ref)));
+          const activeAccounts = [];
+          let totalAvailable = 0;
+
+          for (let i = 0; i < snaps.length; i++) {
+            const snap = snaps[i];
+            if (snap.exists()) {
+              const bal = Number(snap.data().walletBalance || 0);
+              totalAvailable += bal;
+              activeAccounts.push({
+                ref: userRefs[i],
+                id: linkedRecords[i].id,
+                balance: bal,
+              });
+            }
+          }
+
+          if (totalAvailable <= 0) {
+            throw new Error("Customer has ₹0.00 wallet balance across all linked accounts. Cannot debit.");
+          }
+
+          const actualDebitTotal = Math.min(amt, totalAvailable);
+          let remainingToDebit = actualDebitTotal;
+
+          // 2. All writes after
+          for (const acc of activeAccounts) {
+            if (remainingToDebit <= 0) break;
+            if (acc.balance <= 0) continue;
+
+            const deductThis = Math.min(acc.balance, remainingToDebit);
+            const finalBal = Math.max(0, acc.balance - deductThis);
+            remainingToDebit -= deductThis;
+
+            tx.update(acc.ref, {
+              walletBalance: finalBal,
+              updatedAt: serverTimestamp(),
+            });
+
+            // Write ledger transaction for this account
+            const txnRef = doc(collection(db, "walletTransactions"));
+            tx.set(txnRef, {
+              userId: acc.id,
+              amount: -deductThis,
+              type: "DEBIT",
+              description: walletNote
+                ? `${walletNote} (Multi-account debit)`
+                : `Admin wallet debit for ${walletTargetCustomer.canonicalName || walletTargetCustomer.displayPhone}`,
+              adminId: user?.uid || "admin",
+              createdAt: serverTimestamp(),
+            });
+          }
+        });
+
+        addToast(
+          linkedRecords.length > 1
+            ? `Successfully debited ₹${amt} across ${linkedRecords.length} linked accounts!`
+            : `Customer wallet balance debited successfully!`,
+          "success"
+        );
+      } else if (walletActionType === "set") {
+        // Set Balance: sets primary account to amt, sets any secondary duplicate accounts to 0
+        const primaryRef = doc(db, "users", targetUid);
+        const secondaryRefs = linkedRecords
+          .filter((r) => r.id !== targetUid)
+          .map((r) => doc(db, "users", r.id));
+
+        await runTransaction(db, async (tx) => {
+          // 1. All reads first
+          const primarySnap = await tx.get(primaryRef);
+          if (!primarySnap.exists()) throw new Error("Primary customer account not found.");
+          const primaryCurBal = Number(primarySnap.data().walletBalance || 0);
+
+          const secSnaps = await Promise.all(secondaryRefs.map((ref) => tx.get(ref)));
+
+          // 2. All writes after
+          tx.update(primaryRef, {
+            walletBalance: amt,
             updatedAt: serverTimestamp(),
           });
 
-          // Write ledger transaction
-          const txnRef = doc(collection(db, "walletTransactions"));
-          tx.set(txnRef, {
+          const primTxnRef = doc(collection(db, "walletTransactions"));
+          tx.set(primTxnRef, {
             userId: targetUid,
-            amount: walletActionType === "debit" ? -amt : finalBal - curBal,
-            type: walletActionType === "debit" ? "DEBIT" : "ADJUSTMENT",
-            description: walletNote || `Admin wallet ${walletActionType}`,
+            amount: amt - primaryCurBal,
+            type: "ADJUSTMENT",
+            description: walletNote || `Admin set balance to ₹${amt}`,
             adminId: user?.uid || "admin",
             createdAt: serverTimestamp(),
           });
+
+          for (let i = 0; i < secSnaps.length; i++) {
+            const snap = secSnaps[i];
+            if (snap.exists()) {
+              const secCurBal = Number(snap.data().walletBalance || 0);
+              if (secCurBal !== 0) {
+                tx.update(secondaryRefs[i], {
+                  walletBalance: 0,
+                  updatedAt: serverTimestamp(),
+                });
+
+                const secTxnRef = doc(collection(db, "walletTransactions"));
+                tx.set(secTxnRef, {
+                  userId: secondaryRefs[i].id,
+                  amount: -secCurBal,
+                  type: "ADJUSTMENT",
+                  description: `Duplicate account balance reset during balance set to ₹${amt}`,
+                  adminId: user?.uid || "admin",
+                  createdAt: serverTimestamp(),
+                });
+              }
+            }
+          }
         });
 
-        addToast(`Customer wallet balance adjusted successfully!`, "success");
+        addToast(`Customer wallet balance set to ₹${amt.toFixed(2)} successfully!`, "success");
       }
 
       setIsWalletModalOpen(false);
@@ -768,6 +871,135 @@ export const Customers = () => {
       addToast(`Wallet adjustment failed: ${err.message}`, "error");
     } finally {
       setIsProcessingWallet(false);
+    }
+  };
+
+  // Consolidate Multiple Duplicate Accounts into Primary Account
+  const handleConsolidateCustomerAccounts = async (customer) => {
+    if (!customer?.records || customer.records.length < 2) {
+      addToast("This customer does not have multiple accounts to consolidate.", "info");
+      return;
+    }
+
+    const primaryRec = customer.records[0];
+    const secondaryRecs = customer.records.slice(1);
+    const primaryId = primaryRec.id;
+
+    const confirmMerge = window.confirm(
+      `Are you sure you want to consolidate ${customer.records.length} accounts for ${
+        customer.canonicalName || customer.displayPhone
+      }?\n\n` +
+      `This will transfer all wallet balances from duplicate accounts into Primary Account (${primaryId}) and link them permanently.`
+    );
+    if (!confirmMerge) return;
+
+    setIsConsolidating(true);
+    try {
+      if (isMockMode) {
+        let totalTransferred = 0;
+        for (const r of secondaryRecs) {
+          totalTransferred += Number(r.walletBalance || 0);
+        }
+        setRawCustomers((prev) =>
+          prev.map((c) => {
+            if (c.id === primaryId) {
+              return { ...c, walletBalance: (c.walletBalance || 0) + totalTransferred };
+            }
+            if (secondaryRecs.some((s) => s.id === c.id)) {
+              return { ...c, walletBalance: 0, isDuplicateAccount: true, mergedIntoUid: primaryId };
+            }
+            return c;
+          })
+        );
+        addToast(
+          `Successfully consolidated accounts! Transferred ₹${totalTransferred.toFixed(2)} to Primary Account.`,
+          "success"
+        );
+        return;
+      }
+
+      const primaryRef = doc(db, "users", primaryId);
+      const secondaryRefs = secondaryRecs.map((r) => doc(db, "users", r.id));
+
+      let totalTransferred = 0;
+
+      await runTransaction(db, async (tx) => {
+        // 1. All reads first
+        const primarySnap = await tx.get(primaryRef);
+        if (!primarySnap.exists()) throw new Error("Primary customer account not found.");
+
+        const secSnaps = await Promise.all(secondaryRefs.map((r) => tx.get(r)));
+
+        const curPrimaryBal = Number(primarySnap.data().walletBalance || 0);
+
+        for (let i = 0; i < secSnaps.length; i++) {
+          const snap = secSnaps[i];
+          if (snap.exists()) {
+            const bal = Number(snap.data().walletBalance || 0);
+            if (bal > 0) {
+              totalTransferred += bal;
+            }
+          }
+        }
+
+        // 2. All writes after
+        const newPrimaryBal = curPrimaryBal + totalTransferred;
+        tx.update(primaryRef, {
+          walletBalance: newPrimaryBal,
+          consolidatedUids: customer.linkedUids,
+          updatedAt: serverTimestamp(),
+        });
+
+        // Update secondary accounts
+        for (let i = 0; i < secSnaps.length; i++) {
+          const snap = secSnaps[i];
+          const secId = secondaryRecs[i].id;
+          if (snap.exists()) {
+            const bal = Number(snap.data().walletBalance || 0);
+            tx.update(secondaryRefs[i], {
+              walletBalance: 0,
+              isDuplicateAccount: true,
+              mergedIntoUid: primaryId,
+              mergedAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+
+            if (bal > 0) {
+              const secTxnRef = doc(collection(db, "walletTransactions"));
+              tx.set(secTxnRef, {
+                userId: secId,
+                amount: -bal,
+                type: "CONSOLIDATION_DEBIT",
+                description: `Balance transferred to primary account ${primaryId}`,
+                adminId: user?.uid || "admin",
+                createdAt: serverTimestamp(),
+              });
+            }
+          }
+        }
+
+        if (totalTransferred > 0) {
+          const primTxnRef = doc(collection(db, "walletTransactions"));
+          tx.set(primTxnRef, {
+            userId: primaryId,
+            amount: totalTransferred,
+            type: "CONSOLIDATION_CREDIT",
+            description: `Consolidated balance from ${secondaryRecs.length} duplicate account(s)`,
+            adminId: user?.uid || "admin",
+            createdAt: serverTimestamp(),
+          });
+        }
+      });
+
+      addToast(
+        `Successfully consolidated accounts! Transferred ₹${totalTransferred.toFixed(2)} to Primary Account.`,
+        "success"
+      );
+    } catch (err) {
+      console.error("Account consolidation error:", err);
+      addToast(`Consolidation failed: ${err.message}`, "error");
+    } finally {
+      setIsConsolidating(false);
     }
   };
 
@@ -1535,29 +1767,125 @@ export const Customers = () => {
               {/* Tab 4: Merged Profiles Audit */}
               {drawerTab === "merged" && selectedCustomer.isMerged && (
                 <div className="space-y-3">
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 font-medium">
-                    These {selectedCustomer.mergedCount} profiles share the same mobile number (
-                    {selectedCustomer.displayPhone}) and have been consolidated into one unified account.
-                  </div>
-                  {selectedCustomer.records?.map((rec, idx) => (
-                    <div
-                      key={rec.id}
-                      className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl text-xs space-y-1.5"
-                    >
-                      <div className="flex justify-between items-center font-bold">
-                        <span className="text-slate-700">Account #{idx + 1}</span>
-                        <span className="text-[11px] font-mono text-emerald-700">
-                          ₹{(rec.walletBalance || 0).toFixed(2)}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 font-mono">UID: {rec.id}</p>
-                      {rec.email && <p className="text-[11px] text-slate-600">Email: {rec.email}</p>}
-                      <div className="flex justify-between items-center text-[10px] text-slate-400 pt-1 border-t border-slate-200/50">
-                        <span>Created: {rec.createdAt ? new Date(rec.createdAt).toLocaleDateString() : "N/A"}</span>
-                        <span>{rec.isActive !== false ? "Active" : "Suspended"}</span>
-                      </div>
+                  <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1.5">
+                    <div className="font-bold flex items-center gap-1.5 text-amber-800">
+                      <span className="material-symbols-outlined text-[16px]">group_work</span>
+                      {selectedCustomer.mergedCount} Accounts Linked to {selectedCustomer.displayPhone}
                     </div>
-                  ))}
+                    <p className="text-[11px] text-amber-700 leading-relaxed">
+                      These profiles were created separately (e.g. Email & Password login vs. Phone OTP login) with the same mobile number.
+                    </p>
+                  </div>
+
+                  {/* Consolidate Wallets Card */}
+                  {(() => {
+                    const secondaryBal = (selectedCustomer.records?.slice(1) || []).reduce(
+                      (sum, r) => sum + Number(r.walletBalance || 0),
+                      0
+                    );
+                    return (
+                      <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                              <span className="material-symbols-outlined text-emerald-600 text-[16px]">call_merge</span>
+                              Wallet Consolidation
+                            </h4>
+                            <p className="text-[11px] text-slate-500 mt-0.5">
+                              {secondaryBal > 0
+                                ? `₹${secondaryBal.toFixed(2)} is held in duplicate accounts. Consolidate to Primary to prevent login balance discrepancies.`
+                                : "All duplicate account balances are already ₹0.00."}
+                            </p>
+                          </div>
+                          {secondaryBal > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleConsolidateCustomerAccounts(selectedCustomer)}
+                              disabled={isConsolidating}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1 disabled:opacity-60 whitespace-nowrap"
+                            >
+                              {isConsolidating ? (
+                                <>
+                                  <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
+                                  Merging...
+                                </>
+                              ) : (
+                                <>
+                                  <span className="material-symbols-outlined text-[14px]">merge</span>
+                                  Consolidate
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Account List */}
+                  <div className="space-y-2">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Linked Account Breakdown
+                    </div>
+                    {selectedCustomer.records?.map((rec, idx) => {
+                      const isPrimary = idx === 0;
+                      return (
+                        <div
+                          key={rec.id}
+                          className={`p-3.5 rounded-xl border text-xs space-y-2 transition ${
+                            isPrimary
+                              ? "bg-emerald-50/40 border-emerald-200"
+                              : "bg-white border-slate-200"
+                          }`}
+                        >
+                          <div className="flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-800">
+                                Account #{idx + 1}
+                              </span>
+                              {isPrimary ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                  Primary
+                                </span>
+                              ) : rec.isDuplicateAccount || rec.mergedIntoUid ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                  Merged Duplicate
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                  Duplicate
+                                </span>
+                              )}
+                            </div>
+                            <span className="font-mono font-bold text-emerald-700 text-xs">
+                              ₹{(rec.walletBalance || 0).toFixed(2)}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-500">
+                            <div>
+                              <span className="text-slate-400">UID:</span>{" "}
+                              <span className="font-mono text-slate-700">{rec.id.slice(0, 12)}...</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400">Email:</span>{" "}
+                              <span className="text-slate-700 truncate">{rec.email || "None"}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400">Phone:</span>{" "}
+                              <span className="text-slate-700">{rec.phone || rec.mobileNumber || "None"}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400">Created:</span>{" "}
+                              <span className="text-slate-700">
+                                {rec.createdAt ? new Date(rec.createdAt).toLocaleDateString() : "N/A"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
@@ -1659,6 +1987,23 @@ export const Customers = () => {
                   ₹{(walletTargetCustomer.walletBalance || 0).toFixed(2)}
                 </span>
               </div>
+
+              {/* Multi-Account Notice */}
+              {walletTargetCustomer.isMerged && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-900 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5 text-amber-800">
+                    <span className="material-symbols-outlined text-[15px]">group_work</span>
+                    Multi-Account Notice ({walletTargetCustomer.mergedCount} linked profiles)
+                  </div>
+                  <p className="text-slate-600">
+                    {walletActionType === "debit"
+                      ? "Debit will automatically deduct across all linked accounts with active balances."
+                      : walletActionType === "set"
+                      ? "Target balance will be applied to the primary account and duplicate accounts will be set to ₹0."
+                      : "Credit will be applied to the primary customer account."}
+                  </p>
+                </div>
+              )}
 
               {/* Mode Selector */}
               <div>
