@@ -625,37 +625,80 @@ export const CustomerSupport = () => {
   const resolvedTickets = tickets.filter((t) => t.status === "Resolved");
 
   return (
-    <div className="p-8 min-h-screen flex flex-col relative bg-[#f9f9ff]">
-      {/* Header Section */}
-      <div className="flex justify-between items-end mb-6">
+    <div className="space-y-6">
+      {/* ── Header ── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="font-headline-lg text-headline-lg text-[#151c27]">Support Queue</h2>
-          <p className="font-body-md text-body-md text-[#555f6f] mt-1">Manage and resolve customer issues.</p>
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+            <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+              Customer Support Center
+            </h1>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Resolve customer inquiries, payment discrepancies, delivery delays, and refund requests.
+          </p>
         </div>
-        <div className="flex gap-3">
-          <div className="flex bg-white rounded-lg border border-[#dce2f3] p-1 shadow-sm">
-            <button
-              onClick={() => setViewMode("board")}
-              className={`px-4 py-1.5 rounded font-label-md text-label-md flex items-center gap-2 transition-all ${
-                viewMode === "board"
-                  ? "bg-[#e7eefe] text-[#151c27] shadow-sm"
-                  : "text-[#555f6f] hover:bg-[#f9f9ff]"
-              }`}
-            >
-              <span className="material-symbols-outlined text-[18px]">view_kanban</span>
-              Board
-            </button>
-            <button
-              onClick={() => setViewMode("list")}
-              className={`px-4 py-1.5 rounded font-label-md text-label-md flex items-center gap-2 transition-all ${
-                viewMode === "list"
-                  ? "bg-[#e7eefe] text-[#151c27] shadow-sm"
-                  : "text-[#555f6f] hover:bg-[#f9f9ff]"
-              }`}
-            >
-              <span className="material-symbols-outlined text-[18px]">list</span>
-              List
-            </button>
+
+        {/* View mode toggle */}
+        <div className="flex items-center gap-1.5 p-1 bg-slate-100/80 dark:bg-slate-800/80 rounded-2xl self-start sm:self-auto">
+          <button
+            onClick={() => setViewMode("board")}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              viewMode === "board"
+                ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs"
+                : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <span className="material-symbols-outlined text-[17px]">view_kanban</span>
+            Board View
+          </button>
+          <button
+            onClick={() => setViewMode("list")}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              viewMode === "list"
+                ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs"
+                : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <span className="material-symbols-outlined text-[17px]">table_rows</span>
+            List Table
+          </button>
+        </div>
+      </div>
+
+      {/* ── KPI Bento Grid ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Open Tickets</span>
+            <p className="text-2xl font-black text-rose-600 mt-1">{openTickets.length} Pending</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Awaiting agent response</p>
+          </div>
+          <div className="w-10 h-10 rounded-2xl bg-rose-500/10 text-rose-600 flex items-center justify-center">
+            <span className="material-symbols-outlined text-2xl">mark_chat_unread</span>
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">In Progress</span>
+            <p className="text-2xl font-black text-amber-600 mt-1">{inProgressTickets.length} Active</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Being addressed by support desk</p>
+          </div>
+          <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center">
+            <span className="material-symbols-outlined text-2xl">pending</span>
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Resolved Cases</span>
+            <p className="text-2xl font-black text-emerald-600 mt-1">{resolvedTickets.length} Solved</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Closed customer requests</p>
+          </div>
+          <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
+            <span className="material-symbols-outlined text-2xl">task_alt</span>
           </div>
         </div>
       </div>
@@ -668,14 +711,14 @@ export const CustomerSupport = () => {
         />
       ) : viewMode === "board" ? (
         /* Kanban Board */
-        <div className="flex-grow flex gap-6 overflow-x-auto pb-4 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
           {/* Column: Open */}
-          <div className="flex-none w-80 flex flex-col bg-[#f0f3ff] rounded-xl p-4 border border-[#dce2f3]/30 min-h-[500px]">
-            <div className="flex justify-between items-center mb-4 px-2">
-              <h3 className="font-label-md text-label-md text-[#151c27] flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[#ba1a1a]"></span>
-                Open
-                <span className="bg-[#e7eefe] text-[#555f6f] px-2 py-0.5 rounded-full text-[10px]">{openTickets.length}</span>
+          <div className="flex flex-col bg-slate-100/70 dark:bg-slate-900/60 rounded-3xl p-4 border border-slate-200/80 dark:border-slate-800">
+            <div className="flex justify-between items-center mb-4 px-2 pb-2 border-b border-slate-200/60 dark:border-slate-800">
+              <h3 className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-2 uppercase tracking-wider">
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse"></span>
+                Open Tickets
+                <span className="bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200/80 px-2 py-0.5 rounded-full text-[10px] font-bold">{openTickets.length}</span>
               </h3>
             </div>
             <div className="flex flex-col gap-3">
@@ -742,12 +785,12 @@ export const CustomerSupport = () => {
           </div>
 
           {/* Column: In Progress */}
-          <div className="flex-none w-80 flex flex-col bg-[#f0f3ff] rounded-xl p-4 border border-[#dce2f3]/30 min-h-[500px]">
-            <div className="flex justify-between items-center mb-4 px-2">
-              <h3 className="font-label-md text-label-md text-[#151c27] flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[#10b981]"></span>
+          <div className="flex flex-col bg-slate-100/70 dark:bg-slate-900/60 rounded-3xl p-4 border border-slate-200/80 dark:border-slate-800">
+            <div className="flex justify-between items-center mb-4 px-2 pb-2 border-b border-slate-200/60 dark:border-slate-800">
+              <h3 className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-2 uppercase tracking-wider">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
                 In Progress
-                <span className="bg-[#e7eefe] text-[#555f6f] px-2 py-0.5 rounded-full text-[10px]">{inProgressTickets.length}</span>
+                <span className="bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/80 px-2 py-0.5 rounded-full text-[10px] font-bold">{inProgressTickets.length}</span>
               </h3>
             </div>
             <div className="flex flex-col gap-3">
@@ -816,12 +859,12 @@ export const CustomerSupport = () => {
           </div>
 
           {/* Column: Resolved */}
-          <div className="flex-none w-80 flex flex-col bg-[#f0f3ff] rounded-xl p-4 border border-[#dce2f3]/30 min-h-[500px] opacity-75">
-            <div className="flex justify-between items-center mb-4 px-2">
-              <h3 className="font-label-md text-label-md text-[#151c27] flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[#006c49]"></span>
+          <div className="flex flex-col bg-slate-100/70 dark:bg-slate-900/60 rounded-3xl p-4 border border-slate-200/80 dark:border-slate-800 opacity-80">
+            <div className="flex justify-between items-center mb-4 px-2 pb-2 border-b border-slate-200/60 dark:border-slate-800">
+              <h3 className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-2 uppercase tracking-wider">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
                 Resolved
-                <span className="bg-[#e7eefe] text-[#555f6f] px-2 py-0.5 rounded-full text-[10px]">{resolvedTickets.length}</span>
+                <span className="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 px-2 py-0.5 rounded-full text-[10px] font-bold">{resolvedTickets.length}</span>
               </h3>
             </div>
             <div className="flex flex-col gap-3">
@@ -855,17 +898,17 @@ export const CustomerSupport = () => {
         </div>
       ) : (
         /* List View */
-        <div className="bg-white border border-[#dce2f3] rounded-xl overflow-hidden shadow-sm">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl overflow-hidden shadow-xs">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="bg-[#f0f3ff] border-b border-[#dce2f3]">
-                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Ticket ID</th>
-                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Subject</th>
-                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Customer Name</th>
-                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Mobile Number</th>
-                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Order</th>
-                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Priority</th>
-                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Status</th>
+              <tr className="bg-slate-50/50 dark:bg-slate-800/40 border-b border-slate-100 dark:border-slate-800 text-[11px] uppercase tracking-wider font-bold text-slate-400">
+                <th className="py-3.5 px-6">Ticket ID</th>
+                <th className="py-3.5 px-6">Subject</th>
+                <th className="py-3.5 px-6">Customer Name</th>
+                <th className="py-3.5 px-6">Mobile Number</th>
+                <th className="py-3.5 px-6">Order</th>
+                <th className="py-3.5 px-6">Priority</th>
+                <th className="py-3.5 px-6 text-right">Status</th>
               </tr>
             </thead>
             <tbody className="font-body-sm text-body-sm text-[#151c27]">

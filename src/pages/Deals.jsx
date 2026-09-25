@@ -4,8 +4,17 @@ import { useAuthStore } from "../store/authStore";
 import { useDealStore } from "../store/dealStore";
 import { useMenuStore } from "../store/menuStore";
 import { notificationRepository } from "../repositories";
-import EmptyState from "../components/EmptyState";
-import * as LoadingComponents from "../components/LoadingComponents";
+
+const DEAL_TYPES = [
+  "Buy 1 Get 1",
+  "Flat Discount",
+  "Free Starter / Beverage",
+  "Combo Special",
+  "Weekend Daawat Offer",
+];
+
+const inr = (n) =>
+  `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 
 export const Deals = () => {
   const { addToast } = useUiStore();
@@ -13,10 +22,8 @@ export const Deals = () => {
   const { deals, loading, subscribeDeals, disconnectDeals, addDeal, updateDeal, deleteDeal } = useDealStore();
   const { menuItems, subscribeMenuItems, disconnectMenuItems } = useMenuStore();
 
-  // Real, from the loaded deals — not a literal.
-  const activeDealCount = deals.filter((d) => d.status === "Active").length;
-
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedTypeFilter, setSelectedTypeFilter] = useState("ALL");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editDealId, setEditDealId] = useState(null);
 
@@ -29,8 +36,8 @@ export const Deals = () => {
   const [status, setStatus] = useState("Active");
   const [selectedItemIds, setSelectedItemIds] = useState([]);
   const [itemSearch, setItemSearch] = useState("");
+  const [notifyCustomers, setNotifyCustomers] = useState(true);
 
-  // Live subscriptions torn down on unmount
   useEffect(() => {
     subscribeDeals();
     subscribeMenuItems();
@@ -45,7 +52,9 @@ export const Deals = () => {
     if (!itemSearch.trim()) return list;
     const q = itemSearch.toLowerCase().trim();
     return list.filter(
-      (i) => (i.name || "").toLowerCase().includes(q) || (i.category || "").toLowerCase().includes(q)
+      (i) =>
+        (i.name || "").toLowerCase().includes(q) ||
+        (i.category || "").toLowerCase().includes(q)
     );
   }, [menuItems, itemSearch]);
 
@@ -59,14 +68,20 @@ export const Deals = () => {
     setStatus("Active");
     setSelectedItemIds([]);
     setItemSearch("");
+    setNotifyCustomers(true);
     setIsModalOpen(true);
   };
 
   const handleOpenEditModal = (deal) => {
     setEditDealId(deal.id);
-    setTitle(deal.title || "");
+    setTitle(deal.title || deal.name || "");
     setType(deal.type || "Buy 1 Get 1");
-    setMinOrder((deal.minimumOrderValue !== undefined ? deal.minimumOrderValue : deal.minOrder || 0).toString());
+    setMinOrder(
+      (deal.minimumOrderValue !== undefined
+        ? deal.minimumOrderValue
+        : deal.minOrder || 0
+      ).toString()
+    );
     setStartDate(deal.startDate || "");
     setExpiryDate(deal.expiryDate || deal.expiry || "");
     setStatus(deal.status || "Active");
@@ -77,6 +92,7 @@ export const Deals = () => {
       : [];
     setSelectedItemIds(existingIds);
     setItemSearch("");
+    setNotifyCustomers(false);
     setIsModalOpen(true);
   };
 
@@ -87,12 +103,12 @@ export const Deals = () => {
       return;
     }
 
-    const minOrderVal = parseFloat(minOrder);
+    const minOrderVal = parseFloat(minOrder) || 0;
     const dealToEdit = editDealId ? deals.find((d) => d.id === editDealId) : null;
 
     const dealPayload = {
-      title,
-      name: title,
+      title: title.trim(),
+      name: title.trim(),
       type,
       minOrder: minOrderVal,
       minimumOrderValue: minOrderVal,
@@ -101,466 +117,450 @@ export const Deals = () => {
       startDate: startDate || null,
       expiry: expiryDate || "No Expiry",
       expiryDate: expiryDate || null,
-      expiresAt: expiryDate || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
       status,
       isActive: status === "Active",
-      usage: dealToEdit?.usage || "0 times"
+      usage: dealToEdit?.usage || "0 times",
+      updatedAt: new Date().toISOString(),
     };
 
     try {
       if (editDealId) {
         await updateDeal(editDealId, dealPayload, user);
-        addToast("Deal campaign updated successfully", "success");
+        addToast("Deal updated successfully", "success");
       } else {
         await addDeal(dealPayload, user);
-
-        /*
-         * The broadcast must not be able to fail the save.
-         *
-         * This was awaited inside the same try/catch as `addDeal`, so a
-         * notification write rejected by rules surfaced as "Failed to save
-         * deal" for a deal that had already been created — and the natural
-         * response is to create it again, producing duplicate campaigns and a
-         * second broadcast.
-         */
         addToast("New deal campaign created", "success");
-        try {
-          await notificationRepository.create({
-            userId: "all",
-            type: "marketing",
-            title: "New Deal Available!",
-            message: `${title}. Get this deal on orders above ₹${minOrderVal}!`,
-            isRead: false
-          });
-        } catch (notifyErr) {
-          addToast(`Deal saved, but customers were not notified: ${notifyErr.message}`, "warning");
+
+        if (notifyCustomers) {
+          try {
+            await notificationRepository.create({
+              userId: "all",
+              type: "marketing",
+              title: "🔥 Special Deal Alert!",
+              message: `${title}. Unlock on orders above ₹${minOrderVal}!`,
+              isRead: false,
+            });
+          } catch (notifyErr) {
+            console.warn("Could not send broadcast:", notifyErr);
+          }
         }
       }
       setIsModalOpen(false);
     } catch (err) {
-      console.error(err);
-      addToast("Failed to save deal", "error");
+      addToast(`Save failed: ${err.message}`, "error");
     }
   };
 
-  const handleDeleteDeal = async (id, title) => {
-    if (confirm(`Are you sure you want to delete the deal campaign "${title}"?`)) {
-      try {
-        await deleteDeal(id, user);
-        addToast(`Deal campaign "${title}" deleted`, "success");
-      } catch (err) {
-        console.error(err);
-        addToast("Failed to delete deal", "error");
-      }
+  const handleDeleteDeal = async (id, dealTitle) => {
+    if (!window.confirm(`Delete deal campaign "${dealTitle}"?`)) return;
+    try {
+      await deleteDeal(id, user);
+      addToast("Deal removed", "info");
+    } catch (err) {
+      addToast(`Could not delete: ${err.message}`, "error");
     }
   };
 
-  if (loading && deals.length === 0) {
-    return <LoadingComponents.LoadingPage />;
-  }
+  const toggleDealStatus = async (deal) => {
+    const next = deal.status === "Active" ? "Inactive" : "Active";
+    try {
+      await updateDeal(deal.id, { status: next, isActive: next === "Active" }, user);
+      addToast(`Deal is now ${next}`, "success");
+    } catch (err) {
+      addToast(`Could not update: ${err.message}`, "error");
+    }
+  };
 
-  const filteredDeals = deals.filter((d) =>
-    (d.title || "")?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (d.type || "")?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // KPIs
+  const activeCount = deals.filter((d) => d.status === "Active" || d.isActive === true).length;
+  const linkedItemsCount = deals.filter((d) => (d.menuItemIds && d.menuItemIds.length > 0) || d.menuItemId).length;
+
+  const filteredDeals = useMemo(() => {
+    return deals.filter((d) => {
+      if (selectedTypeFilter !== "ALL" && d.type !== selectedTypeFilter) return false;
+      const q = searchQuery.toLowerCase().trim();
+      if (!q) return true;
+      return (
+        (d.title || "").toLowerCase().includes(q) ||
+        (d.type || "").toLowerCase().includes(q)
+      );
+    });
+  }, [deals, selectedTypeFilter, searchQuery]);
 
   return (
-    <div className="p-8">
-      {/* Header */}
-      <div className="flex justify-between items-center mb-8">
+    <div className="space-y-6">
+      {/* ── Header ── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="font-headline-lg text-headline-lg text-[#151c27]">Deals Campaign</h2>
-          <p className="font-body-md text-body-md text-[#555f6f] mt-1">
-            Manage restaurant combos, item discounts, and app specials.
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+            <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+              Promotional Deals & Combos
+            </h1>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Create high-converting menu promotions, BOGO treats, cart threshold perks, and daawat combos.
           </p>
         </div>
+
         <button
           onClick={handleOpenAddModal}
-          className="bg-[#10b981] text-white font-label-md text-label-md px-5 py-2.5 rounded-lg border-t border-white/20 hover:bg-[#059669] transition-colors flex items-center gap-2 shadow-sm inner-shine"
+          className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm shadow-emerald-600/20 transition self-start sm:self-auto"
         >
-          <span className="material-symbols-outlined text-[18px]">add</span>
-          Create Campaign Deal
+          <span className="material-symbols-outlined text-[18px]">add_circle</span>
+          Create Deal Campaign
         </button>
       </div>
 
-      {/* KPI Row (Total Value Saved is monetary, so it must show ₹--) */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        {/* KPI 1: Value Saved */}
-        <div className="bg-white border border-[#dce2f3] rounded-xl p-6 shadow-sm relative overflow-hidden group">
-          <div className="absolute -right-6 -top-6 w-24 h-24 bg-[#00af79]/10 rounded-full blur-2xl group-hover:bg-[#00af79]/20 transition-colors"></div>
-          <div className="flex justify-between items-start mb-4 relative z-10">
-            <span className="font-label-md text-label-md text-[#555f6f]">Deals Redeemed Value</span>
-            <span className="material-symbols-outlined text-[#006c49] p-2 bg-[#00af79]/20 rounded-lg">local_offer</span>
+      {/* ── KPI Bento Grid ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Active Deals</span>
+            <p className="text-2xl font-black text-emerald-600 mt-1">{activeCount} Live</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Visible to customers in app</p>
           </div>
-          <div className="relative z-10">
-            {/* The figure was the literal "₹--" under a "+8.2% vs last
-                month" trend. Nothing in the deal documents records redemption
-                value, so neither the amount nor the trend was ever computed —
-                the percentage was the same on every load, forever. Deals are
-                applied at checkout without writing back a redemption record,
-                so this cannot be derived here; saying so beats a number that
-                looks measured. */}
-            <span className="font-headline-display text-headline-display text-[#555f6f] font-bold">Not tracked</span>
-            <div className="mt-2">
-              <span className="font-label-sm text-label-sm text-[#555f6f]">
-                Deal redemptions are not recorded against orders
-              </span>
-            </div>
+          <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
+            <span className="material-symbols-outlined text-2xl">local_offer</span>
           </div>
         </div>
 
-        {/* KPI 2: Deals Usage */}
-        <div className="bg-white border border-[#dce2f3] rounded-xl p-6 shadow-sm relative overflow-hidden group">
-          <div className="absolute -right-6 -top-6 w-24 h-24 bg-[#10b981]/10 rounded-full blur-2xl group-hover:bg-[#10b981]/20 transition-colors"></div>
-          <div className="flex justify-between items-start mb-4 relative z-10">
-            <span className="font-label-md text-label-md text-[#555f6f]">Active Deals Count</span>
-            <span className="material-symbols-outlined text-[#10b981] p-2 bg-[#10b981]/20 rounded-lg">campaign</span>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Total Campaigns</span>
+            <p className="text-2xl font-black text-slate-900 dark:text-white mt-1">{deals.length}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Campaigns created to date</p>
           </div>
-          <div className="relative z-10">
-            {/* Was the literal "6 Deals" with "Steady performance" beneath
-                it, regardless of how many deals existed. This one is real. */}
-            <span className="font-headline-display text-headline-display text-[#151c27] font-bold">
-              {activeDealCount}
-            </span>
-            <div className="mt-2">
-              <span className="font-label-sm text-label-sm text-[#555f6f]">
-                of {deals.length} total campaigns
-              </span>
-            </div>
+          <div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-600 flex items-center justify-center">
+            <span className="material-symbols-outlined text-2xl">campaign</span>
           </div>
         </div>
 
-        {/* KPI 3: Redeemed Count */}
-        <div className="bg-white border border-[#dce2f3] rounded-xl p-6 shadow-sm relative overflow-hidden group">
-          <div className="absolute -right-6 -top-6 w-24 h-24 bg-[#d6e0f3]/40 rounded-full blur-2xl group-hover:bg-[#d6e0f3]/60 transition-colors"></div>
-          <div className="flex justify-between items-start mb-4 relative z-10">
-            <span className="font-label-md text-label-md text-[#555f6f]">Total Claims Today</span>
-            <span className="material-symbols-outlined text-[#596373] p-2 bg-[#d6e0f3] rounded-lg">shopping_basket</span>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Dish-Linked Deals</span>
+            <p className="text-2xl font-black text-purple-600 mt-1">{linkedItemsCount}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Targeting specific foods</p>
           </div>
-          <div className="relative z-10">
-            {/* "648 Claims" and "18% increase this week" were both literals. */}
-            <span className="font-headline-display text-headline-display text-[#555f6f] font-bold">Not tracked</span>
-            <div className="mt-2">
-              <span className="font-label-sm text-label-sm text-[#555f6f]">
-                No per-claim record is written when a deal is applied
-              </span>
-            </div>
+          <div className="w-10 h-10 rounded-2xl bg-purple-500/10 text-purple-600 flex items-center justify-center">
+            <span className="material-symbols-outlined text-2xl">fastfood</span>
           </div>
         </div>
       </div>
 
-      {/* Deals Table List */}
-      <div className="bg-white border border-[#dce2f3] rounded-xl shadow-sm flex flex-col">
-        <div className="p-5 border-b border-[#dce2f3]/60 flex justify-between items-center bg-[#f9f9ff] rounded-t-xl">
-          <h3 className="font-headline-md text-headline-md text-[#151c27] font-semibold">Active Campaigns</h3>
-          <div className="flex gap-3">
-            <div className="relative">
-              <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[#555f6f]/60 text-sm">search</span>
-              <input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 pr-3 py-1.5 border border-[#d3daea] rounded-lg text-xs font-body-sm w-48 focus:outline-none focus:border-[#10b981]"
-                placeholder="Search campaigns..."
-                type="text"
-              />
-            </div>
-          </div>
+      {/* ── Toolbar: Filter & Search ── */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-4 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+        {/* Deal Types Filter */}
+        <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100/80 dark:bg-slate-800/80 rounded-2xl">
+          {["ALL", "Buy 1 Get 1", "Flat Discount", "Combo Special"].map((t) => (
+            <button
+              key={t}
+              onClick={() => setSelectedTypeFilter(t)}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+                selectedTypeFilter === t
+                  ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs"
+                  : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white"
+              }`}
+            >
+              {t === "ALL" ? "All Deals" : t}
+            </button>
+          ))}
         </div>
-        
-        {filteredDeals.length === 0 ? (
-          <div className="p-8">
-            <EmptyState
-              icon="local_offer"
-              title="No Deals Available"
-              description="No active campaign deals found matching your search."
-              actionText="Create Deal Campaign"
-              onActionClick={handleOpenAddModal}
-            />
+
+        {/* Search */}
+        <div className="relative flex-1 sm:w-64">
+          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">search</span>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search deals..."
+            className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 outline-none focus:border-emerald-500 transition"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Deals Table ── */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs overflow-hidden">
+        {loading ? (
+          <div className="p-16 flex flex-col items-center justify-center gap-3">
+            <div className="w-8 h-8 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs font-bold text-slate-400">Loading promotional deals...</span>
+          </div>
+        ) : filteredDeals.length === 0 ? (
+          <div className="p-16 text-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
+              <span className="material-symbols-outlined text-2xl">local_offer</span>
+            </div>
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200">No Deals Found</h3>
+            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+              {searchQuery || selectedTypeFilter !== "ALL"
+                ? "No deals match your filter criteria."
+                : "Create promotional deals to incentivize customers."}
+            </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
-              <thead className="bg-[#f0f3ff]/40 border-b border-[#dce2f3]">
-                <tr>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Campaign Deal</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Deal Type</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Min. Order</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Linked Foods</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Claims Count</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Expiry Date</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold">Status</th>
-                  <th className="px-6 py-4 font-label-sm text-label-sm text-[#555f6f] font-semibold text-right">Actions</th>
+              <thead>
+                <tr className="border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 text-[11px] uppercase tracking-wider font-bold text-slate-400">
+                  <th className="pl-6 pr-4 py-4">Campaign Title</th>
+                  <th className="px-4 py-4">Deal Type</th>
+                  <th className="px-4 py-4">Min. Cart Value</th>
+                  <th className="px-4 py-4">Linked Food Items</th>
+                  <th className="px-4 py-4">Expiry Date</th>
+                  <th className="px-4 py-4">Status</th>
+                  <th className="pr-6 pl-4 py-4 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#dce2f3]/30 text-[#151c27] font-body-sm text-body-sm">
-                {filteredDeals.map((deal) => (
-                  <tr key={deal.id} className="hover:bg-[#f0f3ff]/30 transition-colors group">
-                    <td className="px-6 py-4">
-                      <div className="font-label-md text-label-md text-[#10b981] font-bold">{deal.title}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="font-semibold">{deal.type}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="text-[#555f6f]">₹{(deal.minOrder !== undefined ? deal.minOrder : (deal.minimumOrderValue || 0)).toFixed(2)}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      {deal.menuItemIds && deal.menuItemIds.length > 0 ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-label-sm text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                          {deal.menuItemIds.length} item{deal.menuItemIds.length === 1 ? "" : "s"}
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-xs">
+                {filteredDeals.map((deal) => {
+                  const isActive = deal.status === "Active" || deal.isActive === true;
+                  const minOrderVal = deal.minOrder !== undefined ? deal.minOrder : deal.minimumOrderValue || 0;
+                  const itemsCount = deal.menuItemIds?.length || (deal.menuItemId ? 1 : 0);
+
+                  return (
+                    <tr key={deal.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors">
+                      {/* Title */}
+                      <td className="pl-6 pr-4 py-4">
+                        <div className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                          <span className="material-symbols-outlined text-emerald-600 text-sm">local_offer</span>
+                          {deal.title}
+                        </div>
+                        <p className="text-[10px] font-mono text-slate-400 mt-0.5">ID: {deal.id.slice(0, 10)}</p>
+                      </td>
+
+                      {/* Type */}
+                      <td className="px-4 py-4">
+                        <span className="px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 font-bold text-slate-700 dark:text-slate-300 text-[11px]">
+                          {deal.type}
                         </span>
-                      ) : deal.menuItemId ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-label-sm text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                          1 item
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 text-xs italic">All menu</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span>{deal.usage}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="text-[#555f6f]">{deal.expiry}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const nextStatus = deal.status === "Active" ? "Inactive" : "Active";
-                          try {
-                            await updateDeal(deal.id, { status: nextStatus, isActive: nextStatus === "Active" }, user);
-                            addToast(`Deal marked as ${nextStatus}`, "info");
-                          } catch (err) {
-                            addToast(`Failed to update status: ${err.message}`, "error");
-                          }
-                        }}
-                        className={`inline-flex items-center px-2.5 py-1 rounded-full font-label-sm text-[10px] uppercase tracking-wide border transition cursor-pointer hover:opacity-80 ${
-                          deal.status === "Active"
-                            ? "bg-[#ecfdf5] text-[#006c49] border-[#10b981]"
-                            : "bg-[#ffdad6] text-[#93000a] border-[#ba1a1a]"
-                        }`}
-                        title="Click to toggle active/inactive"
-                      >
-                        {deal.status}
-                      </button>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => handleOpenEditModal(deal)}
-                        className="p-1.5 text-[#555f6f] hover:text-[#10b981] transition-colors"
-                        title="Edit"
-                      >
-                        <span className="material-symbols-outlined text-[20px]">edit</span>
-                      </button>
-                      <button
-                        onClick={() => handleDeleteDeal(deal.id, deal.title)}
-                        className="p-1.5 text-[#555f6f] hover:text-[#ba1a1a] transition-colors"
-                        title="Delete"
-                      >
-                        <span className="material-symbols-outlined text-[20px]">delete</span>
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+
+                      {/* Min Order */}
+                      <td className="px-4 py-4 font-black text-slate-900 dark:text-white">
+                        {inr(minOrderVal)}
+                      </td>
+
+                      {/* Linked Items */}
+                      <td className="px-4 py-4">
+                        {itemsCount > 0 ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-bold text-[11px]">
+                            {itemsCount} dish{itemsCount > 1 ? "es" : ""} linked
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 italic">Entire menu</span>
+                        )}
+                      </td>
+
+                      {/* Expiry */}
+                      <td className="px-4 py-4 text-slate-500 font-semibold">
+                        {deal.expiry || deal.expiryDate || "Ongoing"}
+                      </td>
+
+                      {/* Status */}
+                      <td className="px-4 py-4">
+                        <button
+                          onClick={() => toggleDealStatus(deal)}
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold transition flex items-center gap-1 ${
+                            isActive
+                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              : "bg-slate-100 text-slate-500 border border-slate-200"
+                          }`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-emerald-500" : "bg-slate-400"}`} />
+                          {isActive ? "Active" : "Inactive"}
+                        </button>
+                      </td>
+
+                      {/* Actions */}
+                      <td className="pr-6 pl-4 py-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => handleOpenEditModal(deal)}
+                            className="p-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                            title="Edit Deal"
+                          >
+                            <span className="material-symbols-outlined text-[17px]">edit</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteDeal(deal.id, deal.title)}
+                            className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 transition"
+                            title="Delete"
+                          >
+                            <span className="material-symbols-outlined text-[17px]">delete</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
 
-      {/* Add / Edit Deal Modal */}
+      {/* ── Add / Edit Modal ── */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-[#151c27]/40 backdrop-blur-sm" onClick={() => setIsModalOpen(false)}></div>
-          <div className="bg-white rounded-xl shadow-[0_10px_24px_rgba(0,0,0,0.08)] border border-[#dce2f3] w-full max-w-md relative z-10 flex flex-col overflow-hidden">
-            <div className="px-6 py-4 border-b border-[#dce2f3] bg-[#f9f9ff] flex justify-between items-center">
-              <h3 className="font-headline-md text-headline-md font-semibold text-[#151c27]">
-                {editDealId ? "Edit Deal" : "Create New Deal"}
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-base font-black text-slate-900 dark:text-white">
+                {editDealId ? "Edit Deal Campaign" : "Create New Deal Campaign"}
               </h3>
               <button
-                className="text-[#555f6f] hover:text-[#151c27] p-1 rounded-full hover:bg-[#f0f3ff] transition-colors"
                 onClick={() => setIsModalOpen(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
               >
-                <span className="material-symbols-outlined">close</span>
+                <span className="material-symbols-outlined text-xl">close</span>
               </button>
             </div>
-            
-            <form onSubmit={handleSaveDeal}>
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                    Campaign Deal Title <span className="text-[#ba1a1a]">*</span>
-                  </label>
-                  <input
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm font-body-sm text-[#151c27]"
-                    placeholder="e.g. Free Starter Drink with Burger"
-                    required
-                    type="text"
-                  />
-                </div>
 
+            <form onSubmit={handleSaveDeal} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-200 mb-1">
+                  Campaign Title <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="e.g. Free Starter Beverage on Orders Above ₹399"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                    Deal Promotion Type
-                  </label>
+                  <label className="block font-bold text-slate-700 dark:text-slate-200 mb-1">Deal Type</label>
                   <select
                     value={type}
                     onChange={(e) => setType(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm font-body-sm text-[#151c27]"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold outline-none focus:border-emerald-500"
                   >
-                    <option value="Buy 1 Get 1 Free">Buy 1 Get 1 Free</option>
-                    <option value="Free Item with Main Order">Free Item with Main Order</option>
-                    <option value="Flat 30% Off Beverages">Flat 30% Off Beverages</option>
-                    <option value="Combo Special Deal">Combo Special Deal</option>
+                    {DEAL_TYPES.map((dt) => (
+                      <option key={dt} value={dt}>{dt}</option>
+                    ))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                    Min. Order (₹) <span className="text-[#ba1a1a]">*</span>
+                  <label className="block font-bold text-slate-700 dark:text-slate-200 mb-1">
+                    Min. Order Value (₹) <span className="text-rose-500">*</span>
                   </label>
                   <input
+                    type="number"
+                    required
                     value={minOrder}
                     onChange={(e) => setMinOrder(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm text-[#151c27]"
-                    placeholder="0.00"
-                    required
-                    type="number"
+                    placeholder="e.g. 299"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold outline-none focus:border-emerald-500"
                   />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                      Start Date
-                    </label>
-                    <input
-                      value={startDate}
-                      onChange={(e) => setStartDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-[#555f6f] text-body-sm"
-                      type="date"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                      Expiry Date
-                    </label>
-                    <input
-                      value={expiryDate}
-                      onChange={(e) => setExpiryDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-[#555f6f] text-body-sm"
-                      type="date"
-                    />
-                  </div>
-                </div>
-
-                {/* Multi-Item Food Selector */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block font-label-md text-label-md text-[#151c27] font-semibold">
-                      Applicable Food / Menu Items
-                    </label>
-                    <span className="text-xs text-[#555f6f]">
-                      {selectedItemIds.length} item{selectedItemIds.length === 1 ? "" : "s"} selected
-                    </span>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="relative">
-                      <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
-                        search
-                      </span>
-                      <input
-                        type="text"
-                        placeholder="Search menu items to link..."
-                        value={itemSearch}
-                        onChange={(e) => setItemSearch(e.target.value)}
-                        className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#f9f9ff] border border-[#d3daea] rounded outline-none focus:border-[#10b981]"
-                      />
-                    </div>
-
-                    <select
-                      value=""
-                      onChange={(e) => {
-                        const id = e.target.value;
-                        if (id && !selectedItemIds.includes(id)) {
-                          setSelectedItemIds([...selectedItemIds, id]);
-                        }
-                      }}
-                      className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm text-[#151c27]"
-                    >
-                      <option value="">+ Click to link a dish to this offer...</option>
-                      {availableMenuItems
-                        .filter((item) => !selectedItemIds.includes(item.id))
-                        .map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.name} {item.price ? `(₹${item.price})` : ""} {item.foodType ? `[${item.foodType}]` : ""}
-                          </option>
-                        ))}
-                    </select>
-
-                    {/* Selected Item Pills */}
-                    {selectedItemIds.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5 p-2 bg-[#f9f9ff] rounded-lg border border-[#d3daea] max-h-32 overflow-y-auto">
-                        {selectedItemIds.map((id) => {
-                          const item = menuItems.find((m) => m.id === id);
-                          const name = item ? item.name : id;
-                          return (
-                            <span
-                              key={id}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200"
-                            >
-                              <span>{name}</span>
-                              <button
-                                type="button"
-                                onClick={() => setSelectedItemIds(selectedItemIds.filter((i) => i !== id))}
-                                className="w-4 h-4 rounded-full hover:bg-emerald-200 flex items-center justify-center text-emerald-700 font-bold ml-0.5"
-                              >
-                                ×
-                              </button>
-                            </span>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-[11px] text-slate-400 italic">
-                        No dishes selected yet. (Linked items will dynamically show an offer badge on the customer app)
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block font-label-md text-label-md text-[#151c27] mb-1 font-semibold">
-                    Status
-                  </label>
-                  <select
-                    value={status}
-                    onChange={(e) => setStatus(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-[#d3daea] rounded focus:outline-none focus:border-[#10b981] text-body-sm font-body-sm text-[#151c27]"
-                  >
-                    <option value="Active">Active</option>
-                    <option value="Expired">Expired</option>
-                  </select>
                 </div>
               </div>
 
-              <div className="px-6 py-4 border-t border-[#dce2f3] bg-[#f9f9ff] flex justify-end gap-3 rounded-b-xl">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-200 mb-1">Start Date</label>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-200 mb-1">Expiry Date</label>
+                  <input
+                    type="date"
+                    value={expiryDate}
+                    onChange={(e) => setExpiryDate(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* Linked Items Multi-Select */}
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-200 mb-1">
+                  Target Food Items (Leave empty to apply to entire menu)
+                </label>
+                <input
+                  type="text"
+                  value={itemSearch}
+                  onChange={(e) => setItemSearch(e.target.value)}
+                  placeholder="Search dishes to link..."
+                  className="w-full px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-semibold outline-none focus:border-emerald-500 mb-2"
+                />
+
+                <div className="max-h-36 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-xl p-2 space-y-1 bg-slate-50/50 dark:bg-slate-800/40">
+                  {availableMenuItems.slice(0, 15).map((item) => {
+                    const isSelected = selectedItemIds.includes(item.id);
+                    return (
+                      <label
+                        key={item.id}
+                        className={`flex items-center justify-between p-1.5 rounded-lg cursor-pointer transition ${
+                          isSelected ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-bold" : "hover:bg-slate-100 dark:hover:bg-slate-700/50 text-slate-700 dark:text-slate-300"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => {
+                              setSelectedItemIds((prev) =>
+                                isSelected ? prev.filter((id) => id !== item.id) : [...prev, item.id]
+                              );
+                            }}
+                            className="w-3.5 h-3.5 accent-emerald-500"
+                          />
+                          <span>{item.name || item.title}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-400">₹{item.price}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {!editDealId && (
+                <div className="pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={notifyCustomers}
+                      onChange={(e) => setNotifyCustomers(e.target.checked)}
+                      className="w-4 h-4 rounded accent-emerald-500"
+                    />
+                    Notify all customers via in-app broadcast alert
+                  </label>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2.5 pt-3">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 font-label-md text-label-md text-[#555f6f] hover:bg-[#f0f3ff] rounded transition-colors bg-white border border-[#d3daea]"
+                  className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 font-label-md text-label-md text-white bg-[#10b981] hover:bg-[#059669] rounded shadow-sm border-t border-white/20 transition-colors inner-shine"
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition"
                 >
-                  Save Deal
+                  {editDealId ? "Save Deal" : "Publish Deal"}
                 </button>
               </div>
             </form>
@@ -570,4 +570,5 @@ export const Deals = () => {
     </div>
   );
 };
+
 export default Deals;
