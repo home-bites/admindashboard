@@ -91,20 +91,87 @@ export const CANNED_REPLIES = [
   },
 ];
 
-const mapFirestoreTicketToUi = (ticket) => {
-  const customerName = ticket.customerName || (ticket.userId ? `Customer #${ticket.userId.substring(0, 6)}` : 'Customer');
-  const customerInitials = customerName.startsWith('Customer #') || customerName.startsWith('User #')
-    ? 'C'
-    : customerName.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
+const isPlaceholderName = (name) => {
+  if (!name || typeof name !== "string") return true;
+  const lower = name.trim().toLowerCase();
+  return (
+    lower === "" ||
+    lower === "gourmet customer" ||
+    lower === "gourmet" ||
+    lower === "customer" ||
+    lower === "user" ||
+    lower === "guest" ||
+    lower === "guest user" ||
+    lower === "unknown" ||
+    lower === "n/a" ||
+    lower.startsWith("customer #") ||
+    lower.startsWith("user #")
+  );
+};
+
+const mapFirestoreTicketToUi = (ticket, usersMap = {}) => {
+  const user = ticket.userId ? usersMap[ticket.userId] : null;
+
+  // 1. Resolve Name without placeholders
+  let resolvedName = ticket.customerName || ticket.userName || user?.displayName || user?.fullName || user?.name || user?.userName;
+  if (!resolvedName || isPlaceholderName(resolvedName)) {
+    if (user?.email && user.email.includes("@")) {
+      const prefix = user.email.split("@")[0].replace(/[._0-9]/g, " ").trim();
+      if (prefix.length > 2) {
+        resolvedName = prefix
+          .split(" ")
+          .filter(Boolean)
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+          .join(" ");
+      }
+    }
+  }
+
+  // 2. Resolve Mobile Number
+  let resolvedPhone =
+    ticket.customerPhone ||
+    ticket.userPhone ||
+    ticket.phoneNumber ||
+    user?.phoneNumber ||
+    user?.phone ||
+    user?.mobileNumber ||
+    "";
+  const rawDigits = String(resolvedPhone || "").replace(/\D/g, "");
+  const formattedPhone =
+    rawDigits.length >= 10
+      ? `+91 ${rawDigits.slice(-10, -5)} ${rawDigits.slice(-5)}`
+      : resolvedPhone;
+
+  if (!resolvedName || isPlaceholderName(resolvedName)) {
+    if (rawDigits.length >= 4) {
+      resolvedName = `Customer (${rawDigits.slice(-4)})`;
+    } else if (ticket.userId) {
+      resolvedName = `Customer #${ticket.userId.substring(0, 6)}`;
+    } else {
+      resolvedName = "HomeBites Customer";
+    }
+  }
+
+  const customerName = resolvedName;
+  const customerInitials =
+    customerName.startsWith("Customer (") || customerName.startsWith("Customer #") || customerName === "HomeBites Customer"
+      ? "C"
+      : customerName
+          .split(" ")
+          .filter(Boolean)
+          .map((n) => n[0])
+          .join("")
+          .toUpperCase()
+          .substring(0, 2);
 
   let timeStr = "Just now";
   if (ticket.createdAt) {
     if (ticket.createdAt.toDate) {
-      timeStr = ticket.createdAt.toDate().toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      timeStr = ticket.createdAt.toDate().toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
     } else if (ticket.createdAt.seconds) {
-      timeStr = new Date(ticket.createdAt.seconds * 1000).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      timeStr = new Date(ticket.createdAt.seconds * 1000).toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
     } else {
-      timeStr = new Date(ticket.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      timeStr = new Date(ticket.createdAt).toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
     }
   }
 
@@ -113,11 +180,11 @@ const mapFirestoreTicketToUi = (ticket) => {
     let initialTime = "";
     if (ticket.createdAt) {
       if (ticket.createdAt.toDate) {
-        initialTime = ticket.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        initialTime = ticket.createdAt.toDate().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       } else if (ticket.createdAt.seconds) {
-        initialTime = new Date(ticket.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        initialTime = new Date(ticket.createdAt.seconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       } else {
-        initialTime = new Date(ticket.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        initialTime = new Date(ticket.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       }
     }
     messages.push({
@@ -132,23 +199,23 @@ const mapFirestoreTicketToUi = (ticket) => {
     let msgTime = "";
     if (r.createdAt) {
       if (r.createdAt.toDate) {
-        msgTime = r.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        msgTime = r.createdAt.toDate().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       } else if (r.createdAt.seconds) {
-        msgTime = new Date(r.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        msgTime = new Date(r.createdAt.seconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       } else {
-        msgTime = new Date(r.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        msgTime = new Date(r.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       }
     }
     messages.push({
-      sender: r.senderName || (r.senderRole === 'Customer' ? customerName : 'Support Agent'),
-      role: r.senderRole?.toLowerCase() || (r.senderName === 'System Alert' ? 'system' : 'customer'),
+      sender: r.senderName || (r.senderRole === "Customer" ? customerName : "Support Agent"),
+      role: r.senderRole?.toLowerCase() || (r.senderName === "System Alert" ? "system" : "customer"),
       text: r.message,
       time: msgTime
     });
   });
 
-  const customerMeta = ticket.customerPhone || ticket.userPhone
-    ? `Phone: ${ticket.customerPhone || ticket.userPhone}`
+  const customerMeta = formattedPhone
+    ? formattedPhone
     : (ticket.orderId ? `Order #${ticket.orderId}` : `App Customer`);
 
   return {
@@ -156,14 +223,17 @@ const mapFirestoreTicketToUi = (ticket) => {
     id: ticket.id,
     title: ticket.subject || ticket.title || "Support Request",
     description: ticket.message || ticket.description || "No Message",
-    status: ticket.status || 'Open',
-    priority: ticket.priority || 'Medium',
+    status: ticket.status || "Open",
+    priority: ticket.priority || "Medium",
     time: timeStr,
     customerName,
+    customerPhone: resolvedPhone,
+    formattedPhone,
+    rawDigits,
     customerInitials,
     customerMeta,
     orderId: ticket.orderId && ticket.orderId !== "None" ? ticket.orderId : null,
-    assignedTo: ticket.assignedTo || '',
+    assignedTo: ticket.assignedTo || "",
     messages
   };
 };
@@ -172,7 +242,8 @@ export const CustomerSupport = () => {
   const { addToast } = useUiStore();
   const { user } = useAuthStore();
   const [viewMode, setViewMode] = useState("board"); // 'board' or 'list'
-  const [tickets, setTickets] = useState([]);
+  const [rawTickets, setRawTickets] = useState([]);
+  const [usersMap, setUsersMap] = useState({});
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [replyText, setReplyText] = useState("");
@@ -188,8 +259,11 @@ export const CustomerSupport = () => {
       priority: "High",
       time: "10m ago",
       customerName: "Sarah Jenkins",
+      customerPhone: "+91 98765 43210",
+      formattedPhone: "+91 98765 43210",
+      rawDigits: "9876543210",
       customerInitials: "SJ",
-      customerMeta: "Customer since Mar 2023 • 12 Orders",
+      customerMeta: "Phone: +91 98765 43210",
       orderId: "ORD-9921",
       assignedTo: "",
       messages: [
@@ -205,8 +279,11 @@ export const CustomerSupport = () => {
       priority: "Medium",
       time: "45m ago",
       customerName: "Mike R.",
+      customerPhone: "+91 98765 43211",
+      formattedPhone: "+91 98765 43211",
+      rawDigits: "9876543211",
       customerInitials: "MR",
-      customerMeta: "Customer since Jan 2024 • 4 Orders",
+      customerMeta: "Phone: +91 98765 43211",
       orderId: "ORD-9915",
       assignedTo: "",
       messages: [
@@ -221,8 +298,11 @@ export const CustomerSupport = () => {
       priority: "High",
       time: "2h ago",
       customerName: "Kevin T.",
+      customerPhone: "+91 98765 43212",
+      formattedPhone: "+91 98765 43212",
+      rawDigits: "9876543212",
       customerInitials: "KT",
-      customerMeta: "Customer since Jun 2023 • 31 Orders",
+      customerMeta: "Phone: +91 98765 43212",
       orderId: "ORD-9882",
       assignedTo: "Admin A",
       messages: [
@@ -238,8 +318,11 @@ export const CustomerSupport = () => {
       priority: "Low",
       time: "Yesterday",
       customerName: "Emma W.",
+      customerPhone: "+91 98765 43213",
+      formattedPhone: "+91 98765 43213",
+      rawDigits: "9876543213",
       customerInitials: "EW",
-      customerMeta: "Customer since Nov 2023 • 8 Orders",
+      customerMeta: "Phone: +91 98765 43213",
       orderId: "ORD-9750",
       assignedTo: "Admin B",
       messages: [
@@ -253,6 +336,38 @@ export const CustomerSupport = () => {
   const [showTemplatesModal, setShowTemplatesModal] = useState(false);
   const chatEndRef = useRef(null);
 
+  // Subscribe to real-time users collection for live customer names and phone numbers
+  useEffect(() => {
+    const unsubUsers = onSnapshot(
+      collection(db, "users"),
+      (snapshot) => {
+        const map = {};
+        snapshot.forEach((doc) => {
+          map[doc.id] = { id: doc.id, ...doc.data() };
+        });
+        setUsersMap(map);
+      },
+      (err) => {
+        console.warn("Users listener error in CustomerSupport:", err);
+      }
+    );
+    return () => unsubUsers();
+  }, []);
+
+  // Compute live mapped tickets with resolved names and phone numbers
+  const tickets = React.useMemo(() => {
+    if (!rawTickets || rawTickets.length === 0) return defaultTickets;
+    return rawTickets.map((t) => mapFirestoreTicketToUi(t, usersMap));
+  }, [rawTickets, usersMap]);
+
+  // Keep open ticket in drawer synchronized with real-time updates
+  useEffect(() => {
+    if (selectedTicket) {
+      const updated = tickets.find((t) => t.id === selectedTicket.id);
+      if (updated) setSelectedTicket(updated);
+    }
+  }, [tickets]);
+
   useEffect(() => {
     if (drawerOpen) {
       chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -263,16 +378,15 @@ export const CustomerSupport = () => {
     try {
       const data = await SupportTicketService.getSupportTickets();
       if (data && data.length > 0) {
-        const mapped = data.map(mapFirestoreTicketToUi);
-        setTickets(mapped);
-        return mapped;
+        setRawTickets(data);
+        return data.map((t) => mapFirestoreTicketToUi(t, usersMap));
       } else {
-        setTickets(defaultTickets);
+        setRawTickets(defaultTickets);
         return defaultTickets;
       }
     } catch (err) {
       console.error("Error fetching tickets:", err);
-      setTickets(defaultTickets);
+      setRawTickets(defaultTickets);
       return defaultTickets;
     }
   };
@@ -294,18 +408,10 @@ export const CustomerSupport = () => {
             const timeB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : new Date(b.createdAt || 0).getTime();
             return timeB - timeA;
           });
-          const mapped = items.map(mapFirestoreTicketToUi);
-          setTickets(mapped);
+          setRawTickets(items);
           setLoading(false);
-
-          // If a ticket is currently open in chat drawer, keep it live
-          setSelectedTicket((current) => {
-            if (!current) return null;
-            const updated = mapped.find((t) => t.id === current.id);
-            return updated || current;
-          });
         } else {
-          setTickets(defaultTickets);
+          setRawTickets(defaultTickets);
           setLoading(false);
         }
       },
@@ -580,19 +686,55 @@ export const CustomerSupport = () => {
                   className="bg-white rounded-lg p-4 border border-[#dce2f3] shadow-sm hover:shadow-md transition-all cursor-pointer group"
                 >
                   <div className="flex justify-between items-start mb-2">
-                    <span className="font-label-sm text-label-sm text-[#10b981] px-2 py-0.5 bg-[#ffdbd0] rounded">#{t.id}</span>
+                    <span className="font-label-sm text-label-sm text-[#10b981] px-2 py-0.5 bg-[#ffdbd0] rounded font-mono">#{t.id}</span>
                     <span className="font-body-sm text-[11px] text-[#555f6f]">{t.time}</span>
                   </div>
                   <h4 className="font-label-md text-body-sm text-[#151c27] mb-1 font-semibold group-hover:text-[#10b981] transition-colors">{t.title}</h4>
                   <p className="font-body-sm text-[12px] text-[#555f6f] line-clamp-2 mb-3">{t.description}</p>
-                  <div className="flex justify-between items-center border-t border-[#dce2f3]/50 pt-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-[#d6e0f3] flex items-center justify-center text-[10px] font-bold text-[#596373]">{t.customerInitials}</div>
-                      <span className="font-body-sm text-[12px] text-[#151c27]">{t.customerName}</span>
+                  
+                  {/* Customer Identity & Contact */}
+                  <div className="flex flex-col gap-1.5 border-t border-[#dce2f3]/50 pt-2.5">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-6 h-6 rounded-full bg-[#d6e0f3] flex items-center justify-center text-[10px] font-bold text-[#596373] shrink-0">
+                          {t.customerInitials}
+                        </div>
+                        <span className="font-body-sm text-[12px] font-semibold text-[#151c27] truncate">
+                          {t.customerName}
+                        </span>
+                      </div>
+                      {t.priority === "High" && (
+                        <span className="material-symbols-outlined text-[16px] text-[#ba1a1a]" title="High Priority">priority_high</span>
+                      )}
                     </div>
-                    {t.priority === "High" && (
-                      <span className="material-symbols-outlined text-[16px] text-[#ba1a1a]" title="High Priority">priority_high</span>
-                    )}
+                    {t.customerPhone ? (
+                      <div className="flex items-center justify-between text-[11px] text-[#555f6f] bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                        <span className="flex items-center gap-1 font-mono text-slate-700">
+                          <span className="material-symbols-outlined text-[13px] text-emerald-600">call</span>
+                          {t.formattedPhone || t.customerPhone}
+                        </span>
+                        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                          <a
+                            href={`tel:${t.rawDigits || t.customerPhone}`}
+                            className="text-emerald-700 hover:text-emerald-800 p-0.5 transition"
+                            title="Call customer"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">call</span>
+                          </a>
+                          {t.rawDigits && (
+                            <a
+                              href={`https://wa.me/91${t.rawDigits.slice(-10)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-emerald-600 hover:text-emerald-700 p-0.5 transition"
+                              title="WhatsApp customer"
+                            >
+                              <span className="material-symbols-outlined text-[14px]">chat</span>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -616,21 +758,57 @@ export const CustomerSupport = () => {
                   className="bg-white rounded-lg p-4 border border-[#dce2f3] shadow-sm hover:shadow-md transition-all cursor-pointer group"
                 >
                   <div className="flex justify-between items-start mb-2">
-                    <span className="font-label-sm text-label-sm text-[#10b981] px-2 py-0.5 bg-[#ffdbd0] rounded">#{t.id}</span>
+                    <span className="font-label-sm text-label-sm text-[#10b981] px-2 py-0.5 bg-[#ffdbd0] rounded font-mono">#{t.id}</span>
                     <span className="font-body-sm text-[11px] text-[#555f6f]">{t.time}</span>
                   </div>
                   <h4 className="font-label-md text-body-sm text-[#151c27] mb-1 font-semibold group-hover:text-[#10b981] transition-colors">{t.title}</h4>
                   <p className="font-body-sm text-[12px] text-[#555f6f] line-clamp-2 mb-3">{t.description}</p>
-                  <div className="flex justify-between items-center border-t border-[#dce2f3]/50 pt-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-[#d6e0f3] flex items-center justify-center text-[10px] font-bold text-[#596373]">{t.customerInitials}</div>
-                      <span className="font-body-sm text-[12px] text-[#151c27]">{t.customerName}</span>
-                    </div>
-                    {t.assignedTo && (
-                      <div className="w-6 h-6 rounded-full bg-[#10b981] flex items-center justify-center text-[10px] font-bold text-white border border-white" title={`Assigned to ${t.assignedTo}`}>
-                        {t.assignedTo.charAt(0)}
+                  
+                  {/* Customer Identity & Contact */}
+                  <div className="flex flex-col gap-1.5 border-t border-[#dce2f3]/50 pt-2.5">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-6 h-6 rounded-full bg-[#d6e0f3] flex items-center justify-center text-[10px] font-bold text-[#596373] shrink-0">
+                          {t.customerInitials}
+                        </div>
+                        <span className="font-body-sm text-[12px] font-semibold text-[#151c27] truncate">
+                          {t.customerName}
+                        </span>
                       </div>
-                    )}
+                      {t.assignedTo && (
+                        <div className="w-6 h-6 rounded-full bg-[#10b981] flex items-center justify-center text-[10px] font-bold text-white border border-white" title={`Assigned to ${t.assignedTo}`}>
+                          {t.assignedTo.charAt(0)}
+                        </div>
+                      )}
+                    </div>
+                    {t.customerPhone ? (
+                      <div className="flex items-center justify-between text-[11px] text-[#555f6f] bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                        <span className="flex items-center gap-1 font-mono text-slate-700">
+                          <span className="material-symbols-outlined text-[13px] text-emerald-600">call</span>
+                          {t.formattedPhone || t.customerPhone}
+                        </span>
+                        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                          <a
+                            href={`tel:${t.rawDigits || t.customerPhone}`}
+                            className="text-emerald-700 hover:text-emerald-800 p-0.5 transition"
+                            title="Call customer"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">call</span>
+                          </a>
+                          {t.rawDigits && (
+                            <a
+                              href={`https://wa.me/91${t.rawDigits.slice(-10)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-emerald-600 hover:text-emerald-700 p-0.5 transition"
+                              title="WhatsApp customer"
+                            >
+                              <span className="material-symbols-outlined text-[14px]">chat</span>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -654,11 +832,17 @@ export const CustomerSupport = () => {
                   className="bg-white rounded-lg p-4 border border-[#dce2f3] shadow-sm hover:shadow-md transition-all cursor-pointer group"
                 >
                   <div className="flex justify-between items-start mb-2">
-                    <span className="font-label-sm text-label-sm text-[#555f6f] px-2 py-0.5 bg-[#dce2f3] rounded line-through">#{t.id}</span>
+                    <span className="font-label-sm text-label-sm text-[#555f6f] px-2 py-0.5 bg-[#dce2f3] rounded line-through font-mono">#{t.id}</span>
                     <span className="font-body-sm text-[11px] text-[#555f6f]">{t.time}</span>
                   </div>
                   <h4 className="font-label-md text-body-sm text-[#555f6f] mb-1 font-semibold line-through">{t.title}</h4>
-                  <div className="flex justify-between items-center border-t border-[#dce2f3]/50 pt-3 mt-3">
+                  <div className="flex justify-between items-center border-t border-[#dce2f3]/50 pt-2 mt-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-5 h-5 rounded-full bg-[#d6e0f3] flex items-center justify-center text-[9px] font-bold text-[#596373]">
+                        {t.customerInitials}
+                      </div>
+                      <span className="text-[11px] text-[#555f6f] truncate">{t.customerName}</span>
+                    </div>
                     <div className="flex items-center gap-1 text-[#006c49]">
                       <span className="material-symbols-outlined text-[14px]">check_circle</span>
                       <span className="font-label-sm text-[10px] font-semibold">{t.resolution || "Resolved"}</span>
@@ -677,8 +861,9 @@ export const CustomerSupport = () => {
               <tr className="bg-[#f0f3ff] border-b border-[#dce2f3]">
                 <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Ticket ID</th>
                 <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Subject</th>
-                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Customer</th>
-                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Assigned To</th>
+                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Customer Name</th>
+                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Mobile Number</th>
+                <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Order</th>
                 <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Priority</th>
                 <th className="py-3.5 px-6 font-label-md text-label-md text-[#555f6f]">Status</th>
               </tr>
@@ -690,10 +875,52 @@ export const CustomerSupport = () => {
                   onClick={() => handleTicketClick(t)}
                   className="border-b border-[#dce2f3] hover:bg-slate-50 transition-colors cursor-pointer"
                 >
-                  <td className="py-4 px-6 font-semibold text-[#10b981]">#{t.id}</td>
-                  <td className="py-4 px-6 font-semibold">{t.title}</td>
-                  <td className="py-4 px-6">{t.customerName}</td>
-                  <td className="py-4 px-6">{t.assignedTo || "Unassigned"}</td>
+                  <td className="py-4 px-6 font-mono font-semibold text-[#10b981]">#{t.id}</td>
+                  <td className="py-4 px-6 font-semibold max-w-[200px] truncate" title={t.title}>{t.title}</td>
+                  <td className="py-4 px-6">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-700 shrink-0">
+                        {t.customerInitials}
+                      </div>
+                      <span className="font-semibold text-slate-900">{t.customerName}</span>
+                    </div>
+                  </td>
+                  <td className="py-4 px-6">
+                    {t.customerPhone ? (
+                      <div className="inline-flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        <span className="font-mono text-xs text-slate-700">{t.formattedPhone || t.customerPhone}</span>
+                        <a
+                          href={`tel:${t.rawDigits || t.customerPhone}`}
+                          className="w-6 h-6 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 flex items-center justify-center transition"
+                          title="Call customer"
+                        >
+                          <span className="material-symbols-outlined text-[13px]">call</span>
+                        </a>
+                        {t.rawDigits && (
+                          <a
+                            href={`https://wa.me/91${t.rawDigits.slice(-10)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-6 h-6 rounded bg-green-50 hover:bg-green-100 text-green-700 flex items-center justify-center transition"
+                            title="WhatsApp customer"
+                          >
+                            <span className="material-symbols-outlined text-[13px]">chat</span>
+                          </a>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-slate-400 text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="py-4 px-6">
+                    {t.orderId ? (
+                      <span className="font-mono text-xs font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                        #{t.orderId}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 text-xs">—</span>
+                    )}
+                  </td>
                   <td className="py-4 px-6">
                     <span
                       className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
@@ -810,28 +1037,61 @@ export const CustomerSupport = () => {
             </div>
 
             {/* Customer Context Bar */}
-            <div className="px-6 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-bold text-xs shadow-2xs flex-shrink-0">
+            <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-4 text-xs">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
                   {selectedTicket.customerInitials || "C"}
                 </div>
                 <div className="min-w-0">
-                  <div className="font-bold text-slate-900 truncate">
-                    {selectedTicket.customerName}
+                  <div className="font-bold text-slate-900 text-sm truncate flex items-center gap-2">
+                    <span>{selectedTicket.customerName}</span>
                   </div>
-                  <div className="text-[11px] text-slate-500 truncate flex items-center gap-1">
-                    <span>{selectedTicket.customerMeta}</span>
-                    {selectedTicket.time && <span>• {selectedTicket.time}</span>}
+                  <div className="text-[12px] text-slate-600 flex items-center gap-2 mt-0.5">
+                    {selectedTicket.customerPhone ? (
+                      <span className="font-mono font-medium flex items-center gap-1 text-slate-700">
+                        <span className="material-symbols-outlined text-[13px] text-emerald-600">call</span>
+                        {selectedTicket.formattedPhone || selectedTicket.customerPhone}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">No mobile recorded</span>
+                    )}
+                    {selectedTicket.time && <span className="text-slate-400">• {selectedTicket.time}</span>}
                   </div>
                 </div>
               </div>
 
-              {selectedTicket.orderId && selectedTicket.orderId !== "None" && (
-                <div className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-emerald-200 text-emerald-800 font-bold rounded-lg shadow-2xs text-[11px] flex-shrink-0">
-                  <span className="material-symbols-outlined text-[14px] text-emerald-600">receipt_long</span>
-                  Order #{selectedTicket.orderId}
-                </div>
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                {selectedTicket.customerPhone && (
+                  <>
+                    <a
+                      href={`tel:${selectedTicket.rawDigits || selectedTicket.customerPhone}`}
+                      className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-semibold transition shadow-2xs"
+                      title="Call customer directly"
+                    >
+                      <span className="material-symbols-outlined text-[15px]">call</span>
+                      <span className="hidden sm:inline">Call</span>
+                    </a>
+                    {selectedTicket.rawDigits && (
+                      <a
+                        href={`https://wa.me/91${selectedTicket.rawDigits.slice(-10)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-lg text-xs font-semibold transition shadow-2xs"
+                        title="Chat on WhatsApp"
+                      >
+                        <span className="material-symbols-outlined text-[15px]">chat</span>
+                        <span className="hidden sm:inline">WhatsApp</span>
+                      </a>
+                    )}
+                  </>
+                )}
+                {selectedTicket.orderId && selectedTicket.orderId !== "None" && (
+                  <div className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white border border-slate-200 text-slate-800 font-bold rounded-lg shadow-2xs text-[11px]">
+                    <span className="material-symbols-outlined text-[14px] text-emerald-600">receipt_long</span>
+                    Order #{selectedTicket.orderId}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Conversation History */}
