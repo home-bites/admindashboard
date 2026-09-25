@@ -7,12 +7,14 @@ import { ToastContainer } from "../components/ToastContainer";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { GlobalSearchModal } from "../components/GlobalSearchModal";
 import { useOrderNotification } from "../hooks/useOrderNotification";
+import { useSupportNotification } from "../hooks/useSupportNotification";
 
 export const AdminLayout = () => {
   const { sidebarCollapsed } = useUiStore();
   
-  // Attach the global order listener
+  // Attach global order & support ticket listeners
   useOrderNotification();
+  useSupportNotification();
 
   return (
     <div className="min-h-screen bg-[#f9f9ff] dark:bg-slate-950 text-[#151c27] dark:text-slate-100 flex transition-colors duration-200">

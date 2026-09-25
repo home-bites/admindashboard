@@ -1,10 +1,95 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { collection, onSnapshot } from "firebase/firestore";
+import { db } from "../firebase/firebaseConfig";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
 import { SupportTicketService } from "../services";
 import { notificationRepository } from "../repositories";
 import EmptyState from "../components/EmptyState";
 import * as LoadingComponents from "../components/LoadingComponents";
+
+export const CANNED_REPLIES = [
+  {
+    category: "Payment & Wallet",
+    icon: "account_balance_wallet",
+    items: [
+      {
+        label: "Razorpay / Bank Delay",
+        text: "If your issue is not resolved kindly share the transaction screenshot and present wallet screenshot, along with your name to 8184877798 whatsapp. Due to razorpay server down, some of the payments are not credited timely.",
+      },
+      {
+        label: "Wallet Credited",
+        text: "We have verified your payment and credited the amount to your HomeBites wallet. Please check your wallet balance in the app.",
+      },
+      {
+        label: "Refund Initiated",
+        text: "We have processed a refund for this transaction. It will reflect in your source bank account / wallet within 2-4 business days.",
+      },
+      {
+        label: "Payment Verification In Progress",
+        text: "We are currently checking the transaction with our payment gateway team. We will update you shortly.",
+      }
+    ],
+  },
+  {
+    category: "Delivery & Delay",
+    icon: "local_shipping",
+    items: [
+      {
+        label: "Rain / Weather Delay",
+        text: "Sorry for the inconvenience you faced! Delivery is slightly delayed due to severe rain / bad weather. Our delivery partner is carefully on the way.",
+      },
+      {
+        label: "Out for Delivery",
+        text: "Your order is out for delivery! The rider has collected your meal and is on the way. You can track live location in the app.",
+      },
+      {
+        label: "Kitchen Fresh Preparation",
+        text: "Your order is being freshly prepared by the kitchen chef. We are expediting it and will dispatch it immediately once packed.",
+      },
+      {
+        label: "On-Time Assurance Apology",
+        text: "Sorry for the inconvenience you faced, next time onwards we will ensure to give you order on time.",
+      }
+    ],
+  },
+  {
+    category: "Order Inquiries",
+    icon: "receipt_long",
+    items: [
+      {
+        label: "Request Order ID",
+        text: "Please send your Order ID so our support team can check the order status immediately.",
+      },
+      {
+        label: "Track in App",
+        text: "You can track your order live directly from the Order Tracking tab in your HomeBites app.",
+      },
+      {
+        label: "Missing Item Redelivery",
+        text: "We apologize for the missing item. We have initiated a redelivery and our kitchen is preparing it freshly.",
+      },
+      {
+        label: "Partial Refund for Item",
+        text: "We sincerely apologize. We have credited your wallet for the missing/affected item.",
+      }
+    ],
+  },
+  {
+    category: "Closure & Assistance",
+    icon: "verified",
+    items: [
+      {
+        label: "Issue Resolved",
+        text: "Your issue has been resolved. Please let us know if you need any further assistance. Thank you for choosing HomeBites!",
+      },
+      {
+        label: "WhatsApp Support Escalation",
+        text: "For instant support, you can also connect with our direct operations desk on WhatsApp at 8184877798.",
+      }
+    ],
+  },
+];
 
 const mapFirestoreTicketToUi = (ticket) => {
   const customerName = ticket.customerName || (ticket.userId ? `User #${ticket.userId.substring(0, 6)}` : 'Customer');
@@ -158,6 +243,8 @@ export const CustomerSupport = () => {
     }
   ];
 
+  const [activeCannedTab, setActiveCannedTab] = useState("all");
+
   const fetchTicketsList = async () => {
     try {
       const data = await SupportTicketService.getSupportTickets();
@@ -177,11 +264,44 @@ export const CustomerSupport = () => {
   };
 
   useEffect(() => {
-    const initFetch = async () => {
-      await fetchTicketsList();
-      setLoading(false);
-    };
-    initFetch();
+    // Real-time Firestore onSnapshot listener for instant updates
+    const colRef = collection(db, "supportTickets");
+    const unsubscribe = onSnapshot(
+      colRef,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const items = [];
+          snapshot.forEach((doc) => {
+            items.push({ id: doc.id, ...doc.data() });
+          });
+          // Sort newest tickets first
+          items.sort((a, b) => {
+            const timeA = a.createdAt?.seconds ? a.createdAt.seconds * 1000 : new Date(a.createdAt || 0).getTime();
+            const timeB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : new Date(b.createdAt || 0).getTime();
+            return timeB - timeA;
+          });
+          const mapped = items.map(mapFirestoreTicketToUi);
+          setTickets(mapped);
+          setLoading(false);
+
+          // If a ticket is currently open in chat drawer, keep it live
+          setSelectedTicket((current) => {
+            if (!current) return null;
+            const updated = mapped.find((t) => t.id === current.id);
+            return updated || current;
+          });
+        } else {
+          setTickets(defaultTickets);
+          setLoading(false);
+        }
+      },
+      (err) => {
+        console.warn("Support tickets real-time listener error, falling back to fetch:", err);
+        fetchTicketsList().finally(() => setLoading(false));
+      }
+    );
+
+    return () => unsubscribe();
   }, []);
 
   const handleTicketClick = (ticket) => {
@@ -192,6 +312,79 @@ export const CustomerSupport = () => {
   const handleCloseDrawer = () => {
     setDrawerOpen(false);
     setSelectedTicket(null);
+  };
+
+  const handleResolveTicket = async (ticketToResolve = selectedTicket, customReason = "Resolved by Admin") => {
+    if (!ticketToResolve) return;
+    const ticketId = ticketToResolve.id;
+    const newReply = {
+      senderId: user?.uid || "admin",
+      senderName: user?.displayName || "Admin User",
+      senderRole: "Admin",
+      message: `Ticket marked as Resolved: ${customReason}.`,
+      createdAt: new Date().toISOString()
+    };
+
+    try {
+      const currentReplies = ticketToResolve.replies || [];
+      const updatedReplies = [...currentReplies, newReply];
+
+      await SupportTicketService.updateSupportTicket(ticketId, {
+        status: "Resolved",
+        resolution: customReason,
+        resolvedAt: new Date().toISOString(),
+        replies: updatedReplies,
+        updatedAt: new Date().toISOString()
+      }, user);
+
+      // Create notification in customer's feed
+      if (ticketToResolve.userId) {
+        await notificationRepository.create({
+          userId: ticketToResolve.userId,
+          type: "support",
+          title: "Ticket Resolved",
+          message: `Your ticket #${ticketId.substring(0, 8)} has been marked as Resolved: ${customReason}. Thank you for reaching out to HomeBites support!`,
+          isRead: false,
+          referenceId: ticketId
+        });
+      }
+
+      addToast(`Ticket #${ticketId.substring(0, 8)} has been marked as Resolved.`, "success");
+      setSelectedTicket((prev) => (prev && prev.id === ticketId ? { ...prev, status: "Resolved", resolution: customReason } : prev));
+    } catch (err) {
+      console.error("Error resolving ticket:", err);
+      addToast("Failed to resolve ticket: " + (err.message || ""), "error");
+    }
+  };
+
+  const handleReopenTicket = async (ticketToReopen = selectedTicket) => {
+    if (!ticketToReopen) return;
+    const ticketId = ticketToReopen.id;
+    const newReply = {
+      senderId: user?.uid || "admin",
+      senderName: user?.displayName || "Admin User",
+      senderRole: "Admin",
+      message: "Ticket reopened by Admin for further follow-up.",
+      createdAt: new Date().toISOString()
+    };
+
+    try {
+      const currentReplies = ticketToReopen.replies || [];
+      const updatedReplies = [...currentReplies, newReply];
+
+      await SupportTicketService.updateSupportTicket(ticketId, {
+        status: "In Progress",
+        resolution: null,
+        replies: updatedReplies,
+        updatedAt: new Date().toISOString()
+      }, user);
+
+      addToast(`Ticket #${ticketId.substring(0, 8)} reopened for assistance.`, "info");
+      setSelectedTicket((prev) => (prev && prev.id === ticketId ? { ...prev, status: "In Progress", resolution: null } : prev));
+    } catch (err) {
+      console.error("Error reopening ticket:", err);
+      addToast("Failed to reopen ticket: " + (err.message || ""), "error");
+    }
   };
 
   const handleSendReply = async () => {
@@ -547,12 +740,34 @@ export const CustomerSupport = () => {
                 </div>
                 <h2 className="font-headline-md text-[20px] font-semibold text-[#151c27]">{selectedTicket.title}</h2>
               </div>
-              <button
-                className="w-8 h-8 rounded-full hover:bg-[#f0f3ff] flex items-center justify-center text-[#555f6f] transition-colors"
-                onClick={handleCloseDrawer}
-              >
-                <span className="material-symbols-outlined">close</span>
-              </button>
+              <div className="flex items-center gap-2">
+                {selectedTicket.status !== "Resolved" ? (
+                  <button
+                    onClick={() => handleResolveTicket(selectedTicket)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-[#10b981] hover:bg-[#059669] text-white rounded-lg font-bold text-xs shadow-sm transition"
+                    title="Mark ticket as Resolved and close"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                    <span>Resolved</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleReopenTicket(selectedTicket)}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg font-bold text-xs shadow-sm transition"
+                    title="Reopen ticket for further assistance"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                    <span>Reopen</span>
+                  </button>
+                )}
+                <button
+                  className="w-8 h-8 rounded-full hover:bg-[#f0f3ff] flex items-center justify-center text-[#555f6f] transition-colors"
+                  onClick={handleCloseDrawer}
+                  title="Close Drawer"
+                >
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
             </div>
 
             {/* Customer Context Bar */}
@@ -620,9 +835,15 @@ export const CustomerSupport = () => {
 
             {/* Action Area */}
             {selectedTicket.status !== "Resolved" ? (
-              <div className="border-t border-[#dce2f3] bg-[#f9f9ff] p-4">
-                {/* Quick Actions */}
-                <div className="flex gap-2 mb-3 overflow-x-auto pb-1">
+              <div className="border-t border-[#dce2f3] bg-[#f9f9ff] p-4 flex flex-col gap-3">
+                {/* Quick Actions Bar with Resolved button */}
+                <div className="flex gap-2 overflow-x-auto pb-1 items-center">
+                  <button
+                    onClick={() => handleResolveTicket(selectedTicket)}
+                    className="whitespace-nowrap px-3 py-1.5 bg-[#ecfdf5] border border-[#10b981] text-[#006c49] hover:bg-[#10b981] hover:text-white rounded-full font-label-sm text-[11px] font-bold transition-all flex items-center gap-1 shadow-sm"
+                  >
+                    <span className="material-symbols-outlined text-[15px]">check_circle</span> Mark Resolved & Close
+                  </button>
                   <button
                     onClick={() => handleQuickAction("refund")}
                     className="whitespace-nowrap px-3 py-1.5 bg-white border border-[#dce2f3] rounded-full font-label-sm text-[11px] text-[#151c27] hover:border-[#10b981] hover:text-[#10b981] transition-colors flex items-center gap-1 shadow-sm"
@@ -641,6 +862,59 @@ export const CustomerSupport = () => {
                   >
                     Apologize & Credit
                   </button>
+                </div>
+
+                {/* Pre-designed Quick Reply Messages */}
+                <div className="bg-white p-3 rounded-xl border border-[#dce2f3] shadow-xs">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
+                      <span className="material-symbols-outlined text-[15px] text-[#10b981]">quickreply</span>
+                      Pre-designed Quick Replies
+                    </span>
+                    <div className="flex gap-1">
+                      {[
+                        { id: "all", label: "All" },
+                        { id: "Payment & Wallet", label: "Payment" },
+                        { id: "Delivery & Delay", label: "Delivery" },
+                        { id: "Order Inquiries", label: "Orders" },
+                        { id: "Closure & Assistance", label: "Closure" },
+                      ].map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setActiveCannedTab(tab.id)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold transition ${
+                            activeCannedTab === tab.id
+                              ? "bg-[#10b981] text-white"
+                              : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto pr-1">
+                    {CANNED_REPLIES.filter(
+                      (cat) => activeCannedTab === "all" || cat.category === activeCannedTab
+                    )
+                      .flatMap((cat) => cat.items)
+                      .map((item, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setReplyText(item.text)}
+                          className="text-left px-2.5 py-1 bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-[#10b981] text-slate-700 hover:text-emerald-800 rounded-lg text-[11px] font-medium transition flex items-center gap-1 group shadow-xs"
+                          title={item.text}
+                        >
+                          <span className="material-symbols-outlined text-[12px] text-slate-400 group-hover:text-[#10b981]">
+                            add
+                          </span>
+                          <span>{item.label}</span>
+                        </button>
+                      ))}
+                  </div>
                 </div>
 
                 {/* Reply Input */}
@@ -663,9 +937,18 @@ export const CustomerSupport = () => {
                 </div>
               </div>
             ) : (
-              <div className="border-t border-[#dce2f3] bg-[#ecfdf5] p-4 text-center text-[#006c49] font-label-md text-label-md flex justify-center items-center gap-2">
-                <span className="material-symbols-outlined">check_circle</span>
-                Ticket is Resolved ({selectedTicket.resolution})
+              <div className="border-t border-[#dce2f3] bg-[#ecfdf5] p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-[#006c49]">
+                <div className="flex items-center gap-2 font-bold text-sm">
+                  <span className="material-symbols-outlined text-emerald-600">check_circle</span>
+                  <span>Ticket is Resolved ({selectedTicket.resolution || "Resolved"})</span>
+                </div>
+                <button
+                  onClick={() => handleReopenTicket(selectedTicket)}
+                  className="px-3 py-1.5 bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100 rounded-lg text-xs font-bold transition shadow-xs flex items-center gap-1"
+                >
+                  <span className="material-symbols-outlined text-[15px]">restart_alt</span>
+                  Reopen Ticket
+                </button>
               </div>
             )}
           </>
