@@ -151,6 +151,18 @@ export const Settings = () => {
   const [showPartnerEarnings, setShowPartnerEarnings] = useState(false);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
 
+  // App Version, Store Links & Update Modal State
+  const [latestAppVersion, setLatestAppVersion] = useState("1.0.10");
+  const [minimumAppVersion, setMinimumAppVersion] = useState("1.0.9");
+  const [forceUpdateEnabled, setForceUpdateEnabled] = useState(false);
+  const [showUpdatePrompt, setShowUpdatePrompt] = useState(false);
+  const [updateTitle, setUpdateTitle] = useState("New Update Available!");
+  const [updateMessage, setUpdateMessage] = useState("Download HomBites - Delicious homemade food delivered straight to your doorstep!");
+  const [playStoreUrl, setPlayStoreUrl] = useState("https://play.google.com/store/apps/details?id=com.homebites.customer.customerApp");
+  const [appStoreUrl, setAppStoreUrl] = useState("");
+  const [showUpdateModalPreview, setShowUpdateModalPreview] = useState(false);
+  const [previewPlatform, setPreviewPlatform] = useState("android");
+
   // Operational Hours state
   const [hours, setHours] = useState([
     { day: "Mon", active: true, start: "09:00", end: "22:00" },
@@ -228,6 +240,15 @@ export const Settings = () => {
           setDeliveryTrackingEnabled(data.deliveryTrackingEnabled !== undefined ? data.deliveryTrackingEnabled : true);
           setShowPartnerEarnings(data.showPartnerEarnings !== undefined ? data.showPartnerEarnings : false);
           setMaintenanceMode(data.maintenanceMode !== undefined ? data.maintenanceMode : false);
+
+          setLatestAppVersion(data.latestAppVersion || "1.0.10");
+          setMinimumAppVersion(data.minimumAppVersion || "1.0.9");
+          setForceUpdateEnabled(data.forceUpdateEnabled !== undefined ? data.forceUpdateEnabled : false);
+          setShowUpdatePrompt(data.showUpdatePrompt !== undefined ? data.showUpdatePrompt : false);
+          setUpdateTitle(data.updateTitle || "New Update Available!");
+          setUpdateMessage(data.updateMessage || "Download HomBites - Delicious homemade food delivered straight to your doorstep!");
+          setPlayStoreUrl(data.playStoreUrl || "https://play.google.com/store/apps/details?id=com.homebites.customer.customerApp");
+          setAppStoreUrl(data.appStoreUrl || "");
 
           if (data.hours) {
             setHours(data.hours);
@@ -333,6 +354,14 @@ export const Settings = () => {
       deliveryTrackingEnabled,
       showPartnerEarnings,
       maintenanceMode,
+      latestAppVersion: String(latestAppVersion || "1.0.10").trim(),
+      minimumAppVersion: String(minimumAppVersion || "1.0.9").trim(),
+      forceUpdateEnabled: Boolean(forceUpdateEnabled),
+      showUpdatePrompt: Boolean(showUpdatePrompt),
+      updateTitle: String(updateTitle || "New Update Available!").trim(),
+      updateMessage: String(updateMessage || "").trim(),
+      playStoreUrl: String(playStoreUrl || "").trim(),
+      appStoreUrl: String(appStoreUrl || "").trim(),
       hours,
       // Spread, not assigned: when the pair is blank the keys are absent from
       // the payload entirely, so an existing value is left alone and an unset
@@ -1209,7 +1238,214 @@ export const Settings = () => {
                     </div>
                     <p className="text-[10px] text-[#555f6f]">Maximum COD order value (0 = no maximum), which caps the cash a rider carries.</p>
                   </div>
+                </div>
+              </div>
 
+              {/* App Updates, Version Control & Store Links Panel */}
+              <div className="p-5 border border-emerald-200 bg-[#fbfdfb] rounded-xl shadow-2xs space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-emerald-100 gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-emerald-600 text-[22px]">system_update</span>
+                      <h4 className="font-label-lg text-label-lg text-[#151c27] font-bold">Customer App Updates & Store Links</h4>
+                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">
+                        Live Remote Sync
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#555f6f] mt-1">
+                      Configure store download links and trigger the in-app update prompt directly on customer devices without publishing a new app release.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowUpdateModalPreview(true)}
+                      className="px-3.5 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-2xs"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">visibility</span>
+                      Preview In-App Modal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSave}
+                      className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-2xs"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">save</span>
+                      Save Changes
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Android Play Store Link */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Android Google Play Store Link
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="url"
+                        value={playStoreUrl}
+                        onChange={(e) => setPlayStoreUrl(e.target.value)}
+                        placeholder="https://play.google.com/store/apps/details?id=com.homebites.customer.customerApp"
+                        className="w-full border border-[#dce2f3] rounded-lg px-3 py-2 text-xs text-[#151c27] bg-white focus:border-emerald-500 outline-none"
+                      />
+                      {playStoreUrl && (
+                        <a
+                          href={playStoreUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-emerald-600 hover:text-emerald-700"
+                          title="Test Play Store Link"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+                        </a>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-[#555f6f] mt-1">Used dynamically on all Android devices when prompting updates.</p>
+                  </div>
+
+                  {/* iOS App Store Link */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      iOS Apple App Store Link
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="url"
+                        value={appStoreUrl}
+                        onChange={(e) => setAppStoreUrl(e.target.value)}
+                        placeholder="https://apps.apple.com/app/homebites/..."
+                        className="w-full border border-[#dce2f3] rounded-lg px-3 py-2 text-xs text-[#151c27] bg-white focus:border-emerald-500 outline-none"
+                      />
+                      {appStoreUrl && (
+                        <a
+                          href={appStoreUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-emerald-600 hover:text-emerald-700"
+                          title="Test App Store Link"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+                        </a>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-[#555f6f] mt-1">Used on iOS devices. If left blank, customer app indicates iOS rolling out.</p>
+                  </div>
+
+                  {/* Latest App Version */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Latest Available Version
+                    </label>
+                    <input
+                      type="text"
+                      value={latestAppVersion}
+                      onChange={(e) => setLatestAppVersion(e.target.value)}
+                      placeholder="1.0.10"
+                      className="w-full border border-[#dce2f3] rounded-lg px-3 py-2 text-xs text-[#151c27] bg-white focus:border-emerald-500 outline-none"
+                    />
+                    <p className="text-[10px] text-[#555f6f] mt-1">Customers on older versions will see the update banner/modal.</p>
+                  </div>
+
+                  {/* Minimum Supported Version */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Minimum Required Version (Floor)
+                    </label>
+                    <input
+                      type="text"
+                      value={minimumAppVersion}
+                      onChange={(e) => setMinimumAppVersion(e.target.value)}
+                      placeholder="1.0.9"
+                      className="w-full border border-[#dce2f3] rounded-lg px-3 py-2 text-xs text-[#151c27] bg-white focus:border-emerald-500 outline-none"
+                    />
+                    <p className="text-[10px] text-[#555f6f] mt-1">Versions below this will be forced to update if Force Update is enabled.</p>
+                  </div>
+                </div>
+
+                {/* Toggles */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                  <div className="flex items-center justify-between p-3.5 bg-white rounded-lg border border-slate-200">
+                    <div>
+                      <p className="font-label-md text-label-md text-[#151c27] font-semibold flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-emerald-600 text-[18px]">campaign</span>
+                        Display In-App Update Modal
+                      </p>
+                      <p className="text-[10px] text-[#555f6f]">Displays an interactive popup in the customer app prompting them to download the update.</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={showUpdatePrompt}
+                        onChange={(e) => setShowUpdatePrompt(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-[#d3daea] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#10b981]"></div>
+                    </label>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3.5 bg-white rounded-lg border border-slate-200">
+                    <div>
+                      <p className="font-label-md text-label-md text-[#151c27] font-semibold flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-rose-500 text-[18px]">lock</span>
+                        Mandatory Force Update
+                      </p>
+                      <p className="text-[10px] text-[#555f6f]">Prevents app usage for versions below the minimum required version until updated.</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={forceUpdateEnabled}
+                        onChange={(e) => setForceUpdateEnabled(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-[#d3daea] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#10b981]"></div>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Modal Message Configuration */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Update Dialog Title
+                    </label>
+                    <input
+                      type="text"
+                      value={updateTitle}
+                      onChange={(e) => setUpdateTitle(e.target.value)}
+                      placeholder="New Update Available!"
+                      className="w-full border border-[#dce2f3] rounded-lg px-3 py-2 text-xs text-[#151c27] bg-white focus:border-emerald-500 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Update Dialog Message / Description
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={updateMessage}
+                      onChange={(e) => setUpdateMessage(e.target.value)}
+                      placeholder="Download HomBites - Delicious homemade food delivered straight to your doorstep!"
+                      className="w-full border border-[#dce2f3] rounded-lg px-3 py-2 text-xs text-[#151c27] bg-white focus:border-emerald-500 outline-none resize-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Preview Trigger */}
+                <div className="flex items-center justify-between pt-3 border-t border-[#dce2f3]">
+                  <p className="text-[11px] text-[#555f6f]">
+                    Preview what customers will see when this update modal is displayed on their phones:
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowUpdateModalPreview(true)}
+                    className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold text-xs rounded-lg border border-emerald-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">visibility</span>
+                    Preview Customer Modal
+                  </button>
                 </div>
               </div>
 
@@ -1501,6 +1737,168 @@ export const Settings = () => {
           </div>
         )}
       </div>
+
+      {/* Customer App Update Modal Preview Dialog */}
+      {showUpdateModalPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-emerald-600 to-teal-700 px-5 py-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-[22px]">system_update</span>
+                <div>
+                  <h3 className="font-bold text-sm leading-tight">Customer App Update Dialog</h3>
+                  <p className="text-[11px] text-emerald-100">Live preview of customer screen</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowUpdateModalPreview(false)}
+                className="p-1 rounded-full hover:bg-white/20 text-white transition-colors"
+                title="Close Preview"
+              >
+                <span className="material-symbols-outlined text-[20px]">close</span>
+              </button>
+            </div>
+
+            {/* Platform Switcher & Config Bar */}
+            <div className="bg-slate-50 border-b border-slate-200 px-5 py-2.5 flex items-center justify-between text-xs">
+              <span className="text-slate-600 font-medium">Device Preview:</span>
+              <div className="flex bg-slate-200 p-0.5 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setPreviewPlatform("android")}
+                  className={`px-3 py-1 rounded-md font-semibold transition-all ${
+                    previewPlatform === "android"
+                      ? "bg-white text-emerald-700 shadow-sm"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  Android
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewPlatform("ios")}
+                  className={`px-3 py-1 rounded-md font-semibold transition-all ${
+                    previewPlatform === "ios"
+                      ? "bg-white text-emerald-700 shadow-sm"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  iOS
+                </button>
+              </div>
+            </div>
+
+            {/* Simulated Phone Dialog Content */}
+            <div className="p-6">
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-center shadow-inner relative">
+                {/* Decorative Icon */}
+                <div className="w-16 h-16 mx-auto mb-3 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 text-white flex items-center justify-center shadow-md shadow-emerald-200">
+                  <span className="material-symbols-outlined text-[32px]">rocket_launch</span>
+                </div>
+
+                {/* Badge */}
+                <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-bold mb-2">
+                  <span>Version {latestAppVersion || "1.0.10"} Available</span>
+                </div>
+
+                {/* Title */}
+                <h4 className="text-base font-bold text-slate-800 mb-1.5">
+                  {updateTitle || "New Update Available!"}
+                </h4>
+
+                {/* Message */}
+                <p className="text-xs text-slate-600 leading-relaxed mb-4 whitespace-pre-line">
+                  {updateMessage || "Download HomBites - Delicious homemade food delivered straight to your doorstep!"}
+                </p>
+
+                {/* Target Store Link Display */}
+                <div className="bg-white border border-slate-200 rounded-lg p-2.5 mb-4 text-left">
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-slate-700 mb-1">
+                    <span className="flex items-center gap-1">
+                      <span className="material-symbols-outlined text-[14px] text-emerald-600">link</span>
+                      {previewPlatform === "ios" ? "Target iOS Store URL:" : "Target Play Store URL:"}
+                    </span>
+                    {(previewPlatform === "ios" ? appStoreUrl : playStoreUrl) && (
+                      <a
+                        href={previewPlatform === "ios" ? appStoreUrl : playStoreUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-emerald-600 hover:underline flex items-center gap-0.5"
+                      >
+                        <span>Test Link</span>
+                        <span className="material-symbols-outlined text-[12px]">open_in_new</span>
+                      </a>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-mono truncate">
+                    {(previewPlatform === "ios" ? appStoreUrl : playStoreUrl) || "(Not configured yet - Customer app will prompt gracefully)"}
+                  </p>
+                </div>
+
+                {/* Mode status badge */}
+                <div className="text-[10px] mb-4">
+                  {forceUpdateEnabled ? (
+                    <span className="inline-flex items-center gap-1 text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md font-semibold border border-rose-200">
+                      <span className="material-symbols-outlined text-[12px]">lock</span>
+                      Mandatory Update (Customer must update before using app)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md font-semibold border border-emerald-200">
+                      <span className="material-symbols-outlined text-[12px]">check_circle</span>
+                      Flexible Update (Customer can dismiss and update later)
+                    </span>
+                  )}
+                </div>
+
+                {/* Action Buttons Simulation */}
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = previewPlatform === "ios" ? appStoreUrl : playStoreUrl;
+                      if (url) {
+                        window.open(url, "_blank", "noopener,noreferrer");
+                      } else {
+                        alert("No URL configured for " + (previewPlatform === "ios" ? "iOS App Store" : "Google Play Store"));
+                      }
+                    }}
+                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <span>Update Now</span>
+                    <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
+                  </button>
+
+                  {!forceUpdateEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => setShowUpdateModalPreview(false)}
+                      className="w-full py-2 bg-transparent hover:bg-slate-200/60 text-slate-600 rounded-xl text-xs font-semibold transition-all cursor-pointer"
+                    >
+                      Maybe Later
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="bg-slate-50 px-5 py-3 border-t border-slate-200 flex items-center justify-between">
+              <span className="text-[11px] text-slate-500">
+                Live changes save directly to Firestore <code className="text-slate-700 font-mono">appSettings/general</code>
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowUpdateModalPreview(false)}
+                className="px-3.5 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
