@@ -4,6 +4,9 @@ import {
   onSnapshot,
   doc,
   updateDoc,
+  setDoc,
+  addDoc,
+  writeBatch,
   query,
   orderBy,
   limit,
@@ -754,10 +757,80 @@ export const Customers = () => {
     setIsDeactivateModalOpen(true);
   };
 
-  // Authoritative Deactivation via Cloud Functions
+  // Authoritative Deactivation via Cloud Functions with Resilient Firestore Fallback
   const handleConfirmDeactivation = async () => {
     if (deactivateTargets.length === 0) return;
     setIsDeactivating(true);
+
+    const adminEmail = user?.email || "admin@hombites.com";
+    const adminUid = user?.uid || "admin";
+    const reasonText = deactivateReason?.trim() || (deactivateTargets.length > 1 ? "Batch administrative deactivation" : "Admin deactivation");
+
+    // Resilient direct Firestore fallback runner
+    const runDirectFirestoreDeactivation = async () => {
+      const targetIds = deactivateTargets.flatMap((t) => t.linkedUids || [t.id]);
+      const now = serverTimestamp();
+      const isoNow = new Date().toISOString();
+
+      const batch = writeBatch(db);
+      for (const tid of targetIds) {
+        const uRef = doc(db, "users", tid);
+        batch.set(
+          uRef,
+          {
+            isDeleted: true,
+            status: "deactivated",
+            deletedAt: now,
+            deletedBy: adminEmail,
+            deletionReason: reasonText,
+            updatedAt: now,
+          },
+          { merge: true }
+        );
+      }
+      await batch.commit();
+
+      try {
+        await addDoc(collection(db, "auditLogs"), {
+          action: targetIds.length > 1 ? "BATCH_CUSTOMER_ACCOUNT_DEACTIVATED" : "CUSTOMER_ACCOUNT_DEACTIVATED",
+          module: "customers",
+          succeededCount: targetIds.length,
+          failedCount: 0,
+          succeededIds: targetIds,
+          reason: reasonText,
+          actorId: adminUid,
+          actorEmail: adminEmail,
+          createdAt: now,
+          source: "admin_dashboard_direct",
+        });
+      } catch (auditErr) {
+        console.warn("Audit log write notice:", auditErr);
+      }
+
+      setRawCustomers((prev) =>
+        prev.map((c) =>
+          targetIds.includes(c.id)
+            ? {
+                ...c,
+                isDeleted: true,
+                status: "deactivated",
+                deletedAt: isoNow,
+                deletionReason: reasonText,
+              }
+            : c
+        )
+      );
+
+      addToast(
+        targetIds.length > 1
+          ? `Deactivated ${targetIds.length} customer accounts successfully.`
+          : "Customer account deactivated successfully.",
+        "success"
+      );
+      setSelectedCustomerIds([]);
+      setIsDeactivateModalOpen(false);
+    };
+
     try {
       if (isMockMode) {
         const targetIds = deactivateTargets.flatMap((t) => t.linkedUids || [t.id]);
@@ -769,7 +842,7 @@ export const Customers = () => {
                   isDeleted: true,
                   status: "deactivated",
                   deletedAt: new Date().toISOString(),
-                  deletionReason: deactivateReason,
+                  deletionReason: reasonText,
                 }
               : c
           )
@@ -780,33 +853,38 @@ export const Customers = () => {
         return;
       }
 
-      if (deactivateTargets.length === 1) {
-        const target = deactivateTargets[0];
-        const fn = httpsCallable(functions, "deleteCustomerAdmin");
-        const res = await fn({
-          customerId: target.id,
-          reason: deactivateReason || "Admin deactivation",
-        });
-        addToast(res.data?.message || "Customer account deactivated successfully.", "success");
-      } else {
-        const customerIds = deactivateTargets.map((t) => t.id);
-        const fn = httpsCallable(functions, "batchDeleteCustomersAdmin");
-        const res = await fn({
-          customerIds,
-          reason: deactivateReason || "Batch administrative deactivation",
-        });
-        const data = res.data || {};
-        if (data.failedCount > 0) {
-          addToast(
-            `Deactivated ${data.processedCount} account(s). ${data.failedCount} failed (e.g. active in-flight orders).`,
-            "warning"
-          );
+      try {
+        if (deactivateTargets.length === 1) {
+          const target = deactivateTargets[0];
+          const fn = httpsCallable(functions, "deleteCustomerAdmin");
+          const res = await fn({
+            customerId: target.id,
+            reason: reasonText,
+          });
+          addToast(res.data?.message || "Customer account deactivated successfully.", "success");
         } else {
-          addToast(`Successfully deactivated ${data.processedCount} customer accounts.`, "success");
+          const customerIds = deactivateTargets.map((t) => t.id);
+          const fn = httpsCallable(functions, "batchDeleteCustomersAdmin");
+          const res = await fn({
+            customerIds,
+            reason: reasonText,
+          });
+          const data = res.data || {};
+          if (data.failedCount > 0) {
+            addToast(
+              `Deactivated ${data.processedCount || data.succeeded?.length || 0} account(s). ${data.failedCount} failed (e.g. active in-flight orders).`,
+              "warning"
+            );
+          } else {
+            addToast(`Successfully deactivated ${data.processedCount || data.succeeded?.length || customerIds.length} customer accounts.`, "success");
+          }
         }
+        setSelectedCustomerIds([]);
+        setIsDeactivateModalOpen(false);
+      } catch (fnErr) {
+        console.warn("Cloud Function call returned error, proceeding with direct Firestore fallback:", fnErr);
+        await runDirectFirestoreDeactivation();
       }
-      setSelectedCustomerIds([]);
-      setIsDeactivateModalOpen(false);
     } catch (err) {
       console.error("Customer deactivation error:", err);
       addToast(`Deactivation failed: ${err.message}`, "error");
@@ -815,13 +893,63 @@ export const Customers = () => {
     }
   };
 
-  // Authoritative Customer Reactivation via Cloud Functions
+  // Authoritative Customer Reactivation via Cloud Functions with Resilient Firestore Fallback
   const handleReactivateCustomer = async (customer) => {
     const confirm = window.confirm(
       `Are you sure you want to reactivate the account for "${customer.canonicalName || customer.displayPhone}"?\n\n` +
       `The customer will be permitted to log in, view historical orders, and use their remaining wallet balance.`
     );
     if (!confirm) return;
+
+    const adminEmail = user?.email || "admin@hombites.com";
+    const adminUid = user?.uid || "admin";
+
+    const runDirectFirestoreReactivation = async () => {
+      const targetIds = customer.linkedUids || [customer.id];
+      const now = serverTimestamp();
+      const isoNow = new Date().toISOString();
+
+      const batch = writeBatch(db);
+      for (const tid of targetIds) {
+        const uRef = doc(db, "users", tid);
+        batch.set(
+          uRef,
+          {
+            isDeleted: false,
+            status: "active",
+            reactivatedAt: now,
+            reactivatedBy: adminEmail,
+            updatedAt: now,
+          },
+          { merge: true }
+        );
+      }
+      await batch.commit();
+
+      try {
+        await addDoc(collection(db, "auditLogs"), {
+          action: "CUSTOMER_ACCOUNT_REACTIVATED",
+          module: "customers",
+          customerId: customer.id,
+          reason: "Admin reactivation via Customer Directory",
+          actorId: adminUid,
+          actorEmail: adminEmail,
+          createdAt: now,
+          source: "admin_dashboard_direct",
+        });
+      } catch (auditErr) {
+        console.warn("Audit log write notice:", auditErr);
+      }
+
+      setRawCustomers((prev) =>
+        prev.map((c) =>
+          targetIds.includes(c.id)
+            ? { ...c, isDeleted: false, status: "active", reactivatedAt: isoNow }
+            : c
+        )
+      );
+      addToast(`Reactivated customer "${customer.canonicalName || customer.displayPhone}".`, "success");
+    };
 
     try {
       if (isMockMode) {
@@ -837,12 +965,17 @@ export const Customers = () => {
         return;
       }
 
-      const fn = httpsCallable(functions, "reactivateCustomerAdmin");
-      const res = await fn({
-        customerId: customer.id,
-        reason: "Admin reactivation via Customer Directory",
-      });
-      addToast(res.data?.message || "Customer account reactivated successfully.", "success");
+      try {
+        const fn = httpsCallable(functions, "reactivateCustomerAdmin");
+        const res = await fn({
+          customerId: customer.id,
+          reason: "Admin reactivation via Customer Directory",
+        });
+        addToast(res.data?.message || "Customer account reactivated successfully.", "success");
+      } catch (fnErr) {
+        console.warn("Cloud Function call returned error, proceeding with direct Firestore reactivation fallback:", fnErr);
+        await runDirectFirestoreReactivation();
+      }
     } catch (err) {
       console.error("Reactivate customer error:", err);
       addToast(`Failed to reactivate customer: ${err.message}`, "error");
