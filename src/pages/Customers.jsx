@@ -772,23 +772,28 @@ export const Customers = () => {
       const now = serverTimestamp();
       const isoNow = new Date().toISOString();
 
-      const batch = writeBatch(db);
-      for (const tid of targetIds) {
-        const uRef = doc(db, "users", tid);
-        batch.set(
-          uRef,
-          {
-            isDeleted: true,
-            status: "deactivated",
-            deletedAt: now,
-            deletedBy: adminEmail,
-            deletionReason: reasonText,
-            updatedAt: now,
-          },
-          { merge: true }
-        );
+      // Batch update user docs in chunks of 400 (safely within Firestore's 500-write batch limit)
+      const BATCH_SIZE = 400;
+      for (let i = 0; i < targetIds.length; i += BATCH_SIZE) {
+        const chunk = targetIds.slice(i, i + BATCH_SIZE);
+        const batch = writeBatch(db);
+        for (const tid of chunk) {
+          const uRef = doc(db, "users", tid);
+          batch.set(
+            uRef,
+            {
+              isDeleted: true,
+              status: "deactivated",
+              deletedAt: now,
+              deletedBy: adminEmail,
+              deletionReason: reasonText,
+              updatedAt: now,
+            },
+            { merge: true }
+          );
+        }
+        await batch.commit();
       }
-      await batch.commit();
 
       try {
         await addDoc(collection(db, "auditLogs"), {
