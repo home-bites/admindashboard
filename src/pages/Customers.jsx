@@ -359,7 +359,7 @@ export const Customers = () => {
   // Layout & Filtering States
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all"); // 'all' | 'active' | 'deactivated' | 'with_wallet' | 'suspended' | 'cod_blocked' | 'merged'
+  const [statusFilter, setStatusFilter] = useState("active"); // 'active' | 'deactivated' | 'with_wallet' | 'suspended' | 'cod_blocked' | 'merged'
   const [drawerTab, setDrawerTab] = useState("orders"); // "orders" | "wallet" | "addresses" | "merged" | "security"
 
   // Batch / Multi-selection & Deactivation States
@@ -556,19 +556,27 @@ export const Customers = () => {
     }
   }, [consolidatedCustomers]);
 
-  // Advanced Multi-field Search and Status Filtering
+  // Advanced Multi-field Search and Status Filtering (Strictly Isolates Active vs Deactivated Archive)
   const filteredCustomers = useMemo(() => {
     const qLower = searchQuery.toLowerCase().trim();
     const qDigits = searchQuery.replace(/\D/g, "");
 
     return consolidatedCustomers.filter((c) => {
-      // 1. Status Filter
-      if (statusFilter === "with_wallet" && (c.walletBalance || 0) <= 0) return false;
-      if (statusFilter === "active" && (c.isDeleted === true || c.status === "deactivated" || c.isActive === false)) return false;
-      if (statusFilter === "deactivated" && !(c.isDeleted === true || c.status === "deactivated")) return false;
-      if (statusFilter === "suspended" && (c.isDeleted === true || c.status === "deactivated" || c.isActive !== false)) return false;
-      if (statusFilter === "cod_blocked" && !getCodBlock(c).blocked) return false;
-      if (statusFilter === "merged" && !c.isMerged) return false;
+      const isDeactivated = c.isDeleted === true || c.status === "deactivated";
+
+      // 1. Strict Isolation: Deactivated accounts ONLY appear on the dedicated 'deactivated' archive view
+      if (statusFilter === "deactivated") {
+        if (!isDeactivated) return false;
+      } else {
+        // Any active view (active, with_wallet, cod_blocked, merged, suspended) strictly excludes deactivated accounts
+        if (isDeactivated) return false;
+
+        if (statusFilter === "active" && c.isActive === false) return false;
+        if (statusFilter === "with_wallet" && (c.walletBalance || 0) <= 0) return false;
+        if (statusFilter === "suspended" && c.isActive !== false) return false;
+        if (statusFilter === "cod_blocked" && !getCodBlock(c).blocked) return false;
+        if (statusFilter === "merged" && !c.isMerged) return false;
+      }
 
       // 2. Search Query Filter
       if (!qLower && !qDigits) return true;
@@ -592,24 +600,44 @@ export const Customers = () => {
     });
   }, [consolidatedCustomers, searchQuery, statusFilter]);
 
-  // Key Performance Indicators (KPIs)
+  // Key Performance Indicators (KPIs) - Active counts exclude deleted/deactivated accounts
   const kpis = useMemo(() => {
-    const totalCustomers = consolidatedCustomers.length;
-    const rawProfilesCount = rawCustomers.length;
-    const totalWalletLiability = consolidatedCustomers.reduce((acc, c) => acc + (c.walletBalance || 0), 0);
-    const fundedWalletsCount = consolidatedCustomers.filter((c) => (c.walletBalance || 0) > 0).length;
-    const activeCount = consolidatedCustomers.filter((c) => !c.isDeleted && c.status !== "deactivated" && c.isActive !== false).length;
-    const deactivatedCount = consolidatedCustomers.filter((c) => c.isDeleted === true || c.status === "deactivated").length;
-    const codBlockedCount = consolidatedCustomers.filter((c) => getCodBlock(c).blocked).length;
-    const mergedCount = consolidatedCustomers.filter((c) => c.isMerged).length;
+    // 1. Partition into active customers vs deactivated archive
+    const activeCustomers = consolidatedCustomers.filter(
+      (c) => !(c.isDeleted === true || c.status === "deactivated")
+    );
+    const deactivatedCustomers = consolidatedCustomers.filter(
+      (c) => c.isDeleted === true || c.status === "deactivated"
+    );
+
+    const activeCount = activeCustomers.filter((c) => c.isActive !== false).length;
+    const totalActiveCount = activeCustomers.length;
+    const deactivatedCount = deactivatedCustomers.length;
+
+    const rawActiveProfilesCount = rawCustomers.filter(
+      (r) => !(r.isDeleted === true || r.status === "deactivated")
+    ).length;
+
+    // Financial liabilities strictly computed for active customers
+    const totalWalletLiability = activeCustomers.reduce(
+      (acc, c) => acc + (c.walletBalance || 0),
+      0
+    );
+    const fundedWalletsCount = activeCustomers.filter(
+      (c) => (c.walletBalance || 0) > 0
+    ).length;
+    const codBlockedCount = activeCustomers.filter(
+      (c) => getCodBlock(c).blocked
+    ).length;
+    const mergedCount = activeCustomers.filter((c) => c.isMerged).length;
 
     return {
-      totalCustomers,
-      rawProfilesCount,
+      activeCount: totalActiveCount, // Primary customer count strictly excludes deactivated/deleted
+      verifiedActiveCount: activeCount,
+      deactivatedCount,
+      rawActiveProfilesCount,
       totalWalletLiability,
       fundedWalletsCount,
-      activeCount,
-      deactivatedCount,
       codBlockedCount,
       mergedCount,
     };
@@ -1480,26 +1508,27 @@ export const Customers = () => {
 
       {/* KPI Stats Strip */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
-        {/* Total Customers */}
+        {/* Active Customers (Strictly excludes deleted/deactivated) */}
         <div className="bg-white p-4 rounded-xl border border-[#dce2f3] shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-xs font-bold uppercase tracking-wider">Total Customers</span>
-            <span className="material-symbols-outlined text-emerald-600 text-[20px]">groups</span>
+            <span className="text-xs font-bold uppercase tracking-wider">Active Customers</span>
+            <span className="material-symbols-outlined text-emerald-600 text-[20px]">verified_user</span>
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-black text-slate-900">{kpis.totalCustomers}</span>
-            {kpis.rawProfilesCount > kpis.totalCustomers && (
-              <span className="text-[11px] text-slate-400 font-semibold" title="Raw user records merged">
-                ({kpis.rawProfilesCount} profiles)
+            <span className="text-2xl font-black text-slate-900">{kpis.activeCount}</span>
+            {kpis.rawActiveProfilesCount > kpis.activeCount && (
+              <span className="text-[11px] text-slate-400 font-semibold" title="Raw active records merged">
+                ({kpis.rawActiveProfilesCount} profiles)
               </span>
             )}
           </div>
+          <span className="text-[11px] text-emerald-700 font-semibold mt-1">Excludes deactivated accounts</span>
         </div>
 
         {/* Total Wallet Liability */}
         <div className="bg-white p-4 rounded-xl border border-[#dce2f3] shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-xs font-bold uppercase tracking-wider">Total Wallet Balance</span>
+            <span className="text-xs font-bold uppercase tracking-wider">Active Wallet Balance</span>
             <span className="material-symbols-outlined text-emerald-600 text-[20px]">account_balance_wallet</span>
           </div>
           <div className="flex items-baseline gap-1">
@@ -1507,6 +1536,7 @@ export const Customers = () => {
               ₹{kpis.totalWalletLiability.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
+          <span className="text-[11px] text-slate-400 font-semibold mt-1">Active customer liability</span>
         </div>
 
         {/* Funded Wallets */}
@@ -1519,22 +1549,11 @@ export const Customers = () => {
             <span className="text-2xl font-black text-slate-900">{kpis.fundedWalletsCount}</span>
             <span className="text-[11px] text-emerald-700 font-semibold">Active balances</span>
           </div>
-        </div>
-
-        {/* Active Accounts */}
-        <div className="bg-white p-4 rounded-xl border border-[#dce2f3] shadow-2xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-xs font-bold uppercase tracking-wider">Active Customers</span>
-            <span className="material-symbols-outlined text-green-600 text-[20px]">verified_user</span>
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-black text-slate-900">{kpis.activeCount}</span>
-            <span className="text-[11px] text-slate-400 font-semibold">Verified</span>
-          </div>
+          <span className="text-[11px] text-slate-400 font-semibold mt-1">With wallet credit</span>
         </div>
 
         {/* COD Blocked */}
-        <div className="bg-white p-4 rounded-xl border border-[#dce2f3] shadow-2xs flex flex-col justify-between col-span-2 sm:col-span-1">
+        <div className="bg-white p-4 rounded-xl border border-[#dce2f3] shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between text-slate-500 mb-1">
             <span className="text-xs font-bold uppercase tracking-wider">COD Restricted</span>
             <span className="material-symbols-outlined text-rose-500 text-[20px]">block</span>
@@ -1543,6 +1562,38 @@ export const Customers = () => {
             <span className="text-2xl font-black text-rose-700">{kpis.codBlockedCount}</span>
             <span className="text-[11px] text-rose-600 font-semibold">Under 24h hold</span>
           </div>
+          <span className="text-[11px] text-slate-400 font-semibold mt-1">Active customer holds</span>
+        </div>
+
+        {/* Deactivated & Deleted Archive Card (Kept Separately) */}
+        <div
+          onClick={() => setStatusFilter("deactivated")}
+          className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col justify-between col-span-2 sm:col-span-1 ${
+            statusFilter === "deactivated"
+              ? "bg-slate-900 border-slate-900 text-white shadow-md"
+              : "bg-rose-50/50 hover:bg-rose-50 border-rose-200 shadow-2xs"
+          }`}
+          title="Click to view dedicated Deactivated Archive"
+        >
+          <div className="flex items-center justify-between mb-1">
+            <span className={`text-xs font-bold uppercase tracking-wider ${statusFilter === "deactivated" ? "text-slate-300" : "text-rose-900"}`}>
+              Deactivated Archive
+            </span>
+            <span className={`material-symbols-outlined text-[20px] ${statusFilter === "deactivated" ? "text-rose-400" : "text-rose-600"}`}>
+              archive
+            </span>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className={`text-2xl font-black ${statusFilter === "deactivated" ? "text-white" : "text-rose-900"}`}>
+              {kpis.deactivatedCount}
+            </span>
+            <span className={`text-[11px] font-semibold ${statusFilter === "deactivated" ? "text-slate-300" : "text-rose-600"}`}>
+              Archived
+            </span>
+          </div>
+          <span className={`text-[11px] font-medium mt-1 ${statusFilter === "deactivated" ? "text-slate-300" : "text-rose-700"}`}>
+            Kept separate from active
+          </span>
         </div>
       </div>
 
@@ -1561,7 +1612,11 @@ export const Customers = () => {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-9 pr-4 py-2 bg-white border border-[#d3daea] rounded-xl focus:border-[#10b981] focus:ring-2 focus:ring-[#10b981]/15 transition-all text-xs text-slate-900 placeholder:text-slate-400 font-medium outline-none shadow-2xs"
-                placeholder="Search real name, 10-digit phone, email, UID..."
+                placeholder={
+                  statusFilter === "deactivated"
+                    ? "Search archived customers by name, phone, email, UID..."
+                    : "Search active customers by real name, phone, email, UID..."
+                }
                 type="text"
               />
               {searchQuery && (
@@ -1575,72 +1630,91 @@ export const Customers = () => {
               )}
             </div>
 
-            {/* Filter Chips */}
+            {/* Filter Chips: Active vs Deactivated Archive */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
               <button
-                onClick={() => setStatusFilter("all")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
-                  statusFilter === "all"
-                    ? "bg-[#10b981] text-white shadow-2xs"
-                    : "bg-white text-slate-600 border border-[#dce2f3] hover:bg-slate-50"
-                }`}
-              >
-                All ({consolidatedCustomers.length})
-              </button>
-              <button
-                onClick={() => setStatusFilter("with_wallet")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
-                  statusFilter === "with_wallet"
-                    ? "bg-[#10b981] text-white shadow-2xs"
-                    : "bg-white text-slate-600 border border-[#dce2f3] hover:bg-slate-50"
-                }`}
-              >
-                Has Balance ({kpis.fundedWalletsCount})
-              </button>
-              <button
                 onClick={() => setStatusFilter("active")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 ${
                   statusFilter === "active"
                     ? "bg-[#10b981] text-white shadow-2xs"
                     : "bg-white text-slate-600 border border-[#dce2f3] hover:bg-slate-50"
                 }`}
               >
-                Active ({kpis.activeCount})
+                <span className="material-symbols-outlined text-[15px]">person</span>
+                <span>Active Customers ({kpis.activeCount})</span>
               </button>
               <button
-                onClick={() => setStatusFilter("deactivated")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
-                  statusFilter === "deactivated"
-                    ? "bg-rose-600 text-white shadow-2xs"
+                onClick={() => setStatusFilter("with_wallet")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 ${
+                  statusFilter === "with_wallet"
+                    ? "bg-[#10b981] text-white shadow-2xs"
                     : "bg-white text-slate-600 border border-[#dce2f3] hover:bg-slate-50"
                 }`}
               >
-                Deactivated ({kpis.deactivatedCount})
+                <span className="material-symbols-outlined text-[15px]">account_balance_wallet</span>
+                <span>Has Balance ({kpis.fundedWalletsCount})</span>
               </button>
               <button
                 onClick={() => setStatusFilter("cod_blocked")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 ${
                   statusFilter === "cod_blocked"
                     ? "bg-rose-600 text-white shadow-2xs"
                     : "bg-white text-slate-600 border border-[#dce2f3] hover:bg-slate-50"
                 }`}
               >
-                COD Blocked ({kpis.codBlockedCount})
+                <span className="material-symbols-outlined text-[15px]">block</span>
+                <span>COD Blocked ({kpis.codBlockedCount})</span>
               </button>
               {kpis.mergedCount > 0 && (
                 <button
                   onClick={() => setStatusFilter("merged")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 ${
                     statusFilter === "merged"
                       ? "bg-emerald-700 text-white shadow-2xs"
                       : "bg-white text-slate-600 border border-[#dce2f3] hover:bg-slate-50"
                   }`}
                 >
-                  Duplicates Merged ({kpis.mergedCount})
+                  <span className="material-symbols-outlined text-[15px]">merge</span>
+                  <span>Duplicates Merged ({kpis.mergedCount})</span>
                 </button>
               )}
+
+              {/* Vertical Divider separating Active views from Archive */}
+              <div className="h-6 w-px bg-slate-300 mx-1 shrink-0" />
+
+              {/* Dedicated Deactivated & Deleted Archive Tab */}
+              <button
+                onClick={() => setStatusFilter("deactivated")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 ${
+                  statusFilter === "deactivated"
+                    ? "bg-slate-900 text-white shadow-2xs"
+                    : "bg-rose-50/80 text-rose-700 border border-rose-200 hover:bg-rose-100"
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">archive</span>
+                <span>Deactivated Archive ({kpis.deactivatedCount})</span>
+              </button>
             </div>
           </div>
+
+          {/* Dedicated Notice Banner when viewing Deactivated Archive */}
+          {statusFilter === "deactivated" && (
+            <div className="p-3.5 bg-rose-50/90 border-b border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-900">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-rose-600 text-[20px] shrink-0">info</span>
+                <span>
+                  <strong>Deactivated & Deleted Archive:</strong> These customer accounts are deactivated and kept separate from active data. Historical order records, wallet ledger transactions, and anti-abuse identity entries are preserved.
+                </span>
+              </div>
+              <button
+                onClick={() => setStatusFilter("active")}
+                className="px-3 py-1.5 bg-white border border-rose-300 rounded-lg text-rose-700 hover:bg-rose-50 font-bold shrink-0 transition text-xs flex items-center gap-1 self-start sm:self-auto shadow-2xs"
+              >
+                <span className="material-symbols-outlined text-[15px]">arrow_back</span>
+                <span>View Active Customers</span>
+              </button>
+            </div>
+          )}
 
           {/* Floating / Inline Batch Action Bar */}
           {selectedCustomerIds.length > 0 && (
@@ -1656,19 +1730,38 @@ export const Customers = () => {
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const selectedCustomers = consolidatedCustomers.filter((c) =>
-                      selectedCustomerIds.includes(c.id)
-                    );
-                    handleOpenDeactivateModal(selectedCustomers);
-                  }}
-                  className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-2xs transition flex items-center gap-1.5"
-                >
-                  <span className="material-symbols-outlined text-[16px]">person_off</span>
-                  <span>Deactivate Selected</span>
-                </button>
+                {statusFilter === "deactivated" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const selectedCustomers = consolidatedCustomers.filter((c) =>
+                        selectedCustomerIds.includes(c.id)
+                      );
+                      if (window.confirm(`Reactivate ${selectedCustomers.length} selected customer account(s)?`)) {
+                        selectedCustomers.forEach((c) => handleReactivateCustomer(c));
+                        clearSelection();
+                      }
+                    }}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-2xs transition flex items-center gap-1.5"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">restore</span>
+                    <span>Reactivate Selected</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const selectedCustomers = consolidatedCustomers.filter((c) =>
+                        selectedCustomerIds.includes(c.id)
+                      );
+                      handleOpenDeactivateModal(selectedCustomers);
+                    }}
+                    className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-2xs transition flex items-center gap-1.5"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">person_off</span>
+                    <span>Deactivate Selected</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={clearSelection}

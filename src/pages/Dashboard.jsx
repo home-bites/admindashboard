@@ -187,8 +187,15 @@ export const Dashboard = () => {
      * So this counts the collection. It includes the few admin accounts and
      * any soft-deleted users, which is a small over-count on a figure used for
      * orientation rather than reconciliation. */
-    getCountFromServer(collection(db, "users"))
-      .then((snap) => setCustomerCount(snap.data().count))
+    Promise.all([
+      getCountFromServer(collection(db, "users")),
+      getCountFromServer(query(collection(db, "users"), where("isDeleted", "==", true))).catch(() => null),
+    ])
+      .then(([totalSnap, deletedSnap]) => {
+        const total = totalSnap ? totalSnap.data().count : 0;
+        const deleted = deletedSnap && typeof deletedSnap.data === "function" ? deletedSnap.data().count : 0;
+        setCustomerCount(Math.max(0, total - deleted));
+      })
       .catch((err) => {
         // Falls back to a dash rather than a wrong number: a silent zero is
         // a figure an operator would act on, and a failed read is not.
