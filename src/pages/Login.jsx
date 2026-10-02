@@ -64,14 +64,14 @@ export const Login = () => {
               <div className="relative w-20 h-20 mx-auto group">
                 <div className="absolute inset-0 bg-[#10b981]/10 rounded-full blur-md group-hover:blur-lg transition-all duration-300"></div>
                 <img
-                  alt="HomeBites Logo"
+                  alt="HomBites Logo"
                   className="w-20 h-20 rounded-full shadow-md border-2 border-[#dce2f3] object-cover relative z-10"
                   src={logoImg}
                 />
               </div>
               <div>
                 <h1 className="font-headline-lg text-headline-lg text-[#151c27] font-black tracking-tight" style={{ fontFamily: "Outfit, sans-serif" }}>
-                  HomeBites Core
+                  HomBites Core
                 </h1>
                 <p className="text-xs font-semibold text-[#555f6f] mt-1">
                   Enterprise Culinary Management Command Center

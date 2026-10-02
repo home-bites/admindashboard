@@ -10,7 +10,8 @@ import * as LoadingComponents from "../components/LoadingComponents";
 import {
   doc, getDoc, onSnapshot, updateDoc, collection, query, where, getDocs, limit, orderBy, Timestamp,
 } from "firebase/firestore";
-import { db } from "../firebase/firebaseConfig";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from "../firebase/firebaseConfig";
 import { STAGE, STAGES, stageOf, planTransition } from "../lib/orderStages";
 import { orderPlacedDate } from "../lib/orderTimeline";
 import ActiveFilterBar from "../components/ActiveFilterBar";
@@ -329,6 +330,9 @@ export const Orders = () => {
   const [detailOrder, setDetailOrder] = useState(null);
   const [assignTarget, setAssignTarget] = useState(null);
   const [busyOrderId, setBusyOrderId] = useState(null);
+  const [revertDeliveryOrder, setRevertDeliveryOrder] = useState(null);
+  const [revertDeliveryReason, setRevertDeliveryReason] = useState("");
+  const [isRevertingDelivery, setIsRevertingDelivery] = useState(false);
 
   // How many rows are rendered. Raising it never re-queries: the store's
   // window is already bounded, so this only governs DOM size, which is what
@@ -1104,6 +1108,32 @@ export const Orders = () => {
     if (!window.confirm(`${verb} order #${order.orderId || order.id}? This cannot be undone.`)) return;
     await advanceOrder(order, STAGE.CANCELLED);
     setDetailOrder(null);
+  };
+
+  /** Revert delivered order back to in-flight status and reverse rider payout */
+  const handleExecuteRevertDelivery = async () => {
+    if (!revertDeliveryOrder) return;
+    if (!revertDeliveryReason.trim()) {
+      addToast("Please provide a reason for reverting this delivered order.", "error");
+      return;
+    }
+    setIsRevertingDelivery(true);
+    try {
+      const fn = httpsCallable(functions, "revertOrderDelivery");
+      const res = await fn({
+        orderId: revertDeliveryOrder.id,
+        reason: revertDeliveryReason.trim(),
+      });
+      addToast(res.data?.message || "Order delivery reverted successfully!", "success");
+      setRevertDeliveryOrder(null);
+      setRevertDeliveryReason("");
+      setDetailOrder(null);
+    } catch (err) {
+      console.error("Revert delivery error:", err);
+      addToast(`Failed to revert delivery: ${err.message}`, "error");
+    } finally {
+      setIsRevertingDelivery(false);
+    }
   };
 
   if (loading && orders.length === 0) {
@@ -3272,6 +3302,7 @@ export const Orders = () => {
         onEditItems={(o) => setEditingItems(o)}
         onCancelOrder={cancelOrderFromDrawer}
         onPrintResult={reportPrint}
+        onRevertDelivery={(o) => setRevertDeliveryOrder(o)}
       />
 
       {/* Rider assignment / reassignment. Calls the existing
@@ -3347,6 +3378,111 @@ export const Orders = () => {
                   })}
                 </ul>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Undo Order Delivery Confirmation Modal */}
+      {revertDeliveryOrder && (
+        <div
+          className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Undo Order Delivery"
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-200 bg-amber-50/50 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center">
+                  <span className="material-symbols-outlined text-[18px]">undo</span>
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Undo Order Delivery</h3>
+                  <p className="text-[11px] text-slate-500 font-mono">Order #{revertDeliveryOrder.id}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  if (!isRevertingDelivery) {
+                    setRevertDeliveryOrder(null);
+                    setRevertDeliveryReason("");
+                  }
+                }}
+                disabled={isRevertingDelivery}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition"
+              >
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 space-y-1.5 text-amber-900">
+                <p className="font-bold flex items-center gap-1.5 text-amber-800">
+                  <span className="material-symbols-outlined text-[16px]">warning</span>
+                  Safety & Financial Reconciliation Notice
+                </p>
+                <p className="text-[11px] leading-relaxed text-amber-800">
+                  This will transition the order from <strong>Delivered</strong> back to <strong>{revertDeliveryOrder.assignedPartnerId ? "Out for Delivery" : "Ready"}</strong>, preserve the original delivery timestamp in audit history, and automatically reverse any credited delivery partner payout to prevent unearned earnings.
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex justify-between text-slate-600">
+                  <span>Customer:</span>
+                  <span className="font-bold text-slate-800">{revertDeliveryOrder.customer || "HomBites Customer"}</span>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <span>Assigned Rider:</span>
+                  <span className="font-bold text-slate-800">{revertDeliveryOrder.assignedPartnerName || "Unassigned"}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Reason for Reverting Delivery <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  value={revertDeliveryReason}
+                  onChange={(e) => setRevertDeliveryReason(e.target.value)}
+                  disabled={isRevertingDelivery}
+                  rows={3}
+                  placeholder="e.g. Rider marked delivered prematurely before arrival, or customer reported non-receipt"
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs text-slate-800 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 border-t border-slate-200 bg-slate-50 px-5 py-3">
+              <button
+                type="button"
+                disabled={isRevertingDelivery}
+                onClick={() => {
+                  setRevertDeliveryOrder(null);
+                  setRevertDeliveryReason("");
+                }}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isRevertingDelivery || !revertDeliveryReason.trim()}
+                onClick={handleExecuteRevertDelivery}
+                className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-bold text-white shadow-2xs hover:bg-amber-700 transition flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isRevertingDelivery ? (
+                  <>
+                    <span className="material-symbols-outlined text-[15px] animate-spin">progress_activity</span>
+                    Reverting...
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[15px]">undo</span>
+                    Confirm Revert Delivery
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

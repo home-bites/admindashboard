@@ -186,3 +186,42 @@ export const formatStepTime = (d) =>
   d
     ? d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })
     : "Time not recorded";
+
+export function formatDurationMinutes(mins) {
+  if (mins === null || mins === undefined || isNaN(mins) || mins < 0) return null;
+  if (mins < 1) return "< 1 min";
+  const hours = Math.floor(mins / 60);
+  const remainingMins = Math.round(mins % 60);
+  if (hours === 0) return `${remainingMins} min${remainingMins === 1 ? "" : "s"}`;
+  if (remainingMins === 0) return `${hours} hr${hours === 1 ? "" : "s"}`;
+  return `${hours} hr${hours === 1 ? "" : "s"} ${remainingMins} min${remainingMins === 1 ? "" : "s"}`;
+}
+
+export function computeDeliveryDuration(order) {
+  if (!order) return null;
+  const placedAt = orderPlacedDate(order);
+  const outForDeliveryAt = firstDate(order, ["outForDeliveryAt", "pickedUpAt", "dispatchedAt"]);
+  const deliveredAt = firstDate(order, ["deliveredAt", "completedAt"]);
+
+  let transitMinutes = null;
+  if (outForDeliveryAt && deliveredAt && deliveredAt >= outForDeliveryAt) {
+    transitMinutes = Math.round((deliveredAt.getTime() - outForDeliveryAt.getTime()) / 60000);
+  }
+
+  let totalMinutes = null;
+  if (placedAt && deliveredAt && deliveredAt >= placedAt) {
+    totalMinutes = Math.round((deliveredAt.getTime() - placedAt.getTime()) / 60000);
+  }
+
+  return {
+    placedAt,
+    outForDeliveryAt,
+    deliveredAt,
+    transitMinutes,
+    transitDurationFormatted: formatDurationMinutes(transitMinutes),
+    totalMinutes,
+    totalDurationFormatted: formatDurationMinutes(totalMinutes),
+    isDelivered: Boolean(deliveredAt),
+  };
+}
+

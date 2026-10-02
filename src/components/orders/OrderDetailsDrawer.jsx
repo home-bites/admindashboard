@@ -4,7 +4,7 @@ import {
   labelForOrder, paymentStateOf, labelForPayment, PAYMENT_LABEL, toneForStage, toneForPayment,
   TONE, orderTypeOf, ORDER_TYPE_LABEL, orNothing, money, DASH, reviewFlagsOf,
 } from "../../lib/orderPresentation";
-import { buildTimeline, formatStepTime } from "../../lib/orderTimeline";
+import { buildTimeline, formatStepTime, computeDeliveryDuration } from "../../lib/orderTimeline";
 import { printKOT, printInvoice, kotNumber, getNutrientLines } from "../../lib/printing";
 import AssetImage from "../AssetImage";
 
@@ -35,6 +35,7 @@ export const OrderDetailsDrawer = ({
   onCancelOrder,
   onEditItems,
   onPrintResult,
+  onRevertDelivery,
   menuItems = [],
   busy = false,
 }) => {
@@ -60,6 +61,7 @@ export const OrderDetailsDrawer = ({
   const payment = paymentStateOf(order);
   const type = orderTypeOf(order);
   const timeline = buildTimeline(order);
+  const durationInfo = computeDeliveryDuration(order);
   const items = Array.isArray(order.items) ? order.items : [];
 
   /* The order stores a copy of each item's image at purchase time, but older
@@ -330,6 +332,71 @@ export const OrderDetailsDrawer = ({
                 </div>
               )}
             </dl>
+
+            {/* Payment Composition & Mixed Payment Breakdown */}
+            {(order.paymentBreakdown || (order.walletApplied && Number(order.walletApplied) > 0)) && (
+              <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 space-y-1.5 text-xs">
+                <div className="font-bold text-emerald-900 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-[15px]">account_balance_wallet</span>
+                    Payment Composition
+                  </span>
+                  <span className="text-[10px] font-mono text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full font-bold">
+                    {order.paymentBreakdown?.onlinePaid > 0 && order.paymentBreakdown?.walletUsed > 0
+                      ? "Mixed Payment"
+                      : "Single Source"}
+                  </span>
+                </div>
+                <div className="flex justify-between text-slate-700 pt-1 border-t border-emerald-100 text-[11px]">
+                  <span>Order Total:</span>
+                  <span className="font-bold text-slate-900">
+                    {money(order.paymentBreakdown?.orderTotal ?? (order.total ?? order.totalAmount ?? order.grandTotal))}
+                  </span>
+                </div>
+                {(order.paymentBreakdown?.walletUsed > 0 || Number(order.walletApplied || 0) > 0) && (
+                  <div className="flex justify-between text-slate-700 text-[11px]">
+                    <span>Wallet Applied:</span>
+                    <span className="font-semibold text-emerald-800">
+                      {money(order.paymentBreakdown?.walletUsed ?? order.walletApplied)}
+                    </span>
+                  </div>
+                )}
+                {order.paymentBreakdown?.welcomeBonusPortion > 0 && (
+                  <div className="flex justify-between text-emerald-700 pl-3 text-[10px]">
+                    <span>↳ Welcome Bonus Used:</span>
+                    <span className="font-bold">{money(order.paymentBreakdown.welcomeBonusPortion)}</span>
+                  </div>
+                )}
+                {order.paymentBreakdown?.customerFundedPortion > 0 && (
+                  <div className="flex justify-between text-slate-600 pl-3 text-[10px]">
+                    <span>↳ Real Balance Used:</span>
+                    <span className="font-medium">{money(order.paymentBreakdown.customerFundedPortion)}</span>
+                  </div>
+                )}
+                {order.paymentBreakdown?.onlinePaid > 0 && (
+                  <div className="flex justify-between text-slate-700 text-[11px]">
+                    <span>Online Gateway Paid:</span>
+                    <span className="font-semibold text-blue-800">{money(order.paymentBreakdown.onlinePaid)}</span>
+                  </div>
+                )}
+                {(order.paymentBreakdown?.gatewayRef || order.razorpayPaymentId) && (
+                  <div className="flex justify-between text-slate-500 font-mono text-[10px] pt-1 border-t border-emerald-100/60">
+                    <span>Gateway Ref:</span>
+                    <span className="truncate max-w-[200px]" title={order.paymentBreakdown?.gatewayRef || order.razorpayPaymentId}>
+                      {order.paymentBreakdown?.gatewayRef || order.razorpayPaymentId}
+                    </span>
+                  </div>
+                )}
+                {order.paymentBreakdown?.walletTxnId && (
+                  <div className="flex justify-between text-slate-500 font-mono text-[10px]">
+                    <span>Wallet Txn ID:</span>
+                    <span className="truncate max-w-[200px]" title={order.paymentBreakdown.walletTxnId}>
+                      {order.paymentBreakdown.walletTxnId}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
           </Section>
 
           {/* Timeline */}
@@ -406,6 +473,23 @@ export const OrderDetailsDrawer = ({
               <Field label="Delivery OTP" value={order.verificationCode} mono />
             )}
             <Field label="ETA" value={order.etaText || DASH} />
+            {durationInfo?.transitDurationFormatted && (
+              <Field label="Transit Duration" value={durationInfo.transitDurationFormatted} />
+            )}
+            {durationInfo?.totalDurationFormatted && (
+              <Field label="Total Turnaround" value={durationInfo.totalDurationFormatted} />
+            )}
+            {order.previousDeliveredAt && (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800 flex items-start gap-1.5">
+                <span className="material-symbols-outlined text-[15px] text-amber-600 mt-0.5">history</span>
+                <div>
+                  <span className="font-bold">Delivery Status Was Reverted</span>
+                  <p className="text-amber-700 text-[10px]">
+                    Previously recorded as delivered at {formatStepTime(order.previousDeliveredAt)}.
+                  </p>
+                </div>
+              </div>
+            )}
           </Section>
         </div>
 
@@ -413,7 +497,8 @@ export const OrderDetailsDrawer = ({
         <footer className="shrink-0 border-t border-slate-200 bg-slate-50 px-5 py-3">
           {moves.length === 0
             && !(stage === STAGE.READY && type !== "pickup")
-            && !canEditItems && !canCancel ? (
+            && !canEditItems && !canCancel
+            && !(stage === STAGE.COMPLETED && Boolean(onRevertDelivery)) ? (
             <p className="text-xs text-slate-500">
               {stage === STAGE.COMPLETED
                 ? "This order is complete. No further status change is possible."
@@ -423,6 +508,17 @@ export const OrderDetailsDrawer = ({
             </p>
           ) : (
             <div className="flex flex-wrap gap-2">
+              {stage === STAGE.COMPLETED && Boolean(onRevertDelivery) && (
+                <button
+                  disabled={busy}
+                  onClick={() => onRevertDelivery(order)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-xs font-bold text-amber-800 outline-none transition-colors hover:bg-amber-100 focus-visible:ring-2 focus-visible:ring-amber-400 disabled:opacity-50"
+                  title="Undo delivered status and safely reverse partner payout"
+                >
+                  <span className="material-symbols-outlined text-[15px]">undo</span>
+                  Undo Delivered
+                </button>
+              )}
               {moves.map((m) => (
                 <button
                   key={m.stage}

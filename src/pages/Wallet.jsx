@@ -13,6 +13,10 @@ import {
   isDebitRow,
   directionOf,
   accountNameFor,
+  classificationTagOf,
+  sourceOf,
+  tagColorOf,
+  sourceColorOf,
 } from "../lib/walletLedger";
 
 const QUICK_AMOUNTS = [50, 100, 200, 500, 1000];
@@ -47,6 +51,7 @@ export const Wallet = () => {
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [lookupState, setLookupState] = useState("idle");
 
+  const [selectedTransaction, setSelectedTransaction] = useState(null);
   const [isHistoryHidden, setIsHistoryHidden] = useState(() => {
     try {
       return localStorage.getItem("admin_wallet_display_hidden") === "true";
@@ -242,9 +247,12 @@ export const Wallet = () => {
       if (!matchesSearch) return false;
 
       if (selectedTab === "All") return true;
-      if (selectedTab === "Credits") return !isDebitRow(t);
-      if (selectedTab === "Debits") return isDebitRow(t);
-      if (selectedTab === "Refunds") return t.type === "Refund" || String(t.description || "").toLowerCase().includes("refund");
+      const tag = classificationTagOf(t).toUpperCase();
+      if (selectedTab === "Topups") return tag.includes("TOP-UP") || tag.includes("DELIVERY EARNINGS");
+      if (selectedTab === "Orders") return tag.includes("FOOD ORDER") || tag.includes("ORDER ADJUSTMENT");
+      if (selectedTab === "Bonuses") return tag.includes("WELCOME") || tag.includes("REFERRAL") || tag.includes("LOYALTY");
+      if (selectedTab === "Admin") return tag.includes("ADMIN") || tag.includes("REVERSAL");
+      if (selectedTab === "Refunds") return tag.includes("REFUND");
 
       return true;
     });
@@ -255,19 +263,24 @@ export const Wallet = () => {
       addToast("No transactions to export.", "info");
       return;
     }
-    const headers = ["Transaction ID,Account Name,Type,Amount,Direction,Status,Created At,Description"];
+    const headers = ["Transaction ID,Account Name,Classification Tag,Funding Source,Amount,Direction,Payment Method,Gateway Ref,Order ID,Status,Created At,Description"];
     const rows = visibleTxns.map((t) => {
       const name = (accountNameFor(t, directory) || "Unknown").replace(/,/g, " ");
       const isDebit = isDebitRow(t);
+      const tag = classificationTagOf(t);
+      const source = sourceOf(t);
+      const method = t.paymentMethod || (isDebit ? "Wallet" : "System");
+      const gatewayRef = t.gatewayRef || t.paymentId || "N/A";
+      const orderId = t.orderId || "";
       const date = t.createdAt?.toDate ? t.createdAt.toDate().toISOString() : t.createdAt || "";
       const desc = (t.description || "").replace(/,/g, " ");
-      return `"${t.id}","${name}","${t.type || 'Transfer'}",${Math.abs(t.amount || 0)},"${isDebit ? 'Debit' : 'Credit'}","${t.status || 'Settled'}","${date}","${desc}"`;
+      return `"${t.id}","${name}","${tag}","${source}",${Math.abs(t.amount || 0)},"${isDebit ? 'Debit' : 'Credit'}","${method}","${gatewayRef}","${orderId}","${t.status || 'Settled'}","${date}","${desc}"`;
     });
     const blob = new Blob([[...headers, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.setAttribute("download", `homebites_wallet_ledger_${Date.now()}.csv`);
+    link.setAttribute("download", `hombites_wallet_ledger_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -389,17 +402,19 @@ export const Wallet = () => {
       {/* ── Toolbar: Tabs & Search ── */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-4 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
         {/* Tabs */}
-        <div className="flex items-center gap-1.5 p-1 bg-slate-100/80 dark:bg-slate-800/80 rounded-2xl self-start md:self-auto">
+        <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100/80 dark:bg-slate-800/80 rounded-2xl self-start md:self-auto">
           {[
             { id: "All", label: "All Movements" },
-            { id: "Credits", label: "Credits In" },
-            { id: "Debits", label: "Debits Out" },
+            { id: "Topups", label: "Top-ups" },
+            { id: "Orders", label: "Food Orders" },
+            { id: "Bonuses", label: "Bonuses & Rewards" },
+            { id: "Admin", label: "Admin Adjustments" },
             { id: "Refunds", label: "Refunds" },
           ].map((tab) => (
             <button
               key={tab.id}
               onClick={() => setSelectedTab(tab.id)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
                 selectedTab === tab.id
                   ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs"
                   : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white"
@@ -472,10 +487,12 @@ export const Wallet = () => {
               <thead>
                 <tr className="border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 text-[11px] uppercase tracking-wider font-bold text-slate-400">
                   <th className="pl-6 pr-4 py-4">Account Holder</th>
-                  <th className="px-4 py-4">Type & Description</th>
+                  <th className="px-4 py-4">Classification & Source</th>
+                  <th className="px-4 py-4">Description & Ref</th>
                   <th className="px-4 py-4">Date & Time</th>
                   <th className="px-4 py-4">Status</th>
-                  <th className="pr-6 pl-4 py-4 text-right">Amount</th>
+                  <th className="px-4 py-4 text-right">Amount</th>
+                  <th className="pr-6 pl-4 py-4 text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-xs">
@@ -485,6 +502,10 @@ export const Wallet = () => {
                   const isDebit = isDebitRow(t);
                   const amt = Math.abs(Number(t.amount || 0));
                   const isSettled = (t.status || "Settled").toLowerCase() === "settled";
+                  const tag = classificationTagOf(t);
+                  const source = sourceOf(t);
+                  const paymentMethod = t.paymentMethod || (isDebit ? "Wallet" : "System");
+                  const gatewayRef = t.gatewayRef || t.paymentId || (t.meta && (t.meta.paymentId || t.meta.referenceId));
 
                   let dateStr = "—";
                   if (t.createdAt) {
@@ -501,7 +522,11 @@ export const Wallet = () => {
                   }
 
                   return (
-                    <tr key={t.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors">
+                    <tr
+                      key={t.id}
+                      onClick={() => setSelectedTransaction(t)}
+                      className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors cursor-pointer group"
+                    >
                       {/* Account */}
                       <td className="pl-6 pr-4 py-4">
                         <div className="flex items-center gap-3">
@@ -511,31 +536,46 @@ export const Wallet = () => {
                             {initial}
                           </div>
                           <div>
-                            <div className="font-bold text-slate-900 dark:text-white">{name}</div>
+                            <div className="font-bold text-slate-900 dark:text-white group-hover:text-emerald-600 transition-colors">{name}</div>
                             <div className="text-[10px] font-mono text-slate-400 mt-0.5">
-                              ID: {String(t.userId || t.customerId || t.id).slice(0, 10)}
+                              UID: {String(t.userId || t.customerId || t.id).slice(0, 10)}...
                             </div>
                           </div>
                         </div>
                       </td>
 
-                      {/* Type & Description */}
+                      {/* Classification & Source */}
+                      <td className="px-4 py-4">
+                        <div className="flex flex-col items-start gap-1">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-lg text-[10px] font-black tracking-wide border ${tagColorOf(tag)}`}>
+                            {tag}
+                          </span>
+                          <span className={`inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider border ${sourceColorOf(source)}`}>
+                            Source: {source}
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* Description & Ref */}
                       <td className="px-4 py-4">
                         <div>
-                          <div className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                            <span className={`material-symbols-outlined text-sm ${isDebit ? 'text-rose-500' : 'text-emerald-500'}`}>
-                              {isDebit ? "arrow_upward" : "arrow_downward"}
-                            </span>
-                            {t.type || (isDebit ? "Order Debit" : "Top-up Credit")}
-                          </div>
-                          <p className="text-[11px] text-slate-400 mt-0.5 max-w-xs truncate">
-                            {t.description || t.note || "Standard wallet movement"}
+                          <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 max-w-xs truncate">
+                            {t.description || t.note || "Standard ledger movement"}
                           </p>
+                          <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
+                            <span className="font-medium text-slate-500 dark:text-slate-400">{paymentMethod}</span>
+                            {gatewayRef && (
+                              <span className="font-mono text-slate-400">Ref: {String(gatewayRef).slice(0, 16)}</span>
+                            )}
+                            {t.orderId && (
+                              <span className="font-mono text-emerald-600 dark:text-emerald-400">#{t.orderId}</span>
+                            )}
+                          </div>
                         </div>
                       </td>
 
                       {/* Date */}
-                      <td className="px-4 py-4 text-slate-500 dark:text-slate-400 font-semibold">
+                      <td className="px-4 py-4 text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap">
                         {dateStr}
                       </td>
 
@@ -552,12 +592,27 @@ export const Wallet = () => {
                       </td>
 
                       {/* Amount */}
-                      <td className="pr-6 pl-4 py-4 text-right">
+                      <td className="px-4 py-4 text-right">
                         <span className={`font-black text-sm tracking-tight ${
                           isDebit ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
                         }`}>
                           {isDebit ? "-" : "+"}{inr(amt)}
                         </span>
+                      </td>
+
+                      {/* Action */}
+                      <td className="pr-6 pl-4 py-4 text-center">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedTransaction(t);
+                          }}
+                          className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 text-xs font-bold transition flex items-center gap-1 mx-auto"
+                        >
+                          <span className="material-symbols-outlined text-[15px]">visibility</span>
+                          Details
+                        </button>
                       </td>
                     </tr>
                   );
@@ -768,6 +823,171 @@ export const Wallet = () => {
                 className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs transition"
               >
                 Clear Display
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Explainable Transaction Slide-Over Drawer ── */}
+      {selectedTransaction && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-200">
+          <div
+            className="fixed inset-0"
+            onClick={() => setSelectedTransaction(null)}
+          />
+          <div className="relative w-full max-w-lg bg-white dark:bg-slate-900 h-full shadow-2xl border-l border-slate-200 dark:border-slate-800 flex flex-col z-10 overflow-hidden animate-in slide-in-from-right duration-300">
+            {/* Drawer Header */}
+            <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
+                  isDebitRow(selectedTransaction)
+                    ? "bg-rose-50 text-rose-600 dark:bg-rose-950/40"
+                    : "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40"
+                }`}>
+                  <span className="material-symbols-outlined text-xl">
+                    {isDebitRow(selectedTransaction) ? "arrow_upward" : "arrow_downward"}
+                  </span>
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 dark:text-white">Transaction Details</h3>
+                  <div className="flex items-center gap-1.5 mt-0.5 text-xs text-slate-400 font-mono">
+                    <span>{selectedTransaction.id}</span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(selectedTransaction.id);
+                        addToast("Transaction ID copied to clipboard", "success");
+                      }}
+                      className="hover:text-slate-600 transition"
+                      title="Copy Transaction ID"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedTransaction(null)}
+                className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 flex items-center justify-center transition"
+              >
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+
+            {/* Drawer Body */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Financial Highlight Card */}
+              <div className="p-5 rounded-3xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/80 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Net Amount</span>
+                  <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                    (selectedTransaction.status || "Settled").toLowerCase() === "settled"
+                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80 dark:bg-emerald-950/40 dark:text-emerald-300"
+                      : "bg-amber-50 text-amber-700 border border-amber-200/80 dark:bg-amber-950/40 dark:text-amber-300"
+                  }`}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    {selectedTransaction.status || "Settled"}
+                  </span>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className={`text-3xl font-black tracking-tight ${
+                    isDebitRow(selectedTransaction)
+                      ? "text-rose-600 dark:text-rose-400"
+                      : "text-emerald-600 dark:text-emerald-400"
+                  }`}>
+                    {isDebitRow(selectedTransaction) ? "−" : "+"}
+                    {inr(Math.abs(Number(selectedTransaction.amount || 0)))}
+                  </span>
+                  <span className="text-xs font-bold text-slate-400">INR</span>
+                </div>
+                <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex flex-wrap gap-2">
+                  <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-black tracking-wide border ${tagColorOf(classificationTagOf(selectedTransaction))}`}>
+                    {classificationTagOf(selectedTransaction)}
+                  </span>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${sourceColorOf(sourceOf(selectedTransaction))}`}>
+                    Source: {sourceOf(selectedTransaction)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Explainability Grid */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-black uppercase tracking-wider text-slate-400">Audit & Movement Lifecycle</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200/70 dark:border-slate-700">
+                    <span className="text-slate-400 font-bold block mb-1">Account Holder</span>
+                    <span className="font-bold text-slate-900 dark:text-white">
+                      {accountNameFor(selectedTransaction, directory) || "Account User"}
+                    </span>
+                    <span className="text-[10px] font-mono text-slate-400 block mt-0.5 truncate">
+                      {selectedTransaction.userId || selectedTransaction.customerId || "N/A"}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200/70 dark:border-slate-700">
+                    <span className="text-slate-400 font-bold block mb-1">Payment Method</span>
+                    <span className="font-bold text-slate-900 dark:text-white">
+                      {selectedTransaction.paymentMethod || (isDebitRow(selectedTransaction) ? "Wallet" : "System")}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200/70 dark:border-slate-700">
+                    <span className="text-slate-400 font-bold block mb-1">Payment Gateway Ref</span>
+                    <span className="font-mono text-slate-800 dark:text-slate-200 truncate block">
+                      {selectedTransaction.gatewayRef || selectedTransaction.paymentId || (selectedTransaction.meta && (selectedTransaction.meta.paymentId || selectedTransaction.meta.referenceId)) || "N/A"}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200/70 dark:border-slate-700">
+                    <span className="text-slate-400 font-bold block mb-1">Related Order ID</span>
+                    <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold truncate block">
+                      {selectedTransaction.orderId ? `#${selectedTransaction.orderId}` : "None (Non-order movement)"}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200/70 dark:border-slate-700 col-span-2">
+                    <span className="text-slate-400 font-bold block mb-1">Timestamp</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">
+                      {selectedTransaction.createdAt
+                        ? (selectedTransaction.createdAt.toDate ? selectedTransaction.createdAt.toDate() : new Date(selectedTransaction.createdAt)).toLocaleString("en-IN", {
+                            day: "2-digit",
+                            month: "long",
+                            year: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                          })
+                        : "N/A"}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200/70 dark:border-slate-700 col-span-2">
+                    <span className="text-slate-400 font-bold block mb-1">Description / Memo</span>
+                    <p className="text-xs text-slate-700 dark:text-slate-300 font-medium">
+                      {selectedTransaction.description || selectedTransaction.note || "No memo recorded."}
+                    </p>
+                  </div>
+
+                  {(selectedTransaction.meta?.adminId || selectedTransaction.meta?.adminEmail) && (
+                    <div className="p-3.5 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 col-span-2">
+                      <span className="text-indigo-600 dark:text-indigo-400 font-bold block mb-1">Authorized Administrator</span>
+                      <span className="text-xs text-indigo-900 dark:text-indigo-200 font-mono">
+                        {selectedTransaction.meta.adminEmail || selectedTransaction.meta.adminId}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Drawer Footer */}
+            <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedTransaction(null)}
+                className="px-5 py-2.5 rounded-xl bg-slate-900 text-white dark:bg-white dark:text-slate-900 font-bold text-xs shadow-sm hover:opacity-90 transition"
+              >
+                Close Drawer
               </button>
             </div>
           </div>

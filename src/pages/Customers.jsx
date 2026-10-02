@@ -130,7 +130,7 @@ const isPlaceholderName = (name) => {
  * Resolves customer's genuine real name with zero placeholder fallbacks.
  */
 const resolveCustomerIdentity = (u) => {
-  if (!u) return "HomeBites Member";
+  if (!u) return "HomBites Member";
 
   const candidates = [
     u.name,
@@ -170,7 +170,41 @@ const resolveCustomerIdentity = (u) => {
     }
   }
 
-  return u.id ? `Customer (${u.id.substring(0, 5)})` : "HomeBites Member";
+  return u.id ? `Customer (${u.id.substring(0, 5)})` : "HomBites Member";
+};
+
+/**
+ * Returns structured welcome bonus eligibility and claim status.
+ */
+const getWelcomeBonusInfo = (customer) => {
+  const isClaimed = customer?.welcomeCreditGranted === true || customer?.welcomeBonusStatus === "CLAIMED";
+  const isIneligible = customer?.welcomeBonusStatus === "INELIGIBLE" || customer?.welcomeBonusIneligibleReason === "DUPLICATE_IDENTITY";
+  const amount = Number(customer?.welcomeBonusAmount || 150);
+
+  if (isClaimed) {
+    return {
+      status: "CLAIMED",
+      badgeText: `₹${amount} Bonus Claimed`,
+      badgeClass: "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800",
+      detailText: `Claimed ₹${amount} welcome bonus`,
+    };
+  }
+  if (isIneligible) {
+    return {
+      status: "INELIGIBLE",
+      badgeText: "Ineligible (Duplicate)",
+      badgeClass: "bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800",
+      detailText: customer?.welcomeBonusIneligibleReason === "DUPLICATE_IDENTITY"
+        ? "Denied: Phone or email previously claimed welcome bonus"
+        : (customer?.welcomeBonusIneligibleReason || "Not eligible for welcome bonus"),
+    };
+  }
+  return {
+    status: "ELIGIBLE",
+    badgeText: "Eligible (₹150)",
+    badgeClass: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800",
+    detailText: "Account is eligible for ₹150 welcome bonus",
+  };
 };
 
 /**
@@ -218,6 +252,17 @@ const consolidateCustomerProfiles = (rawList) => {
         walletBalance: Number(u.walletBalance || 0),
         totalOrders: Number(u.totalOrders || 0),
         totalSpent: Number(u.totalSpent || 0),
+        isDeleted: u.isDeleted === true,
+        status: u.status || (u.isDeleted ? "deactivated" : (u.isActive !== false ? "active" : "suspended")),
+        deletedAt: u.deletedAt || null,
+        deletedBy: u.deletedBy || null,
+        deletionReason: u.deletionReason || null,
+        welcomeCreditGranted: u.welcomeCreditGranted === true,
+        welcomeBonusStatus: u.welcomeBonusStatus || (u.welcomeCreditGranted === true ? "CLAIMED" : "ELIGIBLE"),
+        welcomeBonusAmount: u.welcomeBonusAmount || 150,
+        welcomeBonusIneligibleReason: u.welcomeBonusIneligibleReason || null,
+        welcomeBonusClaimedAt: u.welcomeBonusClaimedAt || null,
+        lastLoginAt: u.lastLoginAt || u.lastLogin || null,
         isMerged: false,
         mergedCount: 1,
         linkedUids: [u.id],
@@ -249,7 +294,10 @@ const consolidateCustomerProfiles = (rawList) => {
       const primaryRecord = records[0];
 
       // Check if any linked record is active
-      const anyActive = records.some((r) => r.isActive !== false);
+      const allDeleted = records.every((r) => r.isDeleted === true);
+      const anyActive = records.some((r) => r.isDeleted !== true && r.isActive !== false);
+      const bonusRecord = records.find((r) => r.welcomeCreditGranted === true || r.welcomeBonusStatus === "CLAIMED") || records[0];
+      const deletedRecord = records.find((r) => r.isDeleted === true) || records[0];
 
       consolidated.push({
         ...primaryRecord,
@@ -262,6 +310,17 @@ const consolidateCustomerProfiles = (rawList) => {
         walletBalance: totalWallet,
         totalOrders,
         totalSpent,
+        isDeleted: allDeleted,
+        status: allDeleted ? "deactivated" : (anyActive ? "active" : "suspended"),
+        deletedAt: deletedRecord.deletedAt || null,
+        deletedBy: deletedRecord.deletedBy || null,
+        deletionReason: deletedRecord.deletionReason || null,
+        welcomeCreditGranted: bonusRecord.welcomeCreditGranted === true,
+        welcomeBonusStatus: bonusRecord.welcomeBonusStatus || (bonusRecord.welcomeCreditGranted === true ? "CLAIMED" : "ELIGIBLE"),
+        welcomeBonusAmount: bonusRecord.welcomeBonusAmount || 150,
+        welcomeBonusIneligibleReason: bonusRecord.welcomeBonusIneligibleReason || null,
+        welcomeBonusClaimedAt: bonusRecord.welcomeBonusClaimedAt || null,
+        lastLoginAt: primaryRecord.lastLoginAt || primaryRecord.lastLogin || null,
         isActive: anyActive,
         isMerged: true,
         mergedCount: records.length,
@@ -297,8 +356,15 @@ export const Customers = () => {
   // Layout & Filtering States
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all"); // 'all' | 'with_wallet' | 'active' | 'suspended' | 'cod_blocked' | 'merged'
+  const [statusFilter, setStatusFilter] = useState("all"); // 'all' | 'active' | 'deactivated' | 'with_wallet' | 'suspended' | 'cod_blocked' | 'merged'
   const [drawerTab, setDrawerTab] = useState("orders"); // "orders" | "wallet" | "addresses" | "merged" | "security"
+
+  // Batch / Multi-selection & Deactivation States
+  const [selectedCustomerIds, setSelectedCustomerIds] = useState([]);
+  const [isDeactivateModalOpen, setIsDeactivateModalOpen] = useState(false);
+  const [deactivateTargets, setDeactivateTargets] = useState([]);
+  const [deactivateReason, setDeactivateReason] = useState("");
+  const [isDeactivating, setIsDeactivating] = useState(false);
 
   // Quick Wallet Credit / Debit Modal State
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
@@ -408,15 +474,13 @@ export const Customers = () => {
         const list = [];
         snapshot.forEach((docSnap) => {
           const data = docSnap.data();
-          if (data.isDeleted !== true) {
-            const rawRole = String(data.role || "").toLowerCase().replace(/[_-]/g, " ").trim();
-            // Exclude staff, admin, and delivery partners
-            if (!["admin", "super admin", "delivery", "rider", "partner", "kitchen", "restaurant", "staff"].includes(rawRole)) {
-              list.push({
-                id: docSnap.id,
-                ...data,
-              });
-            }
+          const rawRole = String(data.role || "").toLowerCase().replace(/[_-]/g, " ").trim();
+          // Exclude staff, admin, and delivery partners
+          if (!["admin", "super admin", "delivery", "rider", "partner", "kitchen", "restaurant", "staff"].includes(rawRole)) {
+            list.push({
+              id: docSnap.id,
+              ...data,
+            });
           }
         });
         setRawCustomers(list);
@@ -497,8 +561,9 @@ export const Customers = () => {
     return consolidatedCustomers.filter((c) => {
       // 1. Status Filter
       if (statusFilter === "with_wallet" && (c.walletBalance || 0) <= 0) return false;
-      if (statusFilter === "active" && c.isActive === false) return false;
-      if (statusFilter === "suspended" && c.isActive !== false) return false;
+      if (statusFilter === "active" && (c.isDeleted === true || c.status === "deactivated" || c.isActive === false)) return false;
+      if (statusFilter === "deactivated" && !(c.isDeleted === true || c.status === "deactivated")) return false;
+      if (statusFilter === "suspended" && (c.isDeleted === true || c.status === "deactivated" || c.isActive !== false)) return false;
       if (statusFilter === "cod_blocked" && !getCodBlock(c).blocked) return false;
       if (statusFilter === "merged" && !c.isMerged) return false;
 
@@ -530,7 +595,8 @@ export const Customers = () => {
     const rawProfilesCount = rawCustomers.length;
     const totalWalletLiability = consolidatedCustomers.reduce((acc, c) => acc + (c.walletBalance || 0), 0);
     const fundedWalletsCount = consolidatedCustomers.filter((c) => (c.walletBalance || 0) > 0).length;
-    const activeCount = consolidatedCustomers.filter((c) => c.isActive !== false).length;
+    const activeCount = consolidatedCustomers.filter((c) => !c.isDeleted && c.status !== "deactivated" && c.isActive !== false).length;
+    const deactivatedCount = consolidatedCustomers.filter((c) => c.isDeleted === true || c.status === "deactivated").length;
     const codBlockedCount = consolidatedCustomers.filter((c) => getCodBlock(c).blocked).length;
     const mergedCount = consolidatedCustomers.filter((c) => c.isMerged).length;
 
@@ -540,6 +606,7 @@ export const Customers = () => {
       totalWalletLiability,
       fundedWalletsCount,
       activeCount,
+      deactivatedCount,
       codBlockedCount,
       mergedCount,
     };
@@ -656,26 +723,129 @@ export const Customers = () => {
     }
   };
 
-  // Soft Delete Customer
-  const handleDeleteCustomer = async (customer) => {
-    if (!window.confirm(`Are you sure you want to delete customer "${customer.canonicalName}"?`)) return;
-    const targetUids = customer.linkedUids || [customer.id];
+  // Selection handlers
+  const toggleSelectCustomer = (customerId, e) => {
+    if (e) e.stopPropagation();
+    setSelectedCustomerIds((prev) =>
+      prev.includes(customerId) ? prev.filter((id) => id !== customerId) : [...prev, customerId]
+    );
+  };
 
-    if (isMockMode) {
-      setRawCustomers((prev) => prev.filter((c) => !targetUids.includes(c.id)));
-      if (selectedCustomer?.id === customer.id) setSelectedCustomer(null);
-      addToast("Customer account deleted successfully", "success");
-      return;
+  const toggleSelectAll = () => {
+    const currentFilteredIds = filteredCustomers.map((c) => c.id);
+    const allSelected =
+      currentFilteredIds.length > 0 && currentFilteredIds.every((id) => selectedCustomerIds.includes(id));
+    if (allSelected) {
+      setSelectedCustomerIds((prev) => prev.filter((id) => !currentFilteredIds.includes(id)));
+    } else {
+      setSelectedCustomerIds((prev) => Array.from(new Set([...prev, ...currentFilteredIds])));
     }
+  };
+
+  const clearSelection = () => {
+    setSelectedCustomerIds([]);
+  };
+
+  // Open Deactivation Confirmation Modal
+  const handleOpenDeactivateModal = (customerOrArray) => {
+    const targets = Array.isArray(customerOrArray) ? customerOrArray : [customerOrArray];
+    setDeactivateTargets(targets);
+    setDeactivateReason("Administrative account deactivation");
+    setIsDeactivateModalOpen(true);
+  };
+
+  // Authoritative Deactivation via Cloud Functions
+  const handleConfirmDeactivation = async () => {
+    if (deactivateTargets.length === 0) return;
+    setIsDeactivating(true);
+    try {
+      if (isMockMode) {
+        const targetIds = deactivateTargets.flatMap((t) => t.linkedUids || [t.id]);
+        setRawCustomers((prev) =>
+          prev.map((c) =>
+            targetIds.includes(c.id)
+              ? {
+                  ...c,
+                  isDeleted: true,
+                  status: "deactivated",
+                  deletedAt: new Date().toISOString(),
+                  deletionReason: deactivateReason,
+                }
+              : c
+          )
+        );
+        addToast(`Deactivated ${deactivateTargets.length} customer account(s).`, "success");
+        setSelectedCustomerIds([]);
+        setIsDeactivateModalOpen(false);
+        return;
+      }
+
+      if (deactivateTargets.length === 1) {
+        const target = deactivateTargets[0];
+        const fn = httpsCallable(functions, "deleteCustomerAdmin");
+        const res = await fn({
+          customerId: target.id,
+          reason: deactivateReason || "Admin deactivation",
+        });
+        addToast(res.data?.message || "Customer account deactivated successfully.", "success");
+      } else {
+        const customerIds = deactivateTargets.map((t) => t.id);
+        const fn = httpsCallable(functions, "batchDeleteCustomersAdmin");
+        const res = await fn({
+          customerIds,
+          reason: deactivateReason || "Batch administrative deactivation",
+        });
+        const data = res.data || {};
+        if (data.failedCount > 0) {
+          addToast(
+            `Deactivated ${data.processedCount} account(s). ${data.failedCount} failed (e.g. active in-flight orders).`,
+            "warning"
+          );
+        } else {
+          addToast(`Successfully deactivated ${data.processedCount} customer accounts.`, "success");
+        }
+      }
+      setSelectedCustomerIds([]);
+      setIsDeactivateModalOpen(false);
+    } catch (err) {
+      console.error("Customer deactivation error:", err);
+      addToast(`Deactivation failed: ${err.message}`, "error");
+    } finally {
+      setIsDeactivating(false);
+    }
+  };
+
+  // Authoritative Customer Reactivation via Cloud Functions
+  const handleReactivateCustomer = async (customer) => {
+    const confirm = window.confirm(
+      `Are you sure you want to reactivate the account for "${customer.canonicalName || customer.displayPhone}"?\n\n` +
+      `The customer will be permitted to log in, view historical orders, and use their remaining wallet balance.`
+    );
+    if (!confirm) return;
 
     try {
-      await Promise.all(
-        targetUids.map((uid) => updateDoc(doc(db, "users", uid), { isDeleted: true }))
-      );
-      addToast("Customer account deleted successfully", "success");
-      if (selectedCustomer?.id === customer.id) setSelectedCustomer(null);
+      if (isMockMode) {
+        const targetIds = customer.linkedUids || [customer.id];
+        setRawCustomers((prev) =>
+          prev.map((c) =>
+            targetIds.includes(c.id)
+              ? { ...c, isDeleted: false, status: "active", reactivatedAt: new Date().toISOString() }
+              : c
+          )
+        );
+        addToast(`Reactivated customer "${customer.canonicalName}".`, "success");
+        return;
+      }
+
+      const fn = httpsCallable(functions, "reactivateCustomerAdmin");
+      const res = await fn({
+        customerId: customer.id,
+        reason: "Admin reactivation via Customer Directory",
+      });
+      addToast(res.data?.message || "Customer account reactivated successfully.", "success");
     } catch (err) {
-      addToast(`Failed to delete customer: ${err.message}`, "error");
+      console.error("Reactivate customer error:", err);
+      addToast(`Failed to reactivate customer: ${err.message}`, "error");
     }
   };
 
@@ -1062,6 +1232,7 @@ export const Customers = () => {
       "Customer Name",
       "Mobile Number",
       "Email Address",
+      "Welcome Bonus Status",
       "Wallet Balance (INR)",
       "Total Orders",
       "Total Spent (INR)",
@@ -1072,19 +1243,26 @@ export const Customers = () => {
       "Primary User ID",
     ];
 
-    const rows = filteredCustomers.map((c) => [
-      `"${(c.canonicalName || "").replace(/"/g, '""')}"`,
-      `"${c.canonicalPhone || ""}"`,
-      `"${c.canonicalEmail || ""}"`,
-      (c.walletBalance || 0).toFixed(2),
-      c.totalOrders || 0,
-      (c.totalSpent || 0).toFixed(2),
-      c.isActive !== false ? "Active" : "Suspended",
-      getCodBlock(c).blocked ? "COD Blocked" : "COD Allowed",
-      c.isMerged ? c.mergedCount : 1,
-      c.createdAt ? new Date(c.createdAt).toLocaleDateString() : "N/A",
-      `"${c.id}"`,
-    ]);
+    const rows = filteredCustomers.map((c) => {
+      const isDeactivated = c.isDeleted === true || c.status === "deactivated";
+      const statusText = isDeactivated ? "Deactivated" : c.isActive !== false ? "Active" : "Suspended";
+      const bonusText = getWelcomeBonusInfo(c).status;
+
+      return [
+        `"${(c.canonicalName || "").replace(/"/g, '""')}"`,
+        `"${c.canonicalPhone || ""}"`,
+        `"${c.canonicalEmail || ""}"`,
+        `"${bonusText}"`,
+        (c.walletBalance || 0).toFixed(2),
+        c.totalOrders || 0,
+        (c.totalSpent || 0).toFixed(2),
+        `"${statusText}"`,
+        getCodBlock(c).blocked ? "COD Blocked" : "COD Allowed",
+        c.isMerged ? c.mergedCount : 1,
+        c.createdAt ? new Date(c.createdAt).toLocaleDateString() : "N/A",
+        `"${c.id}"`,
+      ];
+    });
 
     const csvContent =
       "data:text/csv;charset=utf-8," +
@@ -1095,7 +1273,7 @@ export const Customers = () => {
     link.setAttribute("href", encodedUri);
     link.setAttribute(
       "download",
-      `HomeBites_Customers_${new Date().toISOString().slice(0, 10)}.csv`
+      `HomBites_Customers_${new Date().toISOString().slice(0, 10)}.csv`
     );
     document.body.appendChild(link);
     link.click();
@@ -1292,6 +1470,16 @@ export const Customers = () => {
                 Active ({kpis.activeCount})
               </button>
               <button
+                onClick={() => setStatusFilter("deactivated")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                  statusFilter === "deactivated"
+                    ? "bg-rose-600 text-white shadow-2xs"
+                    : "bg-white text-slate-600 border border-[#dce2f3] hover:bg-slate-50"
+                }`}
+              >
+                Deactivated ({kpis.deactivatedCount})
+              </button>
+              <button
                 onClick={() => setStatusFilter("cod_blocked")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
                   statusFilter === "cod_blocked"
@@ -1316,6 +1504,44 @@ export const Customers = () => {
             </div>
           </div>
 
+          {/* Floating / Inline Batch Action Bar */}
+          {selectedCustomerIds.length > 0 && (
+            <div className="bg-emerald-50 border-b border-emerald-200 px-5 py-3 flex items-center justify-between gap-3 animate-fade-in">
+              <div className="flex items-center gap-2.5 text-xs font-bold text-emerald-900">
+                <span className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[11px] font-black">
+                  {selectedCustomerIds.length}
+                </span>
+                <span>
+                  {selectedCustomerIds.length === 1
+                    ? "1 customer account selected"
+                    : `${selectedCustomerIds.length} customer accounts selected`}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const selectedCustomers = consolidatedCustomers.filter((c) =>
+                      selectedCustomerIds.includes(c.id)
+                    );
+                    handleOpenDeactivateModal(selectedCustomers);
+                  }}
+                  className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-2xs transition flex items-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-[16px]">person_off</span>
+                  <span>Deactivate Selected</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-xl transition"
+                >
+                  Deselect All
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Directory Table */}
           <div className="overflow-x-auto flex-1 min-h-[400px]">
             {filteredCustomers.length === 0 ? (
@@ -1332,8 +1558,21 @@ export const Customers = () => {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-[#f0f3ff] border-b border-[#dce2f3] text-[11px] font-bold text-[#555f6f] uppercase tracking-wider">
+                    <th className="py-3.5 px-3 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all visible customers"
+                        checked={
+                          filteredCustomers.length > 0 &&
+                          filteredCustomers.every((c) => selectedCustomerIds.includes(c.id))
+                        }
+                        onChange={toggleSelectAll}
+                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                      />
+                    </th>
                     <th className="py-3.5 px-5">Customer Identity</th>
                     <th className="py-3.5 px-5">Mobile & Contact</th>
+                    <th className="py-3.5 px-5">Welcome Bonus</th>
                     <th className="py-3.5 px-5 text-right">Real-Time Wallet</th>
                     <th className="py-3.5 px-5">COD Eligibility</th>
                     <th className="py-3.5 px-5">Account Status</th>
@@ -1343,9 +1582,12 @@ export const Customers = () => {
                 </thead>
                 <tbody className="text-xs text-slate-900 divide-y divide-[#dce2f3]/50">
                   {filteredCustomers.map((c) => {
-                    const isActive = c.isActive !== false;
+                    const isDeactivated = c.isDeleted === true || c.status === "deactivated";
+                    const isActive = !isDeactivated && c.isActive !== false;
                     const cod = getCodBlock(c);
                     const isSelected = selectedCustomer?.id === c.id;
+                    const bonusInfo = getWelcomeBonusInfo(c);
+                    const isChecked = selectedCustomerIds.includes(c.id);
                     const initials =
                       c.canonicalName
                         ?.split(" ")
@@ -1364,17 +1606,28 @@ export const Customers = () => {
                         }}
                         className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${
                           isSelected ? "bg-emerald-50/50 border-l-4 border-[#10b981]" : ""
-                        }`}
+                        } ${isDeactivated ? "opacity-75 bg-slate-50/40" : ""}`}
                       >
-                        {/* Customer Identity */}
+                        {/* Checkbox */}
+                        <td className="py-3.5 px-3 text-center" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${c.canonicalName}`}
+                            checked={isChecked}
+                            onChange={(e) => toggleSelectCustomer(c.id, e)}
+                            className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                          />
+                        </td>
+
+                        {/* Customer Identity & Lifecycle */}
                         <td className="py-3.5 px-5">
                           <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-2xs">
+                            <div className={`w-9 h-9 rounded-full ${isDeactivated ? "bg-slate-400" : "bg-gradient-to-tr from-emerald-600 to-teal-500"} text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-2xs`}>
                               {initials}
                             </div>
                             <div className="min-w-0">
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="font-bold text-slate-900 truncate" title={c.canonicalName}>
+                                <span className={`font-bold ${isDeactivated ? "text-slate-600 line-through" : "text-slate-900"} truncate`} title={c.canonicalName}>
                                   {c.canonicalName}
                                 </span>
                                 {c.isMerged && (
@@ -1389,6 +1642,12 @@ export const Customers = () => {
                               <span className="text-[10px] text-slate-400 font-mono block truncate" title={c.id}>
                                 UID: {c.id}
                               </span>
+                              <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-2">
+                                <span>Joined: {c.createdAt ? new Date(c.createdAt).toLocaleDateString("en-IN") : "N/A"}</span>
+                                {c.lastLoginAt && (
+                                  <span>• Login: {new Date(c.lastLoginAt).toLocaleDateString("en-IN")}</span>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </td>
@@ -1429,6 +1688,21 @@ export const Customers = () => {
                           )}
                         </td>
 
+                        {/* Welcome Bonus Status */}
+                        <td className="py-3.5 px-5">
+                          <div>
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${bonusInfo.badgeClass}`}>
+                              <span>{bonusInfo.claimed ? "🎁" : bonusInfo.status.includes("Ineligible") ? "🚫" : "✨"}</span>
+                              <span>{bonusInfo.status}</span>
+                            </span>
+                            {bonusInfo.reason && (
+                              <p className="text-[10px] text-slate-500 mt-0.5 max-w-[150px] truncate" title={bonusInfo.reason}>
+                                {bonusInfo.reason}
+                              </p>
+                            )}
+                          </div>
+                        </td>
+
                         {/* Real-time Wallet Amount */}
                         <td className="py-3.5 px-5 text-right whitespace-nowrap">
                           <div className="inline-flex flex-col items-end gap-1">
@@ -1444,17 +1718,19 @@ export const Customers = () => {
                                 maximumFractionDigits: 2,
                               })}
                             </span>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenWalletModal(c, "credit");
-                              }}
-                              className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 hover:underline flex items-center gap-0.5"
-                              title="Credit or adjust wallet balance"
-                            >
-                              <span className="material-symbols-outlined text-[13px]">add_circle</span>
-                              Adjust
-                            </button>
+                            {!isDeactivated && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenWalletModal(c, "credit");
+                                }}
+                                className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 hover:underline flex items-center gap-0.5"
+                                title="Credit or adjust wallet balance"
+                              >
+                                <span className="material-symbols-outlined text-[13px]">add_circle</span>
+                                Adjust
+                              </button>
+                            )}
                           </div>
                         </td>
 
@@ -1481,16 +1757,29 @@ export const Customers = () => {
 
                         {/* Account Status */}
                         <td className="py-3.5 px-5">
-                          <span
-                            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                              isActive
-                                ? "bg-green-50 text-green-700 border-green-200"
-                                : "bg-red-50 text-red-700 border-red-200"
-                            }`}
-                          >
-                            <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-green-500" : "bg-red-500"}`} />
-                            {isActive ? "Active" : "Suspended"}
-                          </span>
+                          {isDeactivated ? (
+                            <div>
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border bg-rose-50 text-rose-700 border-rose-200">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                Deactivated
+                              </span>
+                              {c.deletionReason && (
+                                <p className="text-[10px] text-rose-600 font-semibold mt-0.5 max-w-[140px] truncate" title={c.deletionReason}>
+                                  {c.deletionReason}
+                                </p>
+                              )}
+                            </div>
+                          ) : !isActive ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border bg-amber-50 text-amber-700 border-amber-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                              Suspended
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border bg-green-50 text-green-700 border-green-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                              Active
+                            </span>
+                          )}
                         </td>
 
                         {/* Total Orders */}
@@ -1508,39 +1797,52 @@ export const Customers = () => {
                             >
                               <span className="material-symbols-outlined text-[17px]">edit</span>
                             </button>
-                            <button
-                              onClick={() => handleToggleCodBlock(c)}
-                              className={`p-1.5 rounded-lg transition ${
-                                cod.blocked
-                                  ? "text-rose-600 hover:bg-rose-50"
-                                  : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                              }`}
-                              title={cod.blocked ? "Release COD Restriction" : "Block Cash On Delivery"}
-                            >
-                              <span className="material-symbols-outlined text-[17px]">
-                                {cod.blocked ? "lock_open" : "lock"}
-                              </span>
-                            </button>
-                            <button
-                              onClick={() => handleToggleSuspend(c)}
-                              className={`p-1.5 rounded-lg transition ${
-                                isActive
-                                  ? "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                                  : "text-amber-600 hover:bg-amber-50"
-                              }`}
-                              title={isActive ? "Suspend Customer Account" : "Activate Customer Account"}
-                            >
-                              <span className="material-symbols-outlined text-[17px]">
-                                {isActive ? "block" : "check_circle"}
-                              </span>
-                            </button>
-                            <button
-                              onClick={() => handleDeleteCustomer(c)}
-                              className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition"
-                              title="Delete Customer Account"
-                            >
-                              <span className="material-symbols-outlined text-[17px]">delete</span>
-                            </button>
+
+                            {isDeactivated ? (
+                              <button
+                                onClick={() => handleReactivateCustomer(c)}
+                                className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-600 hover:text-emerald-700 transition"
+                                title="Reactivate Customer Account"
+                              >
+                                <span className="material-symbols-outlined text-[17px]">restart_alt</span>
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() => handleToggleCodBlock(c)}
+                                  className={`p-1.5 rounded-lg transition ${
+                                    cod.blocked
+                                      ? "text-rose-600 hover:bg-rose-50"
+                                      : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                  }`}
+                                  title={cod.blocked ? "Release COD Restriction" : "Block Cash On Delivery"}
+                                >
+                                  <span className="material-symbols-outlined text-[17px]">
+                                    {cod.blocked ? "lock_open" : "lock"}
+                                  </span>
+                                </button>
+                                <button
+                                  onClick={() => handleToggleSuspend(c)}
+                                  className={`p-1.5 rounded-lg transition ${
+                                    isActive
+                                      ? "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                      : "text-amber-600 hover:bg-amber-50"
+                                  }`}
+                                  title={isActive ? "Suspend Customer Account" : "Activate Customer Account"}
+                                >
+                                  <span className="material-symbols-outlined text-[17px]">
+                                    {isActive ? "block" : "check_circle"}
+                                  </span>
+                                </button>
+                                <button
+                                  onClick={() => handleOpenDeactivateModal(c)}
+                                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition"
+                                  title="Deactivate Customer Account"
+                                >
+                                  <span className="material-symbols-outlined text-[17px]">person_off</span>
+                                </button>
+                              </>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1892,6 +2194,133 @@ export const Customers = () => {
               {/* Tab 5: Account Controls & Security */}
               {drawerTab === "security" && (
                 <div className="space-y-4">
+                  {/* Account Lifecycle & Standing Card */}
+                  {(() => {
+                    const isDeactivated = selectedCustomer.isDeleted === true || selectedCustomer.status === "deactivated";
+                    const bonusInfo = getWelcomeBonusInfo(selectedCustomer);
+
+                    return (
+                      <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-3">
+                        <div className="flex justify-between items-center">
+                          <span className="font-bold text-slate-800">Account Standing</span>
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                              isDeactivated
+                                ? "bg-rose-50 text-rose-700 border-rose-200"
+                                : selectedCustomer.isActive === false
+                                ? "bg-amber-50 text-amber-700 border-amber-200"
+                                : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            }`}
+                          >
+                            {isDeactivated ? "Deactivated" : selectedCustomer.isActive === false ? "Suspended" : "Active & Permitted"}
+                          </span>
+                        </div>
+
+                        <div className="space-y-1.5 pt-2 border-t border-slate-200/60 text-[11px]">
+                          <div className="flex justify-between text-slate-600">
+                            <span>Created At:</span>
+                            <span className="font-semibold text-slate-800">
+                              {selectedCustomer.createdAt ? new Date(selectedCustomer.createdAt).toLocaleString("en-IN") : "Not recorded"}
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-slate-600">
+                            <span>Last Login:</span>
+                            <span className="font-semibold text-slate-800">
+                              {selectedCustomer.lastLoginAt ? new Date(selectedCustomer.lastLoginAt).toLocaleString("en-IN") : "Never logged in"}
+                            </span>
+                          </div>
+
+                          {isDeactivated && (
+                            <div className="mt-2 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900 space-y-1">
+                              <div className="font-bold text-rose-800 flex items-center gap-1">
+                                <span className="material-symbols-outlined text-[14px]">info</span>
+                                Deactivation Record
+                              </div>
+                              {selectedCustomer.deletedAt && (
+                                <div className="flex justify-between text-[10px]">
+                                  <span>Deactivated At:</span>
+                                  <span>{new Date(selectedCustomer.deletedAt).toLocaleString("en-IN")}</span>
+                                </div>
+                              )}
+                              {selectedCustomer.deletedBy && (
+                                <div className="flex justify-between text-[10px]">
+                                  <span>Deactivated By:</span>
+                                  <span>{selectedCustomer.deletedBy}</span>
+                                </div>
+                              )}
+                              {selectedCustomer.deletionReason && (
+                                <div className="text-[10px]">
+                                  <span className="font-semibold">Reason:</span> {selectedCustomer.deletionReason}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Welcome Bonus Lifecycle Card */}
+                        <div className="p-3 bg-white border border-slate-200 rounded-lg space-y-1">
+                          <div className="flex justify-between items-center">
+                            <span className="font-bold text-slate-700">₹150 Welcome Bonus</span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${bonusInfo.badgeClass}`}>
+                              {bonusInfo.status}
+                            </span>
+                          </div>
+                          {bonusInfo.reason && (
+                            <p className="text-[10px] text-slate-500 leading-relaxed pt-1">
+                              {bonusInfo.reason}
+                            </p>
+                          )}
+                          {selectedCustomer.welcomeBonusClaimedAt && (
+                            <p className="text-[10px] text-emerald-700">
+                              Bonus claimed at {new Date(selectedCustomer.welcomeBonusClaimedAt).toLocaleString("en-IN")}
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Referral information */}
+                        {selectedCustomer.referredBy && (
+                          <div className="flex justify-between text-[11px] text-slate-600 bg-white p-2 rounded-lg border border-slate-200">
+                            <span>Referred By:</span>
+                            <span className="font-semibold text-slate-800">{selectedCustomer.referredBy}</span>
+                          </div>
+                        )}
+
+                        {/* Actions */}
+                        <div className="pt-2 flex flex-col gap-2">
+                          {isDeactivated ? (
+                            <button
+                              onClick={() => handleReactivateCustomer(selectedCustomer)}
+                              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-2xs transition flex items-center justify-center gap-1.5"
+                            >
+                              <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                              Reactivate Customer Account
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => handleToggleSuspend(selectedCustomer)}
+                                className={`w-full py-2 rounded-xl font-bold text-xs transition border ${
+                                  selectedCustomer.isActive !== false
+                                    ? "bg-white border-amber-300 text-amber-700 hover:bg-amber-50"
+                                    : "bg-white border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                                }`}
+                              >
+                                {selectedCustomer.isActive !== false ? "Suspend Customer Account" : "Lift Suspension"}
+                              </button>
+                              <button
+                                onClick={() => handleOpenDeactivateModal(selectedCustomer)}
+                                className="w-full py-2 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1"
+                              >
+                                <span className="material-symbols-outlined text-[15px]">person_off</span>
+                                Deactivate Customer Account
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {/* COD Block Widget */}
                   {(() => {
                     const cod = getCodBlock(selectedCustomer);
@@ -1925,36 +2354,6 @@ export const Customers = () => {
                       </div>
                     );
                   })()}
-
-                  {/* Account Status Switch */}
-                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs flex justify-between items-center">
-                    <div>
-                      <p className="font-bold text-slate-800">Account Standing</p>
-                      <p className="text-[11px] text-slate-500">
-                        {selectedCustomer.isActive !== false ? "Active and permitted" : "Currently suspended"}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => handleToggleSuspend(selectedCustomer)}
-                      className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${
-                        selectedCustomer.isActive !== false
-                          ? "bg-rose-100 text-rose-800 hover:bg-rose-200"
-                          : "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
-                      }`}
-                    >
-                      {selectedCustomer.isActive !== false ? "Suspend" : "Activate"}
-                    </button>
-                  </div>
-
-                  {/* Soft Delete */}
-                  <div className="pt-2">
-                    <button
-                      onClick={() => handleDeleteCustomer(selectedCustomer)}
-                      className="w-full py-2 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl font-bold text-xs transition"
-                    >
-                      Soft Delete Customer Profile
-                    </button>
-                  </div>
                 </div>
               )}
             </div>
@@ -2196,7 +2595,7 @@ export const Customers = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="font-bold text-slate-900">Account Active</p>
-                    <p className="text-[10px] text-slate-400">Allow access to HomeBites ordering services</p>
+                    <p className="text-[10px] text-slate-400">Allow access to HomBites ordering services</p>
                   </div>
                   <label className="relative inline-flex items-center cursor-pointer">
                     <input
@@ -2227,6 +2626,118 @@ export const Customers = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Deactivate Customer(s) Confirmation Modal */}
+      {isDeactivateModalOpen && deactivateTargets.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-slide-up">
+            <div className="p-5 border-b border-slate-200 bg-rose-50/60 flex justify-between items-center">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center">
+                  <span className="material-symbols-outlined text-[18px]">person_off</span>
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-900">
+                    {deactivateTargets.length === 1
+                      ? "Deactivate Customer Account"
+                      : `Deactivate ${deactivateTargets.length} Customer Accounts`}
+                  </h3>
+                  <p className="text-xs text-rose-700 font-medium">Selective administrative deactivation</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isDeactivating}
+                onClick={() => setIsDeactivateModalOpen(false)}
+                className="w-8 h-8 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-700 flex items-center justify-center transition"
+              >
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-[11px] space-y-1.5">
+                <div className="font-bold flex items-center gap-1.5 text-amber-800">
+                  <span className="material-symbols-outlined text-[16px]">security</span>
+                  Financial & Audit Data Preserved
+                </div>
+                <p className="text-amber-800 leading-relaxed">
+                  Deactivating an account blocks customer login but <strong>strictly preserves all historical food orders, payments, wallet ledger records, and fraud registry history</strong>.
+                </p>
+                <p className="text-amber-800 leading-relaxed pt-1 border-t border-amber-200/60">
+                  Customers with active, in-flight food orders will <strong>not</strong> be deactivated to safeguard delivery fulfillment.
+                </p>
+              </div>
+
+              {/* Target Customers Summary */}
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1.5">
+                  Affected Customer Accounts ({deactivateTargets.length})
+                </label>
+                <div className="max-h-32 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2.5 space-y-1">
+                  {deactivateTargets.slice(0, 5).map((t) => (
+                    <div key={t.id} className="flex justify-between items-center text-[11px]">
+                      <span className="font-bold text-slate-800 truncate max-w-[200px]">
+                        {t.canonicalName || "HomBites Member"}
+                      </span>
+                      <span className="font-mono text-slate-500 text-[10px]">{t.displayPhone}</span>
+                    </div>
+                  ))}
+                  {deactivateTargets.length > 5 && (
+                    <p className="text-[10px] text-slate-400 italic pt-1">
+                      + {deactivateTargets.length - 5} more customers selected
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Reason */}
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1.5">
+                  Reason for Deactivation <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  value={deactivateReason}
+                  onChange={(e) => setDeactivateReason(e.target.value)}
+                  disabled={isDeactivating}
+                  rows={2}
+                  placeholder="e.g. Terms violation, customer requested account closure, duplicate identity abuse"
+                  className="w-full p-2.5 bg-white border border-slate-300 rounded-xl focus:border-rose-600 focus:ring-2 focus:ring-rose-600/10 text-slate-900 text-xs outline-none transition"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={isDeactivating}
+                onClick={() => setIsDeactivateModalOpen(false)}
+                className="px-4 py-2 border border-slate-300 rounded-xl text-slate-600 font-bold hover:bg-slate-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeactivating || !deactivateReason.trim()}
+                onClick={handleConfirmDeactivation}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white rounded-xl font-bold shadow-2xs transition flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isDeactivating ? (
+                  <>
+                    <span className="material-symbols-outlined text-[15px] animate-spin">progress_activity</span>
+                    Deactivating...
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[15px]">person_off</span>
+                    Confirm Deactivation
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

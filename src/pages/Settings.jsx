@@ -159,7 +159,7 @@ export const Settings = () => {
   const [updateTitle, setUpdateTitle] = useState("New Update Available!");
   const [updateMessage, setUpdateMessage] = useState("Download HomBites - Delicious homemade food delivered straight to your doorstep!");
   const [playStoreUrl, setPlayStoreUrl] = useState("https://play.google.com/store/apps/details?id=com.homebites.customer.customerApp");
-  const [appStoreUrl, setAppStoreUrl] = useState("");
+  const [appStoreUrl, setAppStoreUrl] = useState("https://apps.apple.com/in/app/hombites/id6804218240");
   const [showUpdateModalPreview, setShowUpdateModalPreview] = useState(false);
   const [previewPlatform, setPreviewPlatform] = useState("android");
 
@@ -248,7 +248,7 @@ export const Settings = () => {
           setUpdateTitle(data.updateTitle || "New Update Available!");
           setUpdateMessage(data.updateMessage || "Download HomBites - Delicious homemade food delivered straight to your doorstep!");
           setPlayStoreUrl(data.playStoreUrl || "https://play.google.com/store/apps/details?id=com.homebites.customer.customerApp");
-          setAppStoreUrl(data.appStoreUrl || "");
+          setAppStoreUrl(data.appStoreUrl || "https://apps.apple.com/in/app/hombites/id6804218240");
 
           if (data.hours) {
             setHours(data.hours);

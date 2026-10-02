@@ -135,3 +135,106 @@ export function accountNameFor(row, directory) {
   const name = [record.firstName, record.lastName].filter(Boolean).join(" ").trim();
   return name || record.displayName || record.name || record.fullName || null;
 }
+
+/**
+ * Returns the formal classification tag for a wallet transaction row.
+ * E.g. CREDIT — WELCOME BONUS, CREDIT — WALLET TOP-UP, DEBIT — FOOD ORDER, etc.
+ */
+export function classificationTagOf(row) {
+  if (row?.classificationTag) return String(row.classificationTag);
+
+  const cat = String(row?.category || "").toUpperCase();
+  const desc = String(row?.description || row?.note || "").toLowerCase();
+  const id = String(row?.id || "");
+  const isDebit = isDebitRow(row);
+
+  if (cat === "WELCOME" || desc.includes("welcome") || id.startsWith("welcome_")) {
+    return "CREDIT — WELCOME BONUS";
+  }
+  if (cat === "TOPUP" || desc.includes("top-up") || desc.includes("topup")) {
+    return "CREDIT — WALLET TOP-UP";
+  }
+  if (cat === "ORDER" || desc.includes("order") || id.startsWith("order_debit")) {
+    return isDebit ? "DEBIT — FOOD ORDER" : "CREDIT — ORDER ADJUSTMENT";
+  }
+  if (cat === "REFUND" || desc.includes("refund")) {
+    return "CREDIT — REFUND";
+  }
+  if (cat === "REFERRAL" || desc.includes("referral")) {
+    return "CREDIT — REFERRAL";
+  }
+  if (cat === "REDEMPTION" || cat === "LOYALTY" || desc.includes("loyalty") || desc.includes("redeem")) {
+    return "CREDIT — LOYALTY";
+  }
+  if (cat === "ADMIN" || desc.includes("admin") || desc.includes("manual")) {
+    return "ADJUSTMENT — ADMIN";
+  }
+  if (id.startsWith("reversal_") || desc.includes("delivery marked undone") || desc.includes("delivery reversal")) {
+    return "DEBIT — DELIVERY REVERSAL";
+  }
+  if (id.startsWith("payout_") || desc.includes("earnings for order")) {
+    return "CREDIT — DELIVERY EARNINGS";
+  }
+
+  return isDebit ? "DEBIT — FOOD ORDER" : "CREDIT — WALLET TOP-UP";
+}
+
+/**
+ * Returns the funding source for a transaction row:
+ * PROMOTIONAL, CUSTOMER_FUNDED, REWARD, REFUND, ADMIN
+ */
+export function sourceOf(row) {
+  if (row?.source) return String(row.source).toUpperCase();
+
+  const tag = classificationTagOf(row);
+  if (tag.includes("WELCOME")) return "PROMOTIONAL";
+  if (tag.includes("TOP-UP")) return "CUSTOMER_FUNDED";
+  if (tag.includes("REFERRAL") || tag.includes("LOYALTY")) return "REWARD";
+  if (tag.includes("REFUND")) return "REFUND";
+  if (tag.includes("ADMIN") || tag.includes("ADJUSTMENT")) return "ADMIN";
+  if (tag.includes("DELIVERY")) return "ADMIN";
+  return isDebitRow(row) ? "CUSTOMER_FUNDED" : "CUSTOMER_FUNDED";
+}
+
+/**
+ * Tailwind styling for classification badges.
+ */
+export function tagColorOf(tag) {
+  const t = String(tag).toUpperCase();
+  if (t.includes("WELCOME BONUS")) {
+    return "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800/40";
+  }
+  if (t.includes("TOP-UP") || t.includes("DELIVERY EARNINGS")) {
+    return "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/40";
+  }
+  if (t.includes("FOOD ORDER") || t.includes("REVERSAL")) {
+    return "bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800/40";
+  }
+  if (t.includes("REFUND")) {
+    return "bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800/40";
+  }
+  if (t.includes("REFERRAL")) {
+    return "bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/40 dark:text-teal-300 dark:border-teal-800/40";
+  }
+  if (t.includes("LOYALTY")) {
+    return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/40";
+  }
+  if (t.includes("ADMIN")) {
+    return "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/40";
+  }
+  return "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300";
+}
+
+/**
+ * Tailwind styling for funding source badges.
+ */
+export function sourceColorOf(source) {
+  const s = String(source).toUpperCase();
+  if (s === "PROMOTIONAL") return "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200 dark:bg-fuchsia-950/40 dark:text-fuchsia-300";
+  if (s === "CUSTOMER_FUNDED") return "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300";
+  if (s === "REWARD") return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300";
+  if (s === "REFUND") return "bg-cyan-50 text-cyan-700 border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-300";
+  if (s === "ADMIN") return "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/40 dark:text-violet-300";
+  return "bg-slate-50 text-slate-700 border-slate-200";
+}
+
