@@ -3,7 +3,7 @@ import { useUiStore } from "../store/uiStore";
 import { Link, useNavigate } from "react-router-dom";
 import {
   collection, doc, onSnapshot, updateDoc, query, limit,
-  getCountFromServer,
+  getCountFromServer, where,
 } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase/firebaseConfig";
 import EmptyState from "../components/EmptyState";
