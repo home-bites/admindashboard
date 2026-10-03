@@ -3,6 +3,7 @@ import { STAGE, stageOf, planTransition } from "../../lib/orderStages";
 import {
   labelForOrder, paymentStateOf, labelForPayment, PAYMENT_LABEL, toneForStage, toneForPayment,
   TONE, orderTypeOf, ORDER_TYPE_LABEL, orNothing, money, DASH, reviewFlagsOf,
+  isOnlinePaymentOrder,
 } from "../../lib/orderPresentation";
 import { buildTimeline, formatStepTime, computeDeliveryDuration } from "../../lib/orderTimeline";
 import { printKOT, printInvoice, kotNumber, getNutrientLines } from "../../lib/printing";
@@ -36,6 +37,7 @@ export const OrderDetailsDrawer = ({
   onEditItems,
   onPrintResult,
   onRevertDelivery,
+  onRevokeCancellation,
   menuItems = [],
   busy = false,
 }) => {
@@ -84,6 +86,8 @@ export const OrderDetailsDrawer = ({
   // except an already-finished or already-cancelled order).
   const canCancel = Boolean(onCancelOrder) &&
     planTransition(order, STAGE.CANCELLED).allowed;
+  // Revoking cancellation is allowed for cancelled orders with online payment.
+  const canRevoke = Boolean(onRevokeCancellation) && stage === STAGE.CANCELLED && isOnlinePaymentOrder(order);
 
   const report = (result) => onPrintResult?.(result);
 
@@ -189,6 +193,48 @@ export const OrderDetailsDrawer = ({
 
         {/* ── Body ───────────────────────────────────────────────────── */}
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {stage === STAGE.CANCELLED && (
+            <div className={`mb-4 rounded-xl border p-3.5 text-xs ${
+              isOnlinePaymentOrder(order)
+                ? "border-amber-300 bg-amber-50/90 text-amber-950"
+                : "border-slate-200 bg-slate-50 text-slate-700"
+            }`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <p className="font-bold flex items-center gap-1.5 text-amber-900">
+                    <span className="material-symbols-outlined text-[18px] text-amber-700">
+                      {isOnlinePaymentOrder(order) ? "payments" : "cancel"}
+                    </span>
+                    {isOnlinePaymentOrder(order)
+                      ? "Cancelled Order with Online Payment"
+                      : "Cancelled Order"}
+                  </p>
+                  <p className="text-[11px] leading-relaxed text-amber-900/90">
+                    {isOnlinePaymentOrder(order)
+                      ? `This order was cancelled, but has an online payment record (${order.paymentMethod || "Online"} · ${money(order.total ?? order.totalAmount)}). If cancelled by mistake, you can revoke the cancellation and restore it to live status.`
+                      : "This order was cancelled and is archived."}
+                  </p>
+                  {order.cancellationReason && (
+                    <p className="text-[11px] text-slate-600 italic">
+                      Reason: "{order.cancellationReason}" {order.cancelledBy ? `(${order.cancelledBy})` : ""}
+                    </p>
+                  )}
+                </div>
+                {canRevoke && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onRevokeCancellation(order)}
+                    className="shrink-0 inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-2xs hover:bg-emerald-700 active:scale-95 transition disabled:opacity-50"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">restore_page</span>
+                    Revoke & Make Live
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Customer. Phone and address are here — an operator ringing a
               customer about a late order needs them — but they are
               deliberately absent from the KOT. */}
@@ -498,7 +544,8 @@ export const OrderDetailsDrawer = ({
           {moves.length === 0
             && !(stage === STAGE.READY && type !== "pickup")
             && !canEditItems && !canCancel
-            && !(stage === STAGE.COMPLETED && Boolean(onRevertDelivery)) ? (
+            && !(stage === STAGE.COMPLETED && Boolean(onRevertDelivery))
+            && !canRevoke ? (
             <p className="text-xs text-slate-500">
               {stage === STAGE.COMPLETED
                 ? "This order is complete. No further status change is possible."
@@ -508,6 +555,17 @@ export const OrderDetailsDrawer = ({
             </p>
           ) : (
             <div className="flex flex-wrap gap-2">
+              {canRevoke && (
+                <button
+                  disabled={busy}
+                  onClick={() => onRevokeCancellation(order)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-800 outline-none transition-colors hover:bg-emerald-100 focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:opacity-50 shadow-2xs"
+                  title="Revoke cancellation and restore order to live queue"
+                >
+                  <span className="material-symbols-outlined text-[15px]">restore_page</span>
+                  Revoke Cancellation (Make Live)
+                </button>
+              )}
               {stage === STAGE.COMPLETED && Boolean(onRevertDelivery) && (
                 <button
                   disabled={busy}

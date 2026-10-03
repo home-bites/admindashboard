@@ -229,6 +229,7 @@ export const Orders = () => {
     disconnectOrders, 
     addOrder, 
     updateOrderStatus,
+    revokeOrderCancellation,
     setPaymentReceived,
     assignDeliveryPartner,
     unassignDeliveryPartner 
@@ -333,6 +334,11 @@ export const Orders = () => {
   const [revertDeliveryOrder, setRevertDeliveryOrder] = useState(null);
   const [revertDeliveryReason, setRevertDeliveryReason] = useState("");
   const [isRevertingDelivery, setIsRevertingDelivery] = useState(false);
+
+  const [revokeCancellationOrder, setRevokeCancellationOrder] = useState(null);
+  const [revokeReason, setRevokeReason] = useState("");
+  const [revokeTargetStage, setRevokeTargetStage] = useState("Accepted");
+  const [isRevokingCancellation, setIsRevokingCancellation] = useState(false);
 
   // How many rows are rendered. Raising it never re-queries: the store's
   // window is already bounded, so this only governs DOM size, which is what
@@ -1136,6 +1142,39 @@ export const Orders = () => {
     }
   };
 
+  /** Revoke an order's cancellation and restore it to live order status */
+  const handleExecuteRevokeCancellation = async () => {
+    if (!revokeCancellationOrder) return;
+    if (!revokeReason.trim()) {
+      addToast("Please provide a reason for revoking the cancellation.", "error");
+      return;
+    }
+    setIsRevokingCancellation(true);
+    try {
+      await revokeOrderCancellation(
+        revokeCancellationOrder.id,
+        {
+          targetStatus: revokeTargetStage,
+          reason: revokeReason.trim(),
+        },
+        user
+      );
+      addToast(
+        `Order #${revokeCancellationOrder.orderId || revokeCancellationOrder.id} cancellation revoked! Order is now live (${revokeTargetStage}).`,
+        "success"
+      );
+      setRevokeCancellationOrder(null);
+      setRevokeReason("");
+      setDetailOrder(null);
+      setSelectedOrder(null);
+    } catch (err) {
+      console.error("Revoke cancellation error:", err);
+      addToast(`Failed to revoke cancellation: ${err.message}`, "error");
+    } finally {
+      setIsRevokingCancellation(false);
+    }
+  };
+
   if (loading && orders.length === 0) {
     return <LoadingComponents.LoadingPage />;
   }
@@ -1835,6 +1874,11 @@ export const Orders = () => {
                       busy={busyOrderId === order.id}
                       onOpen={setDetailOrder}
                       onPrimaryAction={advanceOrder}
+                      onRevokeCancellation={(o) => {
+                        setRevokeCancellationOrder(o);
+                        setRevokeReason("");
+                        setRevokeTargetStage("Accepted");
+                      }}
                       selectable={paymentState === PAYMENT.PENDING && canMarkPaid(order)}
                       selected={selectedForPayment.includes(order.id)}
                       onSelect={(o) => togglePaymentSelection(o.id)}
@@ -2806,6 +2850,20 @@ export const Orders = () => {
                     Cancel / Reject
                   </button>
                 )}
+
+                {selectedOrder.status === "Cancelled" && (
+                  <button
+                    onClick={() => {
+                      setRevokeCancellationOrder(selectedOrder);
+                      setRevokeReason("");
+                      setRevokeTargetStage("Accepted");
+                    }}
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs transition-colors shadow-xs flex items-center justify-center gap-1.5"
+                  >
+                    <span className="material-symbols-outlined text-[15px]">restore_page</span>
+                    Revoke Cancellation (Make Live)
+                  </button>
+                )}
               </div>
               
               <button
@@ -3303,6 +3361,11 @@ export const Orders = () => {
         onCancelOrder={cancelOrderFromDrawer}
         onPrintResult={reportPrint}
         onRevertDelivery={(o) => setRevertDeliveryOrder(o)}
+        onRevokeCancellation={(o) => {
+          setRevokeCancellationOrder(o);
+          setRevokeReason("");
+          setRevokeTargetStage("Accepted");
+        }}
       />
 
       {/* Rider assignment / reassignment. Calls the existing
@@ -3480,6 +3543,195 @@ export const Orders = () => {
                   <>
                     <span className="material-symbols-outlined text-[15px]">undo</span>
                     Confirm Revert Delivery
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Revoke Order Cancellation Confirmation Modal */}
+      {revokeCancellationOrder && (
+        <div
+          className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Revoke Order Cancellation"
+        >
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-200 bg-emerald-50/60 px-5 py-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <span className="material-symbols-outlined text-[20px]">restore_page</span>
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Revoke Order Cancellation</h3>
+                  <p className="text-[11px] text-slate-500 font-mono">
+                    Order #{revokeCancellationOrder.orderId || revokeCancellationOrder.id}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  if (!isRevokingCancellation) {
+                    setRevokeCancellationOrder(null);
+                    setRevokeReason("");
+                  }
+                }}
+                disabled={isRevokingCancellation}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition"
+              >
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              {/* Online Payment Verification Banner */}
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-3.5 space-y-2 text-emerald-950">
+                <p className="font-bold flex items-center gap-1.5 text-emerald-800">
+                  <span className="material-symbols-outlined text-[17px]">verified</span>
+                  Online Payment Re-Activation
+                </p>
+                <p className="text-[11px] leading-relaxed text-emerald-900/90">
+                  This order was cancelled with an online payment. Revoking the cancellation will restore the order to <strong>Live</strong> status, clear the cancellation and refund flags, and return it to the active kitchen queue for fulfillment.
+                </p>
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-emerald-200/60 text-[11px]">
+                  <div>
+                    <span className="text-emerald-700/80 block">Payment Method:</span>
+                    <span className="font-bold text-emerald-900 uppercase">
+                      {revokeCancellationOrder.paymentMethod || "Online Payment"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-emerald-700/80 block">Amount Captured:</span>
+                    <span className="font-bold text-emerald-900">
+                      ₹{Number(revokeCancellationOrder.total || revokeCancellationOrder.totalAmount || 0).toFixed(2)}
+                    </span>
+                  </div>
+                  {revokeCancellationOrder.paymentStatus && (
+                    <div>
+                      <span className="text-emerald-700/80 block">Payment Status:</span>
+                      <span className="font-semibold text-emerald-900 capitalize">
+                        {revokeCancellationOrder.paymentStatus}
+                      </span>
+                    </div>
+                  )}
+                  {(revokeCancellationOrder.razorpayPaymentId || revokeCancellationOrder.paymentId || revokeCancellationOrder.transactionId) && (
+                    <div className="truncate">
+                      <span className="text-emerald-700/80 block">Gateway Ref:</span>
+                      <span className="font-mono text-emerald-900 text-[10px] truncate block">
+                        {revokeCancellationOrder.razorpayPaymentId || revokeCancellationOrder.paymentId || revokeCancellationOrder.transactionId}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Order Context Details */}
+              <div className="space-y-1.5 rounded-xl bg-slate-50 p-3 border border-slate-200 text-slate-600">
+                <div className="flex justify-between">
+                  <span>Customer:</span>
+                  <span className="font-bold text-slate-800">{revokeCancellationOrder.customer || "HomBites Customer"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Contact:</span>
+                  <span className="font-medium text-slate-800">{revokeCancellationOrder.phone || "—"}</span>
+                </div>
+                {revokeCancellationOrder.cancellationReason && (
+                  <div className="flex justify-between text-rose-700 pt-1 border-t border-slate-200/60">
+                    <span>Prior Cancellation:</span>
+                    <span className="italic truncate max-w-[240px]">"{revokeCancellationOrder.cancellationReason}"</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Live Stage Selection */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Restore Order To Live Stage <span className="text-rose-500">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRevokeTargetStage("Accepted")}
+                    className={`p-2.5 rounded-xl border text-left transition flex items-start gap-2 ${
+                      revokeTargetStage === "Accepted"
+                        ? "border-emerald-500 bg-emerald-50 text-emerald-900 ring-1 ring-emerald-500"
+                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[18px] text-emerald-600 shrink-0 mt-0.5">
+                      {revokeTargetStage === "Accepted" ? "radio_button_checked" : "radio_button_unchecked"}
+                    </span>
+                    <div>
+                      <p className="font-bold text-xs">New Orders</p>
+                      <p className="text-[10px] text-slate-500">Status: Accepted</p>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRevokeTargetStage("Preparing")}
+                    className={`p-2.5 rounded-xl border text-left transition flex items-start gap-2 ${
+                      revokeTargetStage === "Preparing"
+                        ? "border-emerald-500 bg-emerald-50 text-emerald-900 ring-1 ring-emerald-500"
+                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[18px] text-emerald-600 shrink-0 mt-0.5">
+                      {revokeTargetStage === "Preparing" ? "radio_button_checked" : "radio_button_unchecked"}
+                    </span>
+                    <div>
+                      <p className="font-bold text-xs">Kitchen Queue</p>
+                      <p className="text-[10px] text-slate-500">Status: Preparing</p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Reason */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Revocation / Re-activation Reason <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  value={revokeReason}
+                  onChange={(e) => setRevokeReason(e.target.value)}
+                  disabled={isRevokingCancellation}
+                  rows={2}
+                  placeholder="e.g. Cancelled by mistake, customer confirmed online payment and requested order preparation"
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs text-slate-800 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 border-t border-slate-200 bg-slate-50 px-5 py-3">
+              <button
+                type="button"
+                disabled={isRevokingCancellation}
+                onClick={() => {
+                  setRevokeCancellationOrder(null);
+                  setRevokeReason("");
+                }}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isRevokingCancellation || !revokeReason.trim()}
+                onClick={handleExecuteRevokeCancellation}
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-2xs hover:bg-emerald-700 transition flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isRevokingCancellation ? (
+                  <>
+                    <span className="material-symbols-outlined text-[15px] animate-spin">progress_activity</span>
+                    Restoring...
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[15px]">restore_page</span>
+                    Confirm & Make Live
                   </>
                 )}
               </button>

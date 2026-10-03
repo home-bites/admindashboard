@@ -1,5 +1,5 @@
 import { signInWithEmailAndPassword, signOut as firebaseSignOut, sendPasswordResetEmail } from "firebase/auth";
-import { arrayUnion, serverTimestamp, Timestamp } from "firebase/firestore";
+import { arrayUnion, serverTimestamp, Timestamp, deleteField } from "firebase/firestore";
 import { auth, isFirebaseConfigured } from "../firebase/firebaseConfig";
 import * as repos from "../repositories";
 
@@ -341,6 +341,47 @@ export const OrderService = {
       return result;
     } catch (e) {
       reportWriteFailure("updateOrderStatus", e);
+    }
+  },
+  async revokeOrderCancellation(orderId, { targetStatus = "Accepted", reason = "", actor } = {}) {
+    try {
+      const snap = await repos.orderRepository.getById(orderId);
+      if (!snap) throw new Error("Order not found");
+
+      const updateData = {
+        status: targetStatus,
+        cancellationRevoked: true,
+        cancellationRevokedAt: serverTimestamp(),
+        cancellationRevokedBy: actor?.email || actor?.uid || "admin",
+        cancellationRevocationReason: reason || "Cancelled by mistake - restored by admin",
+        cancellationReason: deleteField(),
+        cancelledBy: deleteField(),
+        cancelledAt: deleteField(),
+        refundRequired: false,
+        refundReason: deleteField(),
+        updatedAt: serverTimestamp(),
+        statusHistory: arrayUnion({
+          status: targetStatus,
+          timestamp: Timestamp.now(),
+          note: `Cancellation revoked by admin (${actor?.email || "admin"}): ${reason || "Restored to live queue"}`,
+        }),
+      };
+
+      if (snap.paymentStatus === "PaidAfterCancel" || snap.paymentStatus === "paid_after_cancel") {
+        updateData.paymentStatus = "Paid";
+      }
+
+      const result = await repos.orderRepository.update(orderId, updateData);
+      await repos.auditLogRepository.logAction(
+        actor?.uid || "admin",
+        "orders",
+        "ORDER_CANCELLATION_REVOKED",
+        { orderId, targetStatus, reason, previousStatus: snap.status }
+      );
+
+      return result;
+    } catch (e) {
+      reportWriteFailure("revokeOrderCancellation", e);
     }
   },
   async assignDeliveryPartner(orderId, partnerId, partnerName, actor) {

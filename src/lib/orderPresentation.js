@@ -321,3 +321,46 @@ export const orNothing = (v) => {
 
 export const money = (v) =>
   Number.isFinite(Number(v)) ? `₹${Number(v).toFixed(2)}` : DASH;
+
+/**
+ * True when an order was placed or paid using an online payment method
+ * (UPI, NetBanking, Cards, Wallet, Razorpay, or captured payment),
+ * rather than pure Cash on Delivery.
+ */
+export function isOnlinePaymentOrder(order) {
+  if (!order) return false;
+  const method = String(order.paymentMethod || "").trim().toUpperCase();
+  const payStatus = String(order.paymentStatus || "").trim().toLowerCase();
+
+  const isOnlineMethod = method !== "" && method !== "COD" && method !== "CASH";
+  const isPaidStatus =
+    payStatus === "paid" ||
+    payStatus === "paidaftercancel" ||
+    payStatus === "captured" ||
+    payStatus === "success";
+
+  const hasGatewayRef = Boolean(
+    order.razorpayPaymentId ||
+    order.razorpay_payment_id ||
+    order.paymentId ||
+    order.transactionId ||
+    order.paymentDetails?.paymentId ||
+    order.paymentDetails?.razorpay_payment_id
+  );
+
+  const isRefundReq = order.refundRequired === true;
+
+  return isOnlineMethod || isPaidStatus || hasGatewayRef || isRefundReq;
+}
+
+/**
+ * True when a cancelled order can have its cancellation revoked by an admin to make it live again.
+ * Specifically intended for orders cancelled by mistake with online payment.
+ */
+export function canRevokeCancellation(order) {
+  if (!order) return false;
+  const stage = stageOf(order);
+  if (stage !== STAGE.CANCELLED) return false;
+  return isOnlinePaymentOrder(order);
+}
+

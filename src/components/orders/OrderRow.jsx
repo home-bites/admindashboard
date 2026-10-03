@@ -4,6 +4,7 @@ import {
   labelForOrder, paymentStateOf, PAYMENT, PAYMENT_LABEL,
   toneForStage, toneForPayment, TONE,
   orderTypeOf, ORDER_TYPE_LABEL, orNothing, money, reviewFlagsOf,
+  isOnlinePaymentOrder,
 } from "../../lib/orderPresentation";
 import { kotNumber } from "../../lib/printing";
 
@@ -29,7 +30,7 @@ import { kotNumber } from "../../lib/printing";
  * fifth.
  */
 export const OrderRow = ({
-  order, onOpen, onPrimaryAction, busy = false,
+  order, onOpen, onPrimaryAction, onRevokeCancellation, busy = false,
   selectable = false, selected = false, onSelect,
 }) => {
   const stage = stageOf(order);
@@ -64,6 +65,8 @@ export const OrderRow = ({
     [STAGE.READY]: readyMove,
     [STAGE.OUT_FOR_DELIVERY]: { label: "Mark delivered", to: STAGE.COMPLETED, icon: "check" },
   }[stage];
+
+  const canRevoke = Boolean(onRevokeCancellation) && stage === STAGE.CANCELLED && isOnlinePaymentOrder(order);
 
   /* A cancelled order with money captured against it is the one row that must
      pull the eye across a full screen — it is money the business is holding
@@ -170,6 +173,17 @@ export const OrderRow = ({
             >
               <span className="material-symbols-outlined text-[14px]">{next.icon}</span>
               <span className="hidden lg:inline">{next.label}</span>
+            </button>
+          )}
+          {!next && canRevoke && (
+            <button
+              onClick={() => onRevokeCancellation(order)}
+              disabled={busy}
+              title="Revoke cancellation and restore to live order"
+              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white outline-none transition-colors hover:bg-emerald-700 focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-50 shadow-2xs"
+            >
+              <span className="material-symbols-outlined text-[14px]">restore_page</span>
+              <span className="hidden xl:inline">Revoke & Make Live</span>
             </button>
           )}
           <button

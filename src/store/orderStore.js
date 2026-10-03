@@ -320,6 +320,16 @@ export const useOrderStore = create((set, get) => ({
     }
   },
 
+  revokeOrderCancellation: async (id, options, actor) => {
+    set({ loading: true, error: null });
+    try {
+      await OrderService.revokeOrderCancellation(id, options, actor);
+    } catch (err) {
+      set({ error: err.message, loading: false });
+      throw err;
+    }
+  },
+
   assignDeliveryPartner: async (id, partnerId, partnerName, actor) => {
     set({ loading: true, error: null });
     try {
