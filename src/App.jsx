@@ -40,6 +40,7 @@ import DietOffersBanners from "./pages/DietOffersBanners";
 import { MediaLibrary } from "./pages/MediaLibrary";
 import DeliveryDashboard from "./pages/DeliveryDashboard";
 import PushCampaigns from "./pages/PushCampaigns";
+import ThemeStudio from "./pages/ThemeStudio";
 import { useAuthStore } from "./store/authStore";
 
 import { isFirebaseConfigured, auth } from "./firebase/firebaseConfig";
@@ -215,6 +216,14 @@ export const App = () => {
             />
 
             {/* Promo Banners & Media Library (Super Admin & Admin roles) */}
+            <Route
+              path="theme-studio"
+              element={
+                <RBACGuard allowedRoles={["Super Admin", "Admin"]}>
+                  <ThemeStudio />
+                </RBACGuard>
+              }
+            />
             <Route
               path="banners"
               element={

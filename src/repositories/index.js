@@ -241,6 +241,18 @@ export class MediaAssetRepository extends BaseRepository {
   }
 }
 
+export class SeasonalThemeRepository extends BaseRepository {
+  constructor() {
+    super("seasonalThemes");
+  }
+}
+
+export class AppConfigurationRepository extends BaseRepository {
+  constructor() {
+    super("appConfiguration");
+  }
+}
+
 // Instantiate and export singleton instances for easy usage
 export const userRepository = new UserRepository();
 export const addressRepository = new AddressRepository();
@@ -272,3 +284,5 @@ export const cartRepository = new CartRepository();
 export const systemCounterRepository = new SystemCounterRepository();
 export const threatScoreRepository = new ThreatScoreRepository();
 export const mediaAssetRepository = new MediaAssetRepository();
+export const seasonalThemeRepository = new SeasonalThemeRepository();
+export const appConfigurationRepository = new AppConfigurationRepository();

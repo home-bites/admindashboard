@@ -1535,7 +1535,7 @@ export const Settings = () => {
                     Customer App Hero Section Background Image
                   </h3>
                   <p className="font-body-sm text-body-sm text-[#555f6f] mt-1">
-                    Upload or replace the full-bleed cover image displayed behind the location header, greeting, and search bar on the Customer App Home Screen.
+                    Upload or replace the full-bleed cover image (PNG, JPG, WebP, GIF) displayed behind the location header, greeting, and search bar on the Customer App Home Screen.
                   </p>
                 </div>
                 <button
@@ -1550,11 +1550,22 @@ export const Settings = () => {
               {/* Live Preview of Hero Banner */}
               <div className="mb-6 relative rounded-2xl overflow-hidden h-56 border border-slate-200 bg-slate-900 shadow-md">
                 {heroBackgroundImageUrl ? (
-                  <img
-                    src={heroBackgroundImageUrl}
-                    alt="Hero Background Preview"
-                    className="w-full h-full object-cover opacity-90"
-                  />
+                  heroBackgroundImageUrl.toLowerCase().includes(".mp4") ? (
+                    <video
+                      src={heroBackgroundImageUrl}
+                      autoPlay
+                      loop
+                      muted
+                      playsInline
+                      className="w-full h-full object-cover opacity-90"
+                    />
+                  ) : (
+                    <img
+                      src={heroBackgroundImageUrl}
+                      alt="Hero Background Preview"
+                      className="w-full h-full object-cover opacity-90"
+                    />
+                  )
                 ) : (
                   <div className="w-full h-full bg-slate-800 flex items-center justify-center text-slate-500 text-sm">
                     No custom hero background set (Default theme active)
@@ -1658,8 +1669,7 @@ export const Settings = () => {
                   </h3>
                   <p className="font-body-sm text-body-sm text-[#555f6f] mt-1">
                     The full-screen artwork shown while the app starts. Upload a
-                    tall portrait image &mdash; 1284 &times; 2778 or the same 1:2.17
-                    shape. Leave this empty to use the artwork built into the app.
+                    tall portrait image or animated GIF &mdash; 1284 &times; 2778 (PNG, JPG, WebP, GIF). Leave this empty to use the artwork built into the app.
                   </p>
                 </div>
                 <button
@@ -1698,11 +1708,22 @@ export const Settings = () => {
               <div className="mb-6 flex justify-center">
                 <div className="relative w-[200px] h-[434px] rounded-[28px] overflow-hidden border-[6px] border-slate-800 bg-[#FDF8EF] shadow-lg">
                   {splashImageUrl ? (
-                    <img
-                      src={splashImageUrl}
-                      alt="Splash screen preview"
-                      className="w-full h-full object-cover"
-                    />
+                    splashImageUrl.toLowerCase().includes(".mp4") ? (
+                      <video
+                        src={splashImageUrl}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <img
+                        src={splashImageUrl}
+                        alt="Splash screen preview"
+                        className="w-full h-full object-cover"
+                      />
+                    )
                   ) : (
                     <div className="w-full h-full flex flex-col items-center justify-center text-center px-4">
                       <span className="material-symbols-outlined text-[#10b981] text-[32px]">

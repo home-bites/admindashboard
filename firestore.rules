@@ -129,7 +129,13 @@ service cloud.firestore {
 
     // 14. App Settings Collection
     match /appSettings/{settingsId} {
-      allow read: if true; // All apps check rainCharge, deliveryCharge, storeOpen
+      allow read: if true; // All apps check rainCharge, deliveryCharge, storeOpen, seasonalTheme
+      allow write: if isDashboardAdmin();
+    }
+
+    // 14b. Seasonal Themes Collection
+    match /seasonalThemes/{themeId} {
+      allow read: if true; // Publicly readable for customer app to load themes
       allow write: if isDashboardAdmin();
     }
 

@@ -7,9 +7,15 @@ export const ImageUploader = ({
   folder = "general",
   label = "Image",
   helpText = "Upload file to Storage or paste external image URL",
-  // Sanity ceiling matching the 5 MB ceiling in storage.rules (isImageUpload).
-  maxSizeMB = 5
+  // Sanity ceiling matching the 5 MB ceiling in storage.rules (isImageUpload / isMediaUpload).
+  maxSizeMB = 5,
+  allowVideo = true
 }) => {
+  const isVideoUrl = typeof value === "string" && (value.toLowerCase().includes(".mp4") || value.startsWith("data:video/mp4"));
+  const acceptsVideo = allowVideo || folder.includes("hero") || folder.includes("splash");
+  const acceptedTypes = acceptsVideo
+    ? "image/png,image/jpeg,image/webp,image/gif,video/mp4"
+    : "image/png,image/jpeg,image/webp,image/gif";
   const [mode, setMode] = useState(value && !value.includes("firebasestorage") && !value.startsWith("data:") ? "url" : "upload");
   const [pastedUrl, setPastedUrl] = useState(value || "");
   const [uploading, setUploading] = useState(false);
@@ -42,13 +48,16 @@ export const ImageUploader = ({
   const handleFileUpload = async (file) => {
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
-      setError("Please select a valid image file (PNG, JPG, WEBP)");
+    const isImageFile = file.type?.startsWith("image/") || file.name?.toLowerCase().endsWith(".gif");
+    const isVideoFile = acceptsVideo && (file.type === "video/mp4" || file.type?.startsWith("video/") || file.name?.toLowerCase().endsWith(".mp4"));
+
+    if (!isImageFile && !isVideoFile) {
+      setError(acceptsVideo ? "Please select a valid media file (PNG, JPG, WEBP, GIF, MP4)" : "Please select a valid image file (PNG, JPG, WEBP, GIF)");
       return;
     }
 
     if (file.size > maxSizeMB * 1024 * 1024) {
-      setError(`File size exceeds ${maxSizeMB}MB limit. Pick a smaller image or crop it first.`);
+      setError(`File size (${(file.size / (1024 * 1024)).toFixed(1)}MB) exceeds ${maxSizeMB}MB limit. Pick a smaller file (under ${maxSizeMB}MB).`);
       return;
     }
 
@@ -147,6 +156,16 @@ export const ImageUploader = ({
                 Storage read permissions.
               </p>
             </div>
+          ) : isVideoUrl ? (
+            <video
+              src={value}
+              autoPlay
+              loop
+              muted
+              playsInline
+              className="h-full w-full object-cover"
+              onError={() => setImageBroken(true)}
+            />
           ) : (
             <img
               src={value}
@@ -167,7 +186,7 @@ export const ImageUploader = ({
               Replace
               <input
                 type="file"
-                accept="image/*"
+                accept={acceptedTypes}
                 className="hidden"
                 onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
               />
@@ -189,7 +208,7 @@ export const ImageUploader = ({
         >
           <input
             type="file"
-            accept="image/*"
+            accept={acceptedTypes}
             className="hidden"
             id={inputId}
             onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
@@ -204,7 +223,9 @@ export const ImageUploader = ({
               <p className="text-xs font-bold text-slate-700 dark:text-slate-200">
                 Click to upload <span className="text-slate-400 font-normal">or drag & drop</span>
               </p>
-              <p className="text-[10px] text-slate-400 mt-0.5">PNG, JPG, WEBP up to {maxSizeMB}MB</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                PNG, JPG, WEBP, GIF{acceptsVideo ? ", MP4" : ""} up to {maxSizeMB}MB
+              </p>
             </div>
           </label>
         </div>

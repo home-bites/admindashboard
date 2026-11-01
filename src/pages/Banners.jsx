@@ -124,8 +124,9 @@ export const Banners = () => {
     const file = input.files?.[0];
     if (!file) return;
 
-    if (!file.type?.startsWith("image/")) {
-      addToast("Choose an image file (JPG, PNG or WebP).", "error");
+    const isAllowedImage = file.type?.startsWith("image/") || file.name?.toLowerCase().endsWith(".gif");
+    if (!isAllowedImage) {
+      addToast("Choose an image file (JPG, PNG, WebP or GIF).", "error");
       input.value = "";
       return;
     }
@@ -438,7 +439,7 @@ export const Banners = () => {
                   <div className="relative border-2 border-dashed border-[#dce2f3] rounded-xl p-8 flex flex-col items-center justify-center bg-[#f9f9ff] hover:bg-[#f0f3ff] transition-colors cursor-pointer group">
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
                       onChange={handleImageChange}
                       className="absolute inset-0 opacity-0 cursor-pointer z-10"
                       disabled={uploading}
@@ -471,7 +472,7 @@ export const Banners = () => {
                           <span className="material-symbols-outlined text-[24px]">cloud_upload</span>
                         </div>
                         <p className="font-label-md text-label-md text-[#151c27] text-center font-bold">Click to upload or drag &amp; drop</p>
-                        <p className="font-body-sm text-body-sm text-[#555f6f] mt-1 text-center text-xs">Recommended 16:9 ratio (PNG, JPG)</p>
+                        <p className="font-body-sm text-body-sm text-[#555f6f] mt-1 text-center text-xs">Recommended 16:9 ratio (PNG, JPG, WebP, GIF)</p>
                       </>
                     )}
                   </div>

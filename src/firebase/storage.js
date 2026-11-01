@@ -1,13 +1,34 @@
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { storage, isFirebaseConfigured } from "./firebaseConfig";
 
-// Compress image on client canvas before uploading
+// Compress image on client canvas before uploading.
+// Animated GIFs and MP4 videos are explicitly preserved in their original form.
 export const compressImage = (file, maxWidth = 1200, quality = 0.85) => {
   return new Promise((resolve) => {
-    if (!file || !file.type || !file.type.startsWith("image/")) {
+    if (!file || !file.type) {
       resolve(file);
       return;
     }
+
+    // Preserve MP4 videos without attempting canvas compression
+    const isVideo = file.type === "video/mp4" || file.type.startsWith("video/") || file.name?.toLowerCase().endsWith(".mp4");
+    if (isVideo) {
+      resolve(file);
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      resolve(file);
+      return;
+    }
+
+    // Preserve animated GIFs as raw binary files without flattening to a 1-frame canvas
+    const isGif = file.type === "image/gif" || file.name?.toLowerCase().endsWith(".gif");
+    if (isGif) {
+      resolve(file);
+      return;
+    }
+
     const reader = new FileReader();
     reader.readAsDataURL(file);
     reader.onload = (event) => {
@@ -28,11 +49,14 @@ export const compressImage = (file, maxWidth = 1200, quality = 0.85) => {
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, width, height);
 
+        const isPngOrWebp = file.type === "image/png" || file.type === "image/webp";
+        const targetMime = isPngOrWebp ? file.type : "image/jpeg";
+
         canvas.toBlob(
           (blob) => {
             if (blob) {
-              const compressedFile = new File([blob], file.name || "upload.jpg", {
-                type: "image/jpeg",
+              const compressedFile = new File([blob], file.name || (isPngOrWebp ? "upload.png" : "upload.jpg"), {
+                type: targetMime,
                 lastModified: Date.now(),
               });
               resolve(compressedFile);
@@ -40,8 +64,8 @@ export const compressImage = (file, maxWidth = 1200, quality = 0.85) => {
               resolve(file);
             }
           },
-          "image/jpeg",
-          quality
+          targetMime,
+          isPngOrWebp ? undefined : quality
         );
       };
       img.onerror = () => resolve(file);
@@ -134,7 +158,12 @@ export const uploadFile = async (file, path, onProgress = null) => {
        * new URL, so a cached copy can never become the wrong picture. If that
        * naming ever changes, this must change with it.
        */
+      const isVideo = file.type === "video/mp4" || file.type?.startsWith("video/") || file.name?.toLowerCase().endsWith(".mp4") || path.toLowerCase().endsWith(".mp4");
+      const isGif = file.type === "image/gif" || file.name?.toLowerCase().endsWith(".gif") || path.toLowerCase().endsWith(".gif");
+      const uploadContentType = isVideo ? "video/mp4" : (isGif ? "image/gif" : (compressed.type || file.type || "image/jpeg"));
+
       const uploadTask = uploadBytesResumable(storageRef, compressed, {
+        contentType: uploadContentType,
         cacheControl: "public, max-age=31536000, immutable",
       });
 

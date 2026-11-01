@@ -66,10 +66,10 @@ function PromoPreviewCard({ card }) {
           <img
             src={card.imageUrl}
             alt=""
-            className="w-16 h-16 rounded-2xl object-cover shrink-0 shadow-xs border border-white/20"
+            className="w-24 h-18 rounded-2xl object-cover bg-black/5 shrink-0 shadow-xs border border-white/20"
           />
         ) : (
-          <div className="w-16 h-16 rounded-2xl bg-black/5 flex items-center justify-center shrink-0">
+          <div className="w-24 h-18 rounded-2xl bg-black/5 flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-2xl opacity-40">style</span>
           </div>
         )}

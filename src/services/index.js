@@ -86,7 +86,7 @@ export const AuthService = {
 
     // Profile provision for initial bootstrap admins if document missing
     if (!userProfile) {
-      const allowedAdminEmails = ["admin@homebites.com", "support@hombites.com", "admin@homebites.local"];
+      const allowedAdminEmails = ["admin@homebites.com", "support@hombites.com", "admin@homebites.local", "homebites0657@gmail.com"];
       if (allowedAdminEmails.includes(cleanEmail)) {
         userProfile = {
           uid: uid,
@@ -1429,5 +1429,194 @@ export const ReportExportService = {
       printWindow.print();
     }, 500);
   }
+};
+
+// 20. Seasonal Theme Studio Service
+export const SeasonalThemeService = {
+  async getThemes() {
+    try {
+      return await repos.seasonalThemeRepository.getAll();
+    } catch (e) {
+      console.warn("Error fetching seasonal themes:", e.message);
+      return [];
+    }
+  },
+
+  async getActiveTheme() {
+    try {
+      const active = await repos.appSettingsRepository.getById("seasonalTheme");
+      return active || { isActive: false, themeId: "standard-homebites", launcherIconKey: "default" };
+    } catch (e) {
+      console.warn("Error fetching active seasonal theme:", e.message);
+      return { isActive: false, themeId: "standard-homebites", launcherIconKey: "default" };
+    }
+  },
+
+  async createTheme(themeData, actor) {
+    const payload = {
+      ...themeData,
+      status: themeData.status || "draft",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      createdBy: actor?.email || actor?.uid || "admin",
+    };
+    const id = await repos.seasonalThemeRepository.create(payload);
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "seasonalThemes", "THEME_CREATE", { id, themeName: themeData.name });
+    return id;
+  },
+
+  async updateTheme(id, themeData, actor) {
+    const payload = {
+      ...themeData,
+      updatedAt: new Date().toISOString(),
+      updatedBy: actor?.email || actor?.uid || "admin",
+    };
+    await repos.seasonalThemeRepository.set(id, payload);
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "seasonalThemes", "THEME_UPDATE", { id, themeName: themeData.name });
+    return id;
+  },
+
+  async deleteTheme(id, actor) {
+    await repos.seasonalThemeRepository.delete(id);
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "seasonalThemes", "THEME_DELETE", { id });
+    return id;
+  },
+
+  async publishTheme(theme, actor) {
+    const nowIso = new Date().toISOString();
+    const activePayload = {
+      isActive: true,
+      themeId: theme.id || theme.themeId,
+      themeName: theme.name || theme.themeName || "Custom Theme",
+      category: theme.category || "General",
+      primaryColor: theme.primaryColor || "#0B4D3B",
+      secondaryColor: theme.secondaryColor || "#073025",
+      accentColor: theme.accentColor || "#B7D52D",
+      backgroundColor: theme.backgroundColor || "#F8F5EE",
+      surfaceColor: theme.surfaceColor || "#FFFFFF",
+      textColor: theme.textColor || "#1B1C1E",
+      textSecondaryColor: theme.textSecondaryColor || "#74777F",
+      cardBorderColor: theme.cardBorderColor || "#E2E8E5",
+      heroBannerUrl: theme.heroBannerUrl || "",
+      backgroundArtworkUrl: theme.backgroundArtworkUrl || "",
+      decorativeIllustrationUrl: theme.decorativeIllustrationUrl || "",
+      greetingText: theme.greetingText || "Welcome to HomeBites",
+      seasonalTag: theme.seasonalTag || "Festive Specials",
+      launcherIconKey: theme.launcherIconKey || "default",
+      loadingStyle: theme.loadingStyle || "festive_shimmer",
+      startDate: theme.startDate || nowIso,
+      endDate: theme.endDate || "",
+      publishedAt: nowIso,
+      publishedBy: actor?.email || actor?.uid || "admin",
+      updatedAt: nowIso,
+    };
+
+    // 1. Update the authoritative active document in appSettings and appConfiguration (Dual-document single source of truth)
+    await repos.appSettingsRepository.set("seasonalTheme", activePayload);
+    await repos.appConfigurationRepository.set("active", {
+      activeExperienceId: activePayload.themeId,
+      activeThemeId: activePayload.themeId,
+      activeLauncherIconKey: activePayload.launcherIconKey,
+      configurationVersion: Date.now(),
+      isEnabled: true,
+      updatedAt: nowIso,
+      updatedBy: actor?.email || actor?.uid || "admin",
+      themeSnapshot: activePayload,
+    });
+
+    // 2. Mark this theme document as published (upsert so built-in themes can be published without pre-saving)
+    if (theme.id) {
+      try {
+        await repos.seasonalThemeRepository.set(theme.id, {
+          ...theme,
+          status: "published",
+          publishedAt: nowIso,
+          updatedAt: nowIso,
+        });
+      } catch (themeDocErr) {
+        console.warn("[SeasonalThemeService] Failed to upsert seasonalTheme doc:", themeDocErr);
+      }
+    }
+
+    // 3. Audit trail
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "seasonalThemes", "THEME_PUBLISH", {
+      themeId: activePayload.themeId,
+      themeName: activePayload.themeName,
+      launcherIconKey: activePayload.launcherIconKey,
+    });
+
+    return activePayload;
+  },
+
+  async restoreStandardTheme(actor) {
+    const nowIso = new Date().toISOString();
+    const standardPayload = {
+      isActive: false,
+      themeId: "standard-homebites",
+      themeName: "Standard HomeBites",
+      category: "Default",
+      primaryColor: "#0B4D3B",
+      secondaryColor: "#073025",
+      accentColor: "#B7D52D",
+      backgroundColor: "#F8F5EE",
+      surfaceColor: "#FFFFFF",
+      textColor: "#1B1C1E",
+      textSecondaryColor: "#74777F",
+      cardBorderColor: "#E2E8E5",
+      heroBannerUrl: "",
+      backgroundArtworkUrl: "",
+      decorativeIllustrationUrl: "",
+      greetingText: "Good food, delivered fresh",
+      seasonalTag: "HomeBites Classic",
+      launcherIconKey: "default",
+      loadingStyle: "standard_shimmer",
+      publishedAt: nowIso,
+      publishedBy: actor?.email || actor?.uid || "admin",
+      updatedAt: nowIso,
+    };
+
+    // Clear active theme in appSettings and appConfiguration
+    await repos.appSettingsRepository.set("seasonalTheme", standardPayload);
+    await repos.appConfigurationRepository.set("active", {
+      activeExperienceId: "homebites_standard",
+      activeThemeId: "homebites_standard",
+      activeLauncherIconKey: "homebites_default",
+      configurationVersion: Date.now(),
+      isEnabled: false,
+      updatedAt: nowIso,
+      updatedBy: actor?.email || actor?.uid || "admin",
+      themeSnapshot: standardPayload,
+    });
+
+    // Audit rollback
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "seasonalThemes", "THEME_RESTORE_STANDARD", {
+      action: "Emergency rollback to standard theme and default launcher icon",
+      timestamp: nowIso,
+    });
+
+    return standardPayload;
+  },
+
+  async updateLauncherIcon(iconKey, actor) {
+    const nowIso = new Date().toISOString();
+    const current = await this.getActiveTheme();
+    const updated = {
+      ...current,
+      launcherIconKey: iconKey,
+      updatedAt: nowIso,
+      updatedBy: actor?.email || actor?.uid || "admin",
+    };
+    await repos.appSettingsRepository.set("seasonalTheme", updated);
+    await repos.appConfigurationRepository.set("active", {
+      activeLauncherIconKey: iconKey,
+      updatedAt: nowIso,
+      updatedBy: actor?.email || actor?.uid || "admin",
+      themeSnapshot: updated,
+    });
+    await repos.auditLogRepository.logAction(actor?.uid || "system", "seasonalThemes", "LAUNCHER_ICON_UPDATE", {
+      launcherIconKey: iconKey,
+    });
+    return updated;
+  },
 };
 

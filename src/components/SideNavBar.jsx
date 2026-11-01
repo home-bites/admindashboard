@@ -92,6 +92,7 @@ const NAV_GROUPS = [
     id: "marketing",
     title: "Marketing",
     items: [
+      { to: "/theme-studio", label: "Theme Studio", icon: "palette" },
       { to: "/push-campaigns", label: "Push Campaigns", icon: "campaign" },
       { to: "/banners", label: "Banners", icon: "view_carousel" },
       { to: "/coupons", label: "Coupons", icon: "confirmation_number" },
